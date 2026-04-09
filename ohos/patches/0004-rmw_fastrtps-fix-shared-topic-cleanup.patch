@@ -1,0 +1,83 @@
+diff --git a/rmw_fastrtps_shared_cpp/include/rmw_fastrtps_shared_cpp/custom_participant_info.hpp b/rmw_fastrtps_shared_cpp/include/rmw_fastrtps_shared_cpp/custom_participant_info.hpp
+index c6a642e..d3de2c8 100644
+--- a/rmw_fastrtps_shared_cpp/include/rmw_fastrtps_shared_cpp/custom_participant_info.hpp
++++ b/rmw_fastrtps_shared_cpp/include/rmw_fastrtps_shared_cpp/custom_participant_info.hpp
+@@ -125,7 +125,7 @@ typedef struct CustomParticipantInfo
+     EventListenerInterface * event_listener);
+ 
+   RMW_FASTRTPS_SHARED_CPP_PUBLIC
+-  void delete_topic(
++  bool delete_topic(
+     const eprosima::fastdds::dds::Topic * topic,
+     EventListenerInterface * event_listener);
+ } CustomParticipantInfo;
+diff --git a/rmw_fastrtps_shared_cpp/src/custom_participant_info.cpp b/rmw_fastrtps_shared_cpp/src/custom_participant_info.cpp
+index 2bef4ee..8f2a10f 100644
+--- a/rmw_fastrtps_shared_cpp/src/custom_participant_info.cpp
++++ b/rmw_fastrtps_shared_cpp/src/custom_participant_info.cpp
+@@ -96,12 +96,12 @@ eprosima::fastdds::dds::Topic * CustomParticipantInfo::find_or_create_topic(
+   return topic;
+ }
+ 
+-void CustomParticipantInfo::delete_topic(
++bool CustomParticipantInfo::delete_topic(
+   const eprosima::fastdds::dds::Topic * topic,
+   EventListenerInterface * event_listener)
+ {
+   if (topic == nullptr) {
+-    return;
++    return false;
+   }
+ 
+   std::lock_guard<std::mutex> lck(topic_name_to_topic_mutex_);
+@@ -118,6 +118,7 @@ void CustomParticipantInfo::delete_topic(
+       delete it->second->topic_listener;
+ 
+       topic_name_to_topic_.erase(it);
++      return true;
+     }
+   } else {
+     RCUTILS_LOG_WARN_NAMED(
+@@ -125,4 +126,6 @@ void CustomParticipantInfo::delete_topic(
+       "Attempted to delete topic '%s', but it was never created.  Ignoring",
+       topic->get_name().c_str());
+   }
++
++  return false;
+ }
+diff --git a/rmw_fastrtps_shared_cpp/src/participant.cpp b/rmw_fastrtps_shared_cpp/src/participant.cpp
+index 7989545..cefcd5b 100644
+--- a/rmw_fastrtps_shared_cpp/src/participant.cpp
++++ b/rmw_fastrtps_shared_cpp/src/participant.cpp
+@@ -431,6 +431,11 @@ rmw_fastrtps_shared_cpp::destroy_participant(CustomParticipantInfo * participant
+     remove_topic_and_type(participant_info, nullptr, topic, dummy_type);
+   }
+ 
++  ret = participant_info->participant_->delete_contained_entities();
++  if (ReturnCode_t::RETCODE_OK != ret) {
++    RCUTILS_SAFE_FWRITE_TO_STDERR("Failed to delete contained participant entities");
++  }
++
+   // Delete Domain Participant
+   ret =
+     eprosima::fastdds::dds::DomainParticipantFactory::get_instance()->delete_participant(
+diff --git a/rmw_fastrtps_shared_cpp/src/utils.cpp b/rmw_fastrtps_shared_cpp/src/utils.cpp
+index 4742968..4b838ee 100644
+--- a/rmw_fastrtps_shared_cpp/src/utils.cpp
++++ b/rmw_fastrtps_shared_cpp/src/utils.cpp
+@@ -87,12 +87,13 @@ remove_topic_and_type(
+   // change in the future if we start supporting other kinds of TopicDescription
+   // (like ContentFilteredTopic)
+   auto topic = dynamic_cast<const eprosima::fastdds::dds::Topic *>(topic_desc);
++  bool topic_deleted = false;
+ 
+   if (nullptr != topic) {
+-    participant_info->delete_topic(topic, event_listener);
++    topic_deleted = participant_info->delete_topic(topic, event_listener);
+   }
+ 
+-  if (type) {
++  if (type && topic_deleted) {
+     participant_info->participant_->unregister_type(type.get_type_name());
+   }
+ }

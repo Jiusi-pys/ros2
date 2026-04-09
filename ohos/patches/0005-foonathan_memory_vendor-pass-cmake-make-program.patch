@@ -1,0 +1,14 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 769f1d1..b9b56a8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -54,6 +54,9 @@ if(NOT _EXIT_CODE EQUAL 0)
+ 
+   if(DEFINED CMAKE_TOOLCHAIN_FILE)
+     list(APPEND extra_cmake_args "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
++    if(DEFINED CMAKE_MAKE_PROGRAM)
++      list(APPEND extra_cmake_args "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}")
++    endif()
+     if(ANDROID)
+       if(DEFINED ANDROID_ABI)
+         list(APPEND extra_cmake_args "-DANDROID_ABI=${ANDROID_ABI}")

@@ -1,0 +1,27 @@
+diff --git a/fastrtps_cmake_module/cmake/Modules/FindFastRTPS.cmake b/fastrtps_cmake_module/cmake/Modules/FindFastRTPS.cmake
+index aafd2b6..70fe85c 100644
+--- a/fastrtps_cmake_module/cmake/Modules/FindFastRTPS.cmake
++++ b/fastrtps_cmake_module/cmake/Modules/FindFastRTPS.cmake
+@@ -41,7 +41,7 @@ string(REGEX MATCH "^[0-9]+\\.[0-9]+" fastrtps_MAJOR_MINOR_VERSION "${fastrtps_V
+ 
+ find_path(FastRTPS_INCLUDE_DIR
+   NAMES fastrtps/
+-  HINTS "${fastrtps_DIR}/../../../include")
++  HINTS "${fastrtps_DIR}/../../../../include" "${fastrtps_DIR}/../../../include")
+ 
+ find_library(FastCDR_LIBRARY_RELEASE
+   NAMES fastcdr-${fastcdr_MAJOR_MINOR_VERSION} fastcdr
+@@ -70,11 +70,11 @@ endif()
+ 
+ find_library(FastRTPS_LIBRARY_RELEASE
+   NAMES fastrtps-${fastrtps_MAJOR_MINOR_VERSION} fastrtps
+-  HINTS "${fastrtps_DIR}/../../../lib")
++  HINTS "${fastrtps_DIR}/../../../../lib" "${fastrtps_DIR}/../../../lib")
+ 
+ find_library(FastRTPS_LIBRARY_DEBUG
+   NAMES fastrtpsd-${fastrtps_MAJOR_MINOR_VERSION}
+-  HINTS "${fastrtps_DIR}/../../../lib")
++  HINTS "${fastrtps_DIR}/../../../../lib" "${fastrtps_DIR}/../../../lib")
+ 
+ if(FastRTPS_LIBRARY_RELEASE AND FastRTPS_LIBRARY_DEBUG)
+   set(FastRTPS_LIBRARIES

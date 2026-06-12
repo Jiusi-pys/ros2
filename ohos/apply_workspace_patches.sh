@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# codex-file-meta: begin
+# relative_path: "ohos/apply_workspace_patches.sh"
+# language: "shell"
+# summary: "Shell script defining `apply_patch_file`."
+# symbols: ["apply_patch_file"]
+# generated_by: "codebase-frontmatter-summary"
+# codex-file-meta: end
 
 set -euo pipefail
 
@@ -33,3 +40,7 @@ apply_patch_file "${ROOT_DIR}/src/ros2/rmw_fastrtps" \
   "${PATCH_DIR}/0004-rmw_fastrtps-fix-shared-topic-cleanup.patch"
 apply_patch_file "${ROOT_DIR}/src/eProsima/foonathan_memory_vendor" \
   "${PATCH_DIR}/0005-foonathan_memory_vendor-pass-cmake-make-program.patch"
+apply_patch_file "${ROOT_DIR}/src/ros2/geometry2" \
+  "${PATCH_DIR}/0006-geometry2-static-transform-publisher-shutdown-help.patch"
+apply_patch_file "${ROOT_DIR}/src/ros2/geometry2" \
+  "${PATCH_DIR}/0007-geometry2-ohos-python-targets.patch"

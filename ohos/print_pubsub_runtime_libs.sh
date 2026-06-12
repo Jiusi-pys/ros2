@@ -1,13 +1,25 @@
 #!/usr/bin/env bash
+# codex-file-meta: begin
+# relative_path: "ohos/print_pubsub_runtime_libs.sh"
+# language: "shell"
+# summary: "Shell file: set -euo pipefail."
+# symbols: []
+# generated_by: "codebase-frontmatter-summary"
+# codex-file-meta: end
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-SMOKE_INSTALL_DIR="${ROS2_OHOS_INSTALL_DIR:-${ROOT_DIR}/install/ohos-arm64-rcl7}"
+DEFAULT_OHOS_ROOT="/home/kaihong/M-DDS_4.1"
+if [[ ! -d "${DEFAULT_OHOS_ROOT}/command-line-tools" && -d "/home/kaihong/M-DDS/command-line-tools" ]]; then
+  DEFAULT_OHOS_ROOT="/home/kaihong/M-DDS"
+fi
+
+SMOKE_INSTALL_DIR="${ROS2_OHOS_INSTALL_DIR:-${ROOT_DIR}/install/ohos-arm64}"
 ROS2_PREFIX="${ROS2_OHOS_RMW_PREFIX:-${ROOT_DIR}/install/ohos-ros2}"
 FASTDDS_PREFIX="${ROS2_OHOS_FASTDDS_INSTALL_DIR:-${ROOT_DIR}/install/ohos-fastdds}"
-COMMAND_LINE_TOOLS_ROOT="${ROS2_OHOS_COMMAND_LINE_TOOLS_ROOT:-/home/kaihong/M-DDS_4.1/command-line-tools}"
+COMMAND_LINE_TOOLS_ROOT="${ROS2_OHOS_COMMAND_LINE_TOOLS_ROOT:-${DEFAULT_OHOS_ROOT}/command-line-tools}"
 LIBCXX_SHARED="${ROS2_OHOS_LIBCXX_SHARED:-${COMMAND_LINE_TOOLS_ROOT}/sdk/default/openharmony/native/llvm/lib/aarch64-linux-ohos/libc++_shared.so}"
 
 runtime_libs=(

@@ -1,3 +1,11 @@
+/* codex-file-meta: begin
+relative_path: "ohos/src/smoke_test.cpp"
+language: "cpp"
+summary: "Cpp file defining the standalone KaihongOS smoke test."
+symbols: []
+generated_by: "codebase-frontmatter-summary"
+codex-file-meta: end */
+
 /*
  * Copyright (c) 2026
  * Licensed under the Apache License, Version 2.0

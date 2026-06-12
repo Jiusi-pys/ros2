@@ -1,0 +1,17 @@
+diff --git a/tf2_ros/src/static_transform_broadcaster_program.cpp b/tf2_ros/src/static_transform_broadcaster_program.cpp
+index aaa6f8c1..c6d1cc1c 100644
+--- a/tf2_ros/src/static_transform_broadcaster_program.cpp
++++ b/tf2_ros/src/static_transform_broadcaster_program.cpp
+@@ -368,10 +368,12 @@ int main(int argc, char ** argv)
+   if (ret != "") {
+     RCUTILS_LOG_ERROR("error parsing command line arguments: %s", ret.c_str());
+     print_usage();
++    rclcpp::shutdown();
+     return 1;
+   }
+   if (help) {
+     print_usage();
++    rclcpp::shutdown();
+     return 0;
+   }
+ 

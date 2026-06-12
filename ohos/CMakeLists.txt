@@ -101,6 +101,13 @@ target_link_libraries(ros2_rcpputils PUBLIC ros2_rcutils dl)
 add_library(ros2_ohos_dummy SHARED "${CMAKE_CURRENT_LIST_DIR}/src/dummy_shared_library.cpp")
 target_compile_options(ros2_ohos_dummy PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(ros2_ohos_libintl_shim SHARED "${CMAKE_CURRENT_LIST_DIR}/src/libintl_shim.c")
+set_target_properties(ros2_ohos_libintl_shim PROPERTIES
+  OUTPUT_NAME intl
+  VERSION 8.0.0
+  SOVERSION 8)
+target_compile_options(ros2_ohos_libintl_shim PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(ros2_ohos_smoke "${CMAKE_CURRENT_LIST_DIR}/src/smoke_test.cpp")
 target_include_directories(ros2_ohos_smoke PRIVATE
   "${RCPPUTILS_DIR}/include"
@@ -113,6 +120,7 @@ install(TARGETS
   ros2_rcutils
   ros2_rcpputils
   ros2_ohos_dummy
+  ros2_ohos_libintl_shim
   ros2_ohos_smoke
   RUNTIME DESTINATION bin
   LIBRARY DESTINATION lib

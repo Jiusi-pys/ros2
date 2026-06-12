@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# codex-file-meta: begin
+# relative_path: "ohos/build_ohos.sh"
+# language: "shell"
+# summary: "Shell file: set -euo pipefail."
+# symbols: []
+# generated_by: "codebase-frontmatter-summary"
+# codex-file-meta: end
 
 set -euo pipefail
 
@@ -6,8 +13,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OHOS_DIR="${ROOT_DIR}/ohos"
 EXTRA_CMAKE_ARGS=("$@")
 
-COMMAND_LINE_TOOLS_ROOT="${ROS2_OHOS_COMMAND_LINE_TOOLS_ROOT:-/home/kaihong/M-DDS_4.1/command-line-tools}"
-OPENHARMONY_ROOT="${ROS2_OHOS_OPENHARMONY_ROOT:-/home/kaihong/M-DDS_4.1/OpenHarmony}"
+DEFAULT_OHOS_ROOT="/home/kaihong/M-DDS_4.1"
+if [[ ! -d "${DEFAULT_OHOS_ROOT}/command-line-tools" && -d "/home/kaihong/M-DDS/command-line-tools" ]]; then
+  DEFAULT_OHOS_ROOT="/home/kaihong/M-DDS"
+fi
+
+COMMAND_LINE_TOOLS_ROOT="${ROS2_OHOS_COMMAND_LINE_TOOLS_ROOT:-${DEFAULT_OHOS_ROOT}/command-line-tools}"
+OPENHARMONY_ROOT="${ROS2_OHOS_OPENHARMONY_ROOT:-${DEFAULT_OHOS_ROOT}/OpenHarmony}"
 OPENHARMONY_PREBUILTS_ROOT="${ROS2_OHOS_PREBUILTS_ROOT:-${OPENHARMONY_ROOT}/prebuilts}"
 
 CMAKE_BIN="${ROS2_OHOS_CMAKE:-${COMMAND_LINE_TOOLS_ROOT}/sdk/default/openharmony/native/build-tools/cmake/bin/cmake}"
@@ -22,6 +34,7 @@ ROS2_PYDEPS_ROOT="${ROS2_OHOS_ROS2_PYDEPS_ROOT:-${ROOT_DIR}/build/ohos-ros2/pyde
 BUILD_TYPE="${ROS2_OHOS_BUILD_TYPE:-Release}"
 OHOS_ARCH="${ROS2_OHOS_ARCH:-arm64-v8a}"
 OHOS_STL="${ROS2_OHOS_STL:-c++_static}"
+ENABLE_RMW_SMOKE="${ROS2_OHOS_ENABLE_RMW_SMOKE:-ON}"
 
 if [[ ! -x "${CMAKE_BIN}" ]]; then
   echo "cmake not found at ${CMAKE_BIN}" >&2
@@ -56,6 +69,8 @@ PYTHONPATH="${ROS2_PYTHONPATH}${PYTHONPATH:+:${PYTHONPATH}}" \
   -DROS2_OHOS_COMMAND_LINE_TOOLS_ROOT="${COMMAND_LINE_TOOLS_ROOT}" \
   -DOHOS_ARCH="${OHOS_ARCH}" \
   -DOHOS_STL="${OHOS_STL}" \
+  -DROS2_OHOS_ENABLE_RMW_SMOKE="${ENABLE_RMW_SMOKE}" \
+  -DROS2_OHOS_RMW_PREFIX="${ROS2_PREFIX}" \
   -DPython3_EXECUTABLE="${PYTHON_BIN}" \
   "${EXTRA_CMAKE_ARGS[@]}"
 

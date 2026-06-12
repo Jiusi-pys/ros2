@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
+# codex-file-meta: begin
+# relative_path: "ohos/build_ros2_bootstrap.sh"
+# language: "shell"
+# summary: "Shell script defining `run_python`, `run_cmake`, `install_python_package`, and `build_cmake_package`."
+# symbols: ["run_python", "run_cmake", "install_python_package", "build_cmake_package"]
+# generated_by: "codebase-frontmatter-summary"
+# codex-file-meta: end
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-COMMAND_LINE_TOOLS_ROOT="${ROS2_OHOS_COMMAND_LINE_TOOLS_ROOT:-/home/kaihong/M-DDS_4.1/command-line-tools}"
-OPENHARMONY_ROOT="${ROS2_OHOS_OPENHARMONY_ROOT:-/home/kaihong/M-DDS_4.1/OpenHarmony}"
+DEFAULT_OHOS_ROOT="/home/kaihong/M-DDS_4.1"
+if [[ ! -d "${DEFAULT_OHOS_ROOT}/command-line-tools" && -d "/home/kaihong/M-DDS/command-line-tools" ]]; then
+  DEFAULT_OHOS_ROOT="/home/kaihong/M-DDS"
+fi
+
+COMMAND_LINE_TOOLS_ROOT="${ROS2_OHOS_COMMAND_LINE_TOOLS_ROOT:-${DEFAULT_OHOS_ROOT}/command-line-tools}"
+OPENHARMONY_ROOT="${ROS2_OHOS_OPENHARMONY_ROOT:-${DEFAULT_OHOS_ROOT}/OpenHarmony}"
 RELEASE_SITE_PACKAGES_ROOT="${ROS2_OHOS_RELEASE_SITE_PACKAGES:-${OPENHARMONY_ROOT}/out/arm64/khs_3588s_sbc/packages/phone/data/local/release/usr/lib/python3.12/site-packages}"
 
 CMAKE_BIN="${ROS2_OHOS_CMAKE:-${COMMAND_LINE_TOOLS_ROOT}/sdk/default/openharmony/native/build-tools/cmake/bin/cmake}"
@@ -46,19 +58,22 @@ PY
 )"
 
 mkdir -p "${PYDEPS_ROOT}"
-rm -rf "${PYDEPS_ROOT}/catkin_pkg" "${PYDEPS_ROOT}/packaging" "${PYDEPS_ROOT}/pyparsing" "${PYDEPS_ROOT}/yaml" "${PYDEPS_ROOT}/lark" "${PYDEPS_ROOT}/em.py"
-ln -s "${RELEASE_SITE_PACKAGES_ROOT}/catkin_pkg" "${PYDEPS_ROOT}/catkin_pkg"
-ln -s "${RELEASE_SITE_PACKAGES_ROOT}/packaging" "${PYDEPS_ROOT}/packaging"
-if [[ -e "${RELEASE_SITE_PACKAGES_ROOT}/pyparsing" ]]; then
-  ln -s "${RELEASE_SITE_PACKAGES_ROOT}/pyparsing" "${PYDEPS_ROOT}/pyparsing"
+for dep in catkin_pkg packaging pyparsing yaml lark; do
+  if [[ -L "${PYDEPS_ROOT}/${dep}" && ! -e "${PYDEPS_ROOT}/${dep}" ]]; then
+    rm -f "${PYDEPS_ROOT}/${dep}"
+  fi
+  if [[ -e "${RELEASE_SITE_PACKAGES_ROOT}/${dep}" && ! -e "${PYDEPS_ROOT}/${dep}" ]]; then
+    ln -s "${RELEASE_SITE_PACKAGES_ROOT}/${dep}" "${PYDEPS_ROOT}/${dep}"
+  elif [[ -e "${RELEASE_SITE_PACKAGES_ROOT}/${dep}.py" && ! -e "${PYDEPS_ROOT}/${dep}.py" ]]; then
+    ln -s "${RELEASE_SITE_PACKAGES_ROOT}/${dep}.py" "${PYDEPS_ROOT}/${dep}.py"
+  fi
+done
+if [[ -L "${PYDEPS_ROOT}/em.py" && ! -e "${PYDEPS_ROOT}/em.py" ]]; then
+  rm -f "${PYDEPS_ROOT}/em.py"
 fi
-if [[ -e "${RELEASE_SITE_PACKAGES_ROOT}/yaml" ]]; then
-  ln -s "${RELEASE_SITE_PACKAGES_ROOT}/yaml" "${PYDEPS_ROOT}/yaml"
+if [[ -e "${RELEASE_SITE_PACKAGES_ROOT}/em.py" && ! -e "${PYDEPS_ROOT}/em.py" ]]; then
+  ln -s "${RELEASE_SITE_PACKAGES_ROOT}/em.py" "${PYDEPS_ROOT}/em.py"
 fi
-if [[ -e "${RELEASE_SITE_PACKAGES_ROOT}/lark" ]]; then
-  ln -s "${RELEASE_SITE_PACKAGES_ROOT}/lark" "${PYDEPS_ROOT}/lark"
-fi
-ln -s "${RELEASE_SITE_PACKAGES_ROOT}/em.py" "${PYDEPS_ROOT}/em.py"
 
 BASE_PYTHONPATH="${PURELIB}:${PYDEPS_ROOT}"
 

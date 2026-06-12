@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
+# codex-file-meta: begin
+# relative_path: "ohos/build_fastdds_stack.sh"
+# language: "shell"
+# summary: "Shell file: set -euo pipefail."
+# symbols: []
+# generated_by: "codebase-frontmatter-summary"
+# codex-file-meta: end
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-COMMAND_LINE_TOOLS_ROOT="${ROS2_OHOS_COMMAND_LINE_TOOLS_ROOT:-/home/kaihong/M-DDS_4.1/command-line-tools}"
-OPENHARMONY_ROOT="${ROS2_OHOS_OPENHARMONY_ROOT:-/home/kaihong/M-DDS_4.1/OpenHarmony}"
+DEFAULT_OHOS_ROOT="/home/kaihong/M-DDS_4.1"
+if [[ ! -d "${DEFAULT_OHOS_ROOT}/command-line-tools" && -d "/home/kaihong/M-DDS/command-line-tools" ]]; then
+  DEFAULT_OHOS_ROOT="/home/kaihong/M-DDS"
+fi
+
+COMMAND_LINE_TOOLS_ROOT="${ROS2_OHOS_COMMAND_LINE_TOOLS_ROOT:-${DEFAULT_OHOS_ROOT}/command-line-tools}"
+OPENHARMONY_ROOT="${ROS2_OHOS_OPENHARMONY_ROOT:-${DEFAULT_OHOS_ROOT}/OpenHarmony}"
 RELEASE_USR_ROOT="${ROS2_OHOS_RELEASE_USR_ROOT:-${OPENHARMONY_ROOT}/out/arm64/khs_3588s_sbc/packages/phone/data/local/release/usr}"
 
 CMAKE_BIN="${ROS2_OHOS_CMAKE:-${COMMAND_LINE_TOOLS_ROOT}/sdk/default/openharmony/native/build-tools/cmake/bin/cmake}"
@@ -103,6 +115,11 @@ COMMON_ARGS=(
   -DSQLITE3_SUPPORT=OFF \
   -DSHM_TRANSPORT_DEFAULT=OFF
 "${CMAKE_BIN}" --build "${FASTDDS_BUILD_DIR}" --target install -- -j"$(nproc)"
+
+FASTDDS_TARGETS_FILE="${STACK_INSTALL_DIR}/share/fastrtps/cmake/fastrtps-shared-targets.cmake"
+if [[ -f "${FASTDDS_TARGETS_FILE}" ]]; then
+  sed -i "s#;${RELEASE_USR_ROOT}/lib/libtinyxml2.a##g" "${FASTDDS_TARGETS_FILE}"
+fi
 
 "${CMAKE_BIN}" -S "${ROOT_DIR}/src/eProsima/Fast-DDS/examples/cpp/dds/BasicConfigurationExample" -B "${SMOKE_BUILD_DIR}" \
   "${COMMON_ARGS[@]}" \

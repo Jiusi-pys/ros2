@@ -2,6 +2,7 @@
 
 **Date:** 2026-06-12 (supersedes 2026-06-11 preliminary run)
 **Branch:** jazzy
+**Re-verification (2026-06-12, fresh device check):** deployment integrity confirmed on both boards (overlay, underlay, in-underlay FastDDS libs, native numpy, zstd plugin all present), then the full matrix was re-run end-to-end — **67/67 PASS on each board** (core 25 + extended 42, domain segments A 60-80/160-199, B 20-40/100-139 to avoid cross-talk) and **bidirectional cross-board FastDDS transport PASS** (B→A and A→B, `ROS_DOMAIN_ID=55`, eth1). `ros2 pkg list` now reports 195 packages (+1 from the deployed `rosbag2_compression_zstd`).
 **Build:** `install/ohos-colcon-rk3588a` (45-package colcon overlay, 58 resources after runtime closure) over `install/ohos-ros2` (194-resource standalone underlay)
 
 ## Devices

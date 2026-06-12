@@ -147,6 +147,48 @@ A second 42-lane matrix covering the feature surface beyond the core 25 lanes.
 
 Iteration history: round 1 = 32/42, round 2 = 40/42, round 3 (Device A) = 41/42, final = **42/42 on both boards** after the node-name fix. The only non-test defect was the missing zstd compression plugin, which was built and deployed rather than waived.
 
+## Phase 3 — CLI Command Matrix (`rk3588a_validate_cli.sh`)
+
+A command-centric pass that exercises **every `ros2 <command> <subcommand>`** enumerated
+from `ros2 <cmd> --help`, against a live fixture graph (talker, introspection
+service+client, parameter_blackboard, Fibonacci action server, lifecycle node,
+component container, recorded bag). **63/63 PASS on both boards.**
+
+| Command group | Subcommands tested (all PASS, 2/2 boards) |
+|---|---|
+| `ros2 pkg` | list, prefix, executables, xml, **create** |
+| `ros2 interface` | list, show, package, packages, proto |
+| `ros2 node` | list, info |
+| `ros2 topic` | list, info, type, find, echo, hz, bw, delay, pub |
+| `ros2 service` | list, type, find, info, call, echo |
+| `ros2 param` | list, set, get, describe, dump, load, delete |
+| `ros2 action` | list, info, type, send_goal |
+| `ros2 lifecycle` | nodes, list, get, set |
+| `ros2 component` | types, load, list, unload, standalone |
+| `ros2 bag` | record, info, list (storage), reindex, burst, convert, play |
+| `ros2 daemon` | start, status, stop |
+| `ros2 multicast` | receive + send |
+| `ros2 plugin` | list |
+| `ros2 doctor` / `wtf` | --report |
+| `ros2 run` / `ros2 launch` | executable / launch file |
+
+### Phase-3 Bugs Found and Fixed
+
+| Issue | Type | Root cause | Fix |
+|---|---|---|---|
+| `ros2 pkg create` → `No module named 'ament_copyright'` | **Real missing component** | the `create` entry point imports `ament_copyright`, which was never staged into the prefix | staged the pure-python (stdlib-only) `ament_copyright` module from the workspace into both prefixes' site-packages on both boards; `stage_colcon_runtime_closure.sh` now stages it automatically. `ros2 pkg create` then scaffolds `package.xml` + `CMakeLists.txt` + `src/` + `include/` (EXIT 0) |
+| `ros2 service echo` test → "no publishers on `_service_event`" | Test bug | the plain `add_two_ints_server` fixture doesn't enable service introspection | switched the service fixture to `introspection_service` + `introspection_client` and set `service_configure_introspection=metadata`; echo then captures `event_type: REQUEST_RECEIVED` |
+| `ros2 bag reindex` test → "no metadata" | Test bug | the record fixture used the build's default storage (mcap), and `cp -r clibag clibag_ri` into a stale dir from a prior run nested instead of replacing, feeding reindex the wrong storage file | record explicitly with `--storage sqlite3` and `rm -rf` the reindex/convert target dirs before copying |
+| `ros2 bag burst` test hung the whole matrix | Test bug | `ros2 bag burst -n N` bursts N messages then **stays paused** (never exits); the lane ran it in the foreground with no watchdog | run burst backgrounded and kill it after the burst lands (it published exactly 5 messages, the listener heard 5) |
+
+Only `ros2 pkg create`'s missing `ament_copyright` was a real on-device defect; the other three were test-harness bugs. Iteration: run 1 = 59/62 (3 fails), run 2 fixed pkg-create + service-echo + bag-storage, run 3 caught the burst hang, final = **63/63 on both boards** (the suite grew to 63 lanes after adding `ros2 service info`).
+
 ## Conclusion
 
-ROS 2 Jazzy on KaihongOS RK3588A (`aarch64-linux-ohos`, musl) is **fully migrated and feature-complete** on both boards across **67 validated lanes** (25 core + 42 extended, each 2/2 boards): rclcpp + rclpy pub/sub, services, actions (incl. cancel/async, C++ and Python), lifecycle (C++/Python), composition + component CLI, the full QoS policy set (reliability/durability/deadline/lifespan/liveliness/overrides), the complete parameter API (set/get/list/dump, event handler, on-set callback), timers, serialized + loaned messages, content filtering, service introspection, wait sets, topic statistics, logging + runtime logger levels, executors/callback-groups/guard-conditions, image/point-cloud transports, tf2, robot_state_publisher, pluginlib, rosbag2 (sqlite3 + mcap; record/info/play/burst/reindex/convert/zstd-compression), launch, the full ros2 CLI verb set (node/topic/service/param/action/interface/pkg/run/doctor/bag/launch/lifecycle/component/multicast, plus hz/bw/type/find/echo), and bidirectional cross-board DDS. Every issue surfaced during testing was root-caused and fixed (including cross-building the missing zstd compression plugin) rather than worked around.
+ROS 2 Jazzy on KaihongOS RK3588A (`aarch64-linux-ohos`, musl) is **fully migrated and feature-complete** on both boards across **130 validated lanes** (25 core + 42 extended + 63 CLI-command, each 2/2 boards): rclcpp + rclpy pub/sub, services, actions (incl. cancel/async, C++ and Python), lifecycle (C++/Python), composition + component CLI, the full QoS policy set (reliability/durability/deadline/lifespan/liveliness/overrides), the complete parameter API (set/get/list/dump, event handler, on-set callback), timers, serialized + loaned messages, content filtering, service introspection, wait sets, topic statistics, logging + runtime logger levels, executors/callback-groups/guard-conditions, image/point-cloud transports, tf2, robot_state_publisher, pluginlib, rosbag2 (sqlite3 + mcap; record/info/play/burst/reindex/convert/zstd-compression), launch, and bidirectional cross-board DDS. **Every `ros2` CLI command and subcommand** is
+exercised by the Phase-3 command matrix (`pkg` incl. `create`, `node`, `topic` incl.
+hz/bw/delay/find/pub, `service` incl. echo/info, `param` full, `action` incl. type, `interface`
+incl. proto, `lifecycle`, `component` incl. standalone, `bag` incl. burst/convert/reindex,
+`daemon`, `multicast`, `plugin`, `doctor`/`wtf`, `run`, `launch`). Every issue surfaced during
+testing was root-caused and fixed (cross-building the missing zstd compression plugin, staging the
+missing `ament_copyright` for `ros2 pkg create`) rather than worked around.

@@ -96,6 +96,14 @@ copy_optional_pydep /usr/lib/python3/dist-packages/empy-3.3.2.egg-info
 copy_optional_pydep /usr/lib/python3/dist-packages/argcomplete
 copy_optional_pydep /usr/lib/python3/dist-packages/argcomplete-1.8.1.egg-info
 copy_optional_pydep /usr/lib/python3/dist-packages/yaml
+# ament_copyright is required by `ros2 pkg create` (pure-python, stdlib-only);
+# stage it from the workspace source into both the overlay and underlay so the
+# create verb's entry point loads on-device.
+copy_optional_pydep "${ROOT_DIR}/src/ament/ament_lint/ament_copyright/ament_copyright"
+if [[ -d "${OVERLAY_SITE}/ament_copyright" ]]; then
+  rm -f "${OVERLAY_SITE}/ament_copyright/SUMMARY.md"
+  rsync -a --exclude SUMMARY.md "${OVERLAY_SITE}/ament_copyright" "${UNDERLAY_SITE}/"
+fi
 if [[ -d "${ROOT_DIR}/build/ohos-ros2/pydeps/lark" || -L "${ROOT_DIR}/build/ohos-ros2/pydeps/lark" ]]; then
   copy_tree_clean "${ROOT_DIR}/build/ohos-ros2/pydeps/lark" "${OVERLAY_SITE}"
 fi

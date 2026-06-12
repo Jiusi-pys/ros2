@@ -207,7 +207,7 @@ tp2=$(run_cxx_bg ${dom} "${WORK_DIR}/bag_talker.log" "${PREFIX}/lib/demo_nodes_c
 ros2_dom ${dom} bag record --storage sqlite3 --topics /chatter -o "${WORK_DIR}/bag_sqlite3" >"${WORK_DIR}/bag_rec.log" 2>&1 &
 brp=$!
 sleep 12
-kill_pattern "bag record" INT; sleep 8; kill_pattern "bag record"; kill ${brp} ${tp2} 2>/dev/null; wait ${brp} ${tp2} 2>/dev/null
+kill_pattern "bag record" TERM; sleep 8; kill_pattern "bag record"; kill ${brp} ${tp2} 2>/dev/null; wait ${brp} ${tp2} 2>/dev/null
 if [ ! -f "${WORK_DIR}/bag_sqlite3/metadata.yaml" ]; then
   ros2_dom ${dom} bag reindex "${WORK_DIR}/bag_sqlite3" -s sqlite3 >>"${WORK_DIR}/bag_rec.log" 2>&1
 fi
@@ -224,7 +224,7 @@ tp3=$(run_cxx_bg ${dom} "${WORK_DIR}/bag_talker2.log" "${PREFIX}/lib/demo_nodes_
 ros2_dom ${dom} bag record --storage mcap --topics /chatter -o "${WORK_DIR}/bag_mcap" >"${WORK_DIR}/bag_rec2.log" 2>&1 &
 brp2=$!
 sleep 12
-kill_pattern "bag record" INT; sleep 8; kill_pattern "bag record"; kill ${brp2} ${tp3} 2>/dev/null; wait ${brp2} ${tp3} 2>/dev/null
+kill_pattern "bag record" TERM; sleep 8; kill_pattern "bag record"; kill ${brp2} ${tp3} 2>/dev/null; wait ${brp2} ${tp3} 2>/dev/null
 if [ ! -f "${WORK_DIR}/bag_mcap/metadata.yaml" ]; then
   ros2_dom ${dom} bag reindex "${WORK_DIR}/bag_mcap" -s mcap >>"${WORK_DIR}/bag_rec2.log" 2>&1
 fi

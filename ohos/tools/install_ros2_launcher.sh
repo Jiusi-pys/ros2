@@ -32,14 +32,26 @@ exec ${WRAPPER} "\$@"
 EOF
 
 hdc -t "${DEV}" file send "${LOCAL_TMP}" "${TMP_REMOTE}" >/dev/null
-hdc -t "${DEV}" shell "
+# The device-side script must fail loudly: hdc shell often returns 0 even when a
+# remote command failed, so we gate on an explicit INSTALL_OK marker rather than
+# the hdc exit status. ro,remount failing is non-fatal (the file is already
+# written and persists) but is surfaced as a warning instead of silently passing.
+# hdc on this host intermittently segfaults AFTER emitting valid device output,
+# so its exit status is unreliable; gate purely on the device-emitted INSTALL_OK
+# marker and keep `|| true` so a host-side hdc crash doesn't abort us under set -e.
+out=$(hdc -t "${DEV}" shell "
 mount -o rw,remount / 2>&1 || { echo REMOUNT_RW_FAIL; exit 1; }
-mkdir -p ${TARGET_DIR}
-cp ${TMP_REMOTE} ${TARGET}
-chmod 755 ${TARGET}
-mount -o ro,remount / 2>/dev/null || true
+mkdir -p ${TARGET_DIR} || { echo MKDIR_FAIL; exit 1; }
+cp ${TMP_REMOTE} ${TARGET} || { echo CP_FAIL; exit 1; }
+chmod 755 ${TARGET} || { echo CHMOD_FAIL; exit 1; }
+[ -x ${TARGET} ] || { echo VERIFY_FAIL; exit 1; }
+mount -o ro,remount / 2>/dev/null || echo REMOUNT_RO_WARN
 rm -f ${TMP_REMOTE}
-echo '--- installed launcher ---'
-cat ${TARGET}
-"
-echo "ros2 launcher installed on ${DEV} at ${TARGET}"
+echo INSTALL_OK
+" 2>/dev/null || true)
+echo "${out}"
+case "${out}" in
+  *INSTALL_OK*) echo "ros2 launcher installed on ${DEV} at ${TARGET}";;
+  *) echo "ros2 launcher install FAILED on ${DEV} (${out})" >&2; exit 1;;
+esac
+case "${out}" in *REMOUNT_RO_WARN*) echo "warning: / left writable on ${DEV} (ro,remount failed)" >&2;; esac

@@ -69,7 +69,7 @@ ck cli_interface_packages 'std_msgs'                    interface packages
 ck cli_interface_proto    'data:'                       interface proto std_msgs/msg/String
 
 ck cli_doctor_report   'report|platform|topic'          doctor --report
-ck cli_plugin_list     '.'                               plugin list --package urdf
+ck cli_plugin_list     'URDFXMLParser|URDFParser'        plugin list --package urdf
 ck cli_wtf             'report|All|check'                wtf
 
 #############################################################################
@@ -169,7 +169,7 @@ echo "### GROUP component"
 #############################################################################
 CC=$(run_bg rclcpp_components component_container fx_cc)
 sleep 6
-ck cli_component_types '.'                               component types
+ck cli_component_types 'composition::|::Talker'         component types
 ck cli_component_load  'Loaded component|unique'         component load /ComponentManager composition composition::Talker
 ck cli_component_list  'Talker|/ComponentManager'        component list
 ck cli_component_unload 'Unloaded|Failed'                component unload /ComponentManager 1
@@ -213,7 +213,15 @@ output_bags:
     all_topics: true
 YAML
 "${ROS2}" bag convert -i "${WORK}/clibag" -o "${WORK}/conv.yaml" >/dev/null 2>&1
-ck cli_bag_convert 'mcap|Messages'                      bag info "${WORK}/clibag_mcap"
+# assert via the produced .mcap file + a "Storage id:"/"Messages:" line, NOT a
+# bare 'mcap' (which would also match the clibag_mcap path in a "does not exist"
+# error and falsely PASS)
+convinfo=$("${ROS2}" bag info "${WORK}/clibag_mcap" 2>&1)
+if ls "${WORK}/clibag_mcap"/*.mcap >/dev/null 2>&1 && echo "${convinfo}" | grep -qE 'Storage id:|Messages:'; then
+  result cli_bag_convert PASS "$(echo "${convinfo}" | grep -m1 -E 'Storage id:|Messages:' | cut -c1-40)"
+else
+  result cli_bag_convert FAIL "$(echo "${convinfo}" | grep -vE '^[[:space:]]*$' | head -1 | cut -c1-70)"
+fi
 # play: a finite bag exits on its own, but bound it with a watchdog for safety
 LP=$(run_bg demo_nodes_cpp listener fx_playlsn)
 sleep 2

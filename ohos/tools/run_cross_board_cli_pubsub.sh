@@ -23,7 +23,9 @@ run_direction() {
   sleep 3
   local got
   got=$(hdc -t "${sub_dev}" shell "cat ${echo_log} 2>/dev/null" 2>/dev/null)
-  if echo "${got}" | grep -q "${payload}"; then
+  # anchor to the echoed `data:` field so an error line that happens to echo the
+  # payload string back cannot false-PASS
+  if echo "${got}" | grep -qE "data:.*${payload}|^${payload}\$"; then
     echo "RESULT|cross_${tag}|PASS|${payload}"
   else
     echo "RESULT|cross_${tag}|FAIL|echo_log=$(echo "${got}" | head -2 | tr '\n' ' ')"

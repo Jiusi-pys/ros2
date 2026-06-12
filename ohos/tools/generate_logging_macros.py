@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# codex-file-meta: begin
+# relative_path: "ohos/tools/generate_logging_macros.py"
+# language: "python"
+# summary: "Python module defining `load_logging_module`, `macro_signature`, `emit_active_macro`, and `build_header`."
+# symbols: ["load_logging_module", "macro_signature", "emit_active_macro", "build_header", "main"]
+# generated_by: "codebase-frontmatter-summary"
+# codex-file-meta: end
 
 import argparse
 import importlib.util

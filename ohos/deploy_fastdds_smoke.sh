@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# codex-file-meta: begin
+# relative_path: "ohos/deploy_fastdds_smoke.sh"
+# language: "shell"
+# summary: "Shell script defining `run_hdc_capture`, and `wait_for_device_connected`."
+# symbols: ["run_hdc_capture", "wait_for_device_connected"]
+# generated_by: "codebase-frontmatter-summary"
+# codex-file-meta: end
 
 set -euo pipefail
 

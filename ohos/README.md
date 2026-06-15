@@ -8,6 +8,10 @@ codex-file-meta: end -->
 
 # ROS 2 on KaihongOS
 
+> 完整中文迁移教程（从零到两板验证，FastDDS + CycloneDDS）：**`ohos/OHOS_MIGRATION_TUTORIAL_zh.md`** —
+> 新手入口。专项文档：`MIGRATION_GUIDE_zh.md`（复用手册）、`CYCLONEDDS_MIGRATION_zh.md`、
+> `CROSS_BOARD_TEST_zh.md`、`rk3588a_test_results.md`（实测结果）。
+
 This subtree cross-builds a standalone ROS 2 slice for KaihongOS/OpenHarmony
 and carries a selected-package colcon migration wrapper for RK3588S/OHOS.
 

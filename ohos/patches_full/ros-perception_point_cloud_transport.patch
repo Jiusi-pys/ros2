@@ -1,0 +1,52 @@
+diff --git a/point_cloud_transport/CMakeLists.txt b/point_cloud_transport/CMakeLists.txt
+index 732b6d5..af32e8e 100644
+--- a/point_cloud_transport/CMakeLists.txt
++++ b/point_cloud_transport/CMakeLists.txt
+@@ -72,10 +72,43 @@ target_include_directories(pc_republish_node PRIVATE
+   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
+ 
+-rclcpp_components_register_node(pc_republish_node
+-  PLUGIN "point_cloud_transport::Republisher"
+-  EXECUTABLE republish
+-)
++function(add_ohos_direct_launcher executable source_file node_type logger_name)
++  set(SOURCE_FILE "${source_file}")
++  set(NODE_TYPE "${node_type}")
++  set(LOGGER_NAME "${logger_name}")
++
++  set(launcher_source "${CMAKE_CURRENT_BINARY_DIR}/ohos/${executable}_launcher.cpp")
++  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ohos")
++  configure_file(
++    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ohos_direct_launcher.cpp.in"
++    "${launcher_source}"
++    @ONLY
++  )
++
++  add_executable(${executable} "${launcher_source}")
++  target_include_directories(${executable} PRIVATE
++    "${CMAKE_CURRENT_SOURCE_DIR}"
++    "${CMAKE_CURRENT_SOURCE_DIR}/include")
++  target_link_libraries(${executable} PRIVATE ${ARGN})
++  install(TARGETS ${executable}
++    DESTINATION lib/${PROJECT_NAME})
++endfunction()
++
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(pc_republish_node
++    "point_cloud_transport::Republisher")
++  add_ohos_direct_launcher(republish src/republish.cpp
++    "point_cloud_transport::Republisher"
++    "point_cloud_republisher"
++    ${PROJECT_NAME}
++    rclcpp::rclcpp
++    rclcpp_components::component)
++else()
++  rclcpp_components_register_node(pc_republish_node
++    PLUGIN "point_cloud_transport::Republisher"
++    EXECUTABLE republish
++  )
++endif()
+ 
+ # Build list_transports
+ add_executable(list_transports src/list_transports.cpp)

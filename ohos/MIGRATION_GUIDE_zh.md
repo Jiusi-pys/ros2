@@ -221,3 +221,19 @@ bash ohos/tools/run_cross_board_cli_pubsub.sh <dev_A> <dev_B> 55
 
 > 注意：升级官方版本后，§6 的坑大多仍适用；新引入的失败优先怀疑"测试脚本判据 vs 真实运行时缺陷"，
 > 用本仓库的对抗式排查方式（设备实测交叉印证，勿单信任一来源）逐项定位。
+
+---
+
+## 9. 从官方 jazzy 重新拉取并迁移（2026-06-15 实操记录）
+
+把核心 ROS 2 层拉到最新 jazzy 的可复现流程（DDS 供应商 Fast-DDS/Fast-CDR/cyclonedds/iceoryx 保持锁定）：
+
+1. **先全量备份** `src/`：`tar czf ~/ros2-src-backup-$(date +%F).tar.gz --exclude='*/build' --exclude='*.egg-info' -C ~/ros2 src`（OHOS 适配大多是 src 内未提交改动，无备份则 `vcs pull` 会抹掉）。
+2. **剥除 codex 噪声**：工具注入的 `# codex-file-meta`/`<!-- codex-file-meta` 注释块污染所有 diff；用脚本删除块后，再 `git checkout` 还原"仅空行差异"的伪改动，留下纯 OHOS 改动。
+3. **捕获完整 OHOS delta**：对每个核心 repo `git diff origin/jazzy > ohos/patches_full/<slug>.patch` + 复制未跟踪新文件（注意未跟踪**目录**如 `cmake/ohos_direct_launcher.cpp.in` 需单独从备份恢复——`[ -f ]` 会跳过目录）。
+4. **量化漂移**：`git fetch` 后比对，确认 jazzy 仅前进 0-6 个 bugfix/changelog 提交（无 ABI 破坏）。
+5. **拉取+重应用**：每个核心 repo `git fetch origin jazzy:refs/remotes/origin/jazzy && git reset --hard origin/jazzy && git clean -fdq`，再 `git apply --3way ohos/patches_full/<slug>.patch`（小漂移下零冲突；上游若重构文件，--3way 自动合并到新布局），最后还原未跟踪文件。
+6. **构建环境两个必修坑（4 月后 SDK 漂移）**：
+   - SDK 的 `setuptools` 已升级到 80.9（要求 `packaging≥22`），但迁移 staged 的是旧 `packaging 20.3` → 报 `canonicalize_version() got an unexpected keyword argument 'strip_trailing_zero'`。修复：用 SDK 自带 vendored packaging 24.2 替换 `install/ohos-ros2/lib/python3.12/site-packages/packaging` 与 `build/ohos-ros2/pydeps/packaging`（纯 Python，设备端兼容）。
+   - 4 月构建残留的 `build/ohos-ros2/<pkg>/CMakeCache.txt` 缓存了已不存在的 `M-DDS_4.1` 编译器路径 → 重建前必须 `rm -rf build/ohos-ros2/<pkg>`（清缓存）。
+7. **重建变更包 + 重 staging overlay + 清盘重部署 + 130 车道重验**（见 §3-§5、`deploy_all_rk3588a.sh`）。仅需重建源码真正变更的包 + OHOS 改动的包（jazzy 稳定分支 ABI 不破，无需全量重建 194 包）；130 车道验证兜住任何 ABI/链接回归。

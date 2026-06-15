@@ -1,0 +1,18 @@
+diff --git a/yaml_cpp_vendor-extras.cmake.in b/yaml_cpp_vendor-extras.cmake.in
+index 2c09e7c..363b37c 100644
+--- a/yaml_cpp_vendor-extras.cmake.in
++++ b/yaml_cpp_vendor-extras.cmake.in
+@@ -2,6 +2,12 @@
+ if(WIN32)
+   set(yaml-cpp_DIR "${@PROJECT_NAME@_DIR}/../../../opt/yaml_cpp_vendor/CMake")
+ else()
+-  set(yaml-cpp_DIR "${@PROJECT_NAME@_DIR}/../../../opt/yaml_cpp_vendor/share/cmake/yaml-cpp")
++  set(_yaml_cpp_vendor_prefix "${@PROJECT_NAME@_DIR}/../../../opt/yaml_cpp_vendor")
++  if(EXISTS "${_yaml_cpp_vendor_prefix}/lib/cmake/yaml-cpp")
++    set(yaml-cpp_DIR "${_yaml_cpp_vendor_prefix}/lib/cmake/yaml-cpp")
++  else()
++    set(yaml-cpp_DIR "${_yaml_cpp_vendor_prefix}/share/cmake/yaml-cpp")
++  endif()
++  unset(_yaml_cpp_vendor_prefix)
+ endif()
+ message(STATUS "Setting yaml-cpp_DIR to: '${yaml-cpp_DIR}'")

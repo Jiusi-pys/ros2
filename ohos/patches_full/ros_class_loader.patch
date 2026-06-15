@@ -1,0 +1,14 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a6afc4c..2036a34 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -39,7 +39,8 @@ add_library(${PROJECT_NAME} ${explicit_library_type}
+ )
+ target_include_directories(${PROJECT_NAME} PUBLIC
+   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+-  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
++  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
++  ${console_bridge_INCLUDE_DIRS})
+ 
+ if(ament_cmake_FOUND)
+   target_link_libraries(${PROJECT_NAME} PUBLIC

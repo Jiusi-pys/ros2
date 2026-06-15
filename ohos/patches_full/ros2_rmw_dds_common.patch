@@ -1,0 +1,15 @@
+diff --git a/rmw_dds_common/src/context.cpp b/rmw_dds_common/src/context.cpp
+index a6f8b16..42be74e 100644
+--- a/rmw_dds_common/src/context.cpp
++++ b/rmw_dds_common/src/context.cpp
+@@ -29,6 +29,10 @@ static bool call_publish_callback(
+   const Context::publish_callback_t & publish_callback,
+   const rmw_dds_common::msg::ParticipantEntitiesInfo & msg)
+ {
++  if (nullptr != std::getenv("ROS2_OHOS_DISABLE_GRAPH")) {
++    (void)msg;
++    return true;
++  }
+   if (nullptr == pub || nullptr == publish_callback ||
+     RMW_RET_OK != publish_callback(pub, static_cast<const void *>(&msg)))
+   {

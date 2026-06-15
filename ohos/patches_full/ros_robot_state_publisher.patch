@@ -1,0 +1,31 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9107df8..3f0a179 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -47,9 +47,23 @@ target_link_libraries(${PROJECT_NAME}_node PRIVATE
+ )
+ ament_export_targets(export_${PROJECT_NAME}_node)
+ 
+-rclcpp_components_register_node(${PROJECT_NAME}_node
+-  PLUGIN "robot_state_publisher::RobotStatePublisher"
+-  EXECUTABLE robot_state_publisher)
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(${PROJECT_NAME}_node
++    "robot_state_publisher::RobotStatePublisher")
++
++  add_executable(robot_state_publisher
++    src/robot_state_publisher_main.cpp)
++  target_link_libraries(robot_state_publisher PRIVATE
++    ${PROJECT_NAME}_node
++    rclcpp::rclcpp
++  )
++  install(TARGETS robot_state_publisher
++    DESTINATION lib/${PROJECT_NAME})
++else()
++  rclcpp_components_register_node(${PROJECT_NAME}_node
++    PLUGIN "robot_state_publisher::RobotStatePublisher"
++    EXECUTABLE robot_state_publisher)
++endif()
+ 
+ install(
+   TARGETS

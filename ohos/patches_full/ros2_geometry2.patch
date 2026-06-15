@@ -1,0 +1,114 @@
+diff --git a/tf2_eigen/CMakeLists.txt b/tf2_eigen/CMakeLists.txt
+index 0386f864..cfeaa15f 100644
+--- a/tf2_eigen/CMakeLists.txt
++++ b/tf2_eigen/CMakeLists.txt
+@@ -14,6 +14,7 @@ find_package(ament_cmake REQUIRED)
+ find_package(geometry_msgs REQUIRED)
+ find_package(tf2 REQUIRED)
+ find_package(tf2_ros REQUIRED)
++find_package(eigen3_cmake_module REQUIRED)
+ 
+ # Work around broken find module in AlmaLinux/RHEL eigen3-devel from PowerTools repo
+ find_package(Eigen3 QUIET NO_MODULE)
+diff --git a/tf2_eigen/package.xml b/tf2_eigen/package.xml
+index f6788ec6..ff2930b2 100644
+--- a/tf2_eigen/package.xml
++++ b/tf2_eigen/package.xml
+@@ -13,6 +13,8 @@
+   <author email="tfoote@osrfoundation.org">Tully Foote</author>
+ 
+   <buildtool_depend>ament_cmake</buildtool_depend>
++  <buildtool_depend>eigen3_cmake_module</buildtool_depend>
++  <buildtool_export_depend>eigen3_cmake_module</buildtool_export_depend>
+ 
+   <build_depend>eigen</build_depend>
+ 
+diff --git a/tf2_geometry_msgs/CMakeLists.txt b/tf2_geometry_msgs/CMakeLists.txt
+index c4b3a64f..d2f3b102 100644
+--- a/tf2_geometry_msgs/CMakeLists.txt
++++ b/tf2_geometry_msgs/CMakeLists.txt
+@@ -17,7 +17,20 @@ if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+   # Force FindPython3 to use the debug interpretter where ROS 2 expects it
+   set(Python3_EXECUTABLE "${PYTHON_EXECUTABLE_DEBUG}")
+ endif()
+-find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
++set(TF2_GEOMETRY_MSGS_OHOS_TARGET_PYTHON_INCLUDE_DIR "" CACHE PATH "Target Python include directory for OHOS cross builds")
++set(TF2_GEOMETRY_MSGS_OHOS_TARGET_PYTHON_LIBRARY "" CACHE FILEPATH "Target Python library for OHOS cross builds")
++
++if(TF2_GEOMETRY_MSGS_OHOS_TARGET_PYTHON_INCLUDE_DIR AND TF2_GEOMETRY_MSGS_OHOS_TARGET_PYTHON_LIBRARY)
++  find_package(Python3 REQUIRED COMPONENTS Interpreter)
++  if(NOT TARGET Python3::Python)
++    add_library(Python3::Python SHARED IMPORTED)
++    set_target_properties(Python3::Python PROPERTIES
++      IMPORTED_LOCATION "${TF2_GEOMETRY_MSGS_OHOS_TARGET_PYTHON_LIBRARY}"
++      INTERFACE_INCLUDE_DIRECTORIES "${TF2_GEOMETRY_MSGS_OHOS_TARGET_PYTHON_INCLUDE_DIR}")
++  endif()
++else()
++  find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
++endif()
+ 
+ find_package(geometry_msgs REQUIRED)
+ find_package(orocos_kdl_vendor REQUIRED)
+diff --git a/tf2_py/CMakeLists.txt b/tf2_py/CMakeLists.txt
+index a8e4e9ba..092f1b04 100644
+--- a/tf2_py/CMakeLists.txt
++++ b/tf2_py/CMakeLists.txt
+@@ -28,7 +28,21 @@ if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+   # Force FindPython3 to use the debug interpretter where ROS 2 expects it
+   set(Python3_EXECUTABLE "${PYTHON_EXECUTABLE_DEBUG}")
+ endif()
+-find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
++set(TF2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR "" CACHE PATH "Target Python include directory for OHOS cross builds")
++set(TF2_PY_OHOS_TARGET_PYTHON_LIBRARY "" CACHE FILEPATH "Target Python library for OHOS cross builds")
++set(TF2_PY_OHOS_TARGET_EXTENSION_SUFFIX "" CACHE STRING "Extension suffix for OHOS Python modules")
++
++if(TF2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND TF2_PY_OHOS_TARGET_PYTHON_LIBRARY)
++  find_package(Python3 REQUIRED COMPONENTS Interpreter)
++  if(NOT TARGET Python3::Python)
++    add_library(Python3::Python SHARED IMPORTED)
++    set_target_properties(Python3::Python PROPERTIES
++      IMPORTED_LOCATION "${TF2_PY_OHOS_TARGET_PYTHON_LIBRARY}"
++      INTERFACE_INCLUDE_DIRECTORIES "${TF2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR}")
++  endif()
++else()
++  find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
++endif()
+ 
+ find_package(ament_cmake REQUIRED)
+ find_package(ament_cmake_python REQUIRED)
+@@ -37,7 +51,17 @@ find_package(tf2 REQUIRED)
+ 
+ ament_python_install_package(${PROJECT_NAME})
+ 
+-python3_add_library(_tf2_py src/tf2_py.cpp)
++if(TF2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND TF2_PY_OHOS_TARGET_PYTHON_LIBRARY)
++  add_library(_tf2_py MODULE src/tf2_py.cpp)
++  set_target_properties(_tf2_py PROPERTIES PREFIX "")
++  if(TF2_PY_OHOS_TARGET_EXTENSION_SUFFIX)
++    set_target_properties(_tf2_py PROPERTIES SUFFIX "${TF2_PY_OHOS_TARGET_EXTENSION_SUFFIX}")
++  endif()
++  target_include_directories(_tf2_py PRIVATE "${TF2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR}")
++  target_link_libraries(_tf2_py PRIVATE Python3::Python)
++else()
++  python3_add_library(_tf2_py src/tf2_py.cpp)
++endif()
+ 
+ if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+   # python3_add_library should really take care of this for us, but it doesn't
+diff --git a/tf2_ros/src/static_transform_broadcaster_program.cpp b/tf2_ros/src/static_transform_broadcaster_program.cpp
+index aaa6f8c1..c6d1cc1c 100644
+--- a/tf2_ros/src/static_transform_broadcaster_program.cpp
++++ b/tf2_ros/src/static_transform_broadcaster_program.cpp
+@@ -368,10 +368,12 @@ int main(int argc, char ** argv)
+   if (ret != "") {
+     RCUTILS_LOG_ERROR("error parsing command line arguments: %s", ret.c_str());
+     print_usage();
++    rclcpp::shutdown();
+     return 1;
+   }
+   if (help) {
+     print_usage();
++    rclcpp::shutdown();
+     return 0;
+   }
+ 

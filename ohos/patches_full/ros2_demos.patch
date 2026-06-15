@@ -1,0 +1,816 @@
+diff --git a/action_tutorials/action_tutorials_cpp/CMakeLists.txt b/action_tutorials/action_tutorials_cpp/CMakeLists.txt
+index 56fa718..9949d71 100644
+--- a/action_tutorials/action_tutorials_cpp/CMakeLists.txt
++++ b/action_tutorials/action_tutorials_cpp/CMakeLists.txt
+@@ -28,8 +28,30 @@ include_directories(include)
+ add_library(action_tutorials SHARED
+   src/fibonacci_action_client.cpp
+   src/fibonacci_action_server.cpp)
+-rclcpp_components_register_node(action_tutorials PLUGIN "action_tutorials_cpp::FibonacciActionClient" EXECUTABLE fibonacci_action_client)
+-rclcpp_components_register_node(action_tutorials PLUGIN "action_tutorials_cpp::FibonacciActionServer" EXECUTABLE fibonacci_action_server)
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(action_tutorials
++    "action_tutorials_cpp::FibonacciActionClient"
++    "action_tutorials_cpp::FibonacciActionServer")
++  add_executable(fibonacci_action_client
++    src/fibonacci_action_client_main.cpp)
++  add_executable(fibonacci_action_server
++    src/fibonacci_action_server_main.cpp)
++  target_link_libraries(fibonacci_action_client PRIVATE
++    action_tutorials
++    rclcpp::rclcpp
++  )
++  target_link_libraries(fibonacci_action_server PRIVATE
++    action_tutorials
++    rclcpp::rclcpp
++  )
++  install(TARGETS
++    fibonacci_action_client
++    fibonacci_action_server
++    DESTINATION lib/${PROJECT_NAME})
++else()
++  rclcpp_components_register_node(action_tutorials PLUGIN "action_tutorials_cpp::FibonacciActionClient" EXECUTABLE fibonacci_action_client)
++  rclcpp_components_register_node(action_tutorials PLUGIN "action_tutorials_cpp::FibonacciActionServer" EXECUTABLE fibonacci_action_server)
++endif()
+ target_compile_definitions(action_tutorials
+   PRIVATE "ACTION_TUTORIALS_CPP_BUILDING_DLL")
+ ament_target_dependencies(action_tutorials
+diff --git a/action_tutorials/action_tutorials_cpp/src/fibonacci_action_client.cpp b/action_tutorials/action_tutorials_cpp/src/fibonacci_action_client.cpp
+index 1de81b0..4b657c2 100644
+--- a/action_tutorials/action_tutorials_cpp/src/fibonacci_action_client.cpp
++++ b/action_tutorials/action_tutorials_cpp/src/fibonacci_action_client.cpp
+@@ -22,18 +22,11 @@
+ #include "rclcpp_action/rclcpp_action.hpp"
+ #include "rclcpp_components/register_node_macro.hpp"
+ 
+-#include "action_tutorials_cpp/visibility_control.h"
++#include "action_tutorials_cpp/fibonacci_action_client.hpp"
+ 
+ namespace action_tutorials_cpp
+ {
+-class FibonacciActionClient : public rclcpp::Node
+-{
+-public:
+-  using Fibonacci = action_tutorials_interfaces::action::Fibonacci;
+-  using GoalHandleFibonacci = rclcpp_action::ClientGoalHandle<Fibonacci>;
+-
+-  ACTION_TUTORIALS_CPP_PUBLIC
+-  explicit FibonacciActionClient(const rclcpp::NodeOptions & node_options = rclcpp::NodeOptions())
++FibonacciActionClient::FibonacciActionClient(const rclcpp::NodeOptions & node_options)
+   : Node("fibonacci_action_client", node_options)
+   {
+     this->client_ptr_ = rclcpp_action::create_client<Fibonacci>(
+@@ -48,8 +41,7 @@ public:
+       [this]() {return this->send_goal();});
+   }
+ 
+-  ACTION_TUTORIALS_CPP_PUBLIC
+-  void send_goal()
++void FibonacciActionClient::send_goal()
+   {
+     using namespace std::placeholders;
+ 
+@@ -117,11 +109,6 @@ public:
+     this->client_ptr_->async_send_goal(goal_msg, send_goal_options);
+   }
+ 
+-private:
+-  rclcpp_action::Client<Fibonacci>::SharedPtr client_ptr_;
+-  rclcpp::TimerBase::SharedPtr timer_;
+-};  // class FibonacciActionClient
+-
+ }  // namespace action_tutorials_cpp
+ 
+ RCLCPP_COMPONENTS_REGISTER_NODE(action_tutorials_cpp::FibonacciActionClient)
+diff --git a/action_tutorials/action_tutorials_cpp/src/fibonacci_action_server.cpp b/action_tutorials/action_tutorials_cpp/src/fibonacci_action_server.cpp
+index d04c4c3..d1f8e14 100644
+--- a/action_tutorials/action_tutorials_cpp/src/fibonacci_action_server.cpp
++++ b/action_tutorials/action_tutorials_cpp/src/fibonacci_action_server.cpp
+@@ -20,18 +20,11 @@
+ #include "rclcpp_action/rclcpp_action.hpp"
+ #include "rclcpp_components/register_node_macro.hpp"
+ 
+-#include "action_tutorials_cpp/visibility_control.h"
++#include "action_tutorials_cpp/fibonacci_action_server.hpp"
+ 
+ namespace action_tutorials_cpp
+ {
+-class FibonacciActionServer : public rclcpp::Node
+-{
+-public:
+-  using Fibonacci = action_tutorials_interfaces::action::Fibonacci;
+-  using GoalHandleFibonacci = rclcpp_action::ServerGoalHandle<Fibonacci>;
+-
+-  ACTION_TUTORIALS_CPP_PUBLIC
+-  explicit FibonacciActionServer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
++FibonacciActionServer::FibonacciActionServer(const rclcpp::NodeOptions & options)
+   : Node("fibonacci_action_server", options)
+   {
+     using namespace std::placeholders;
+@@ -76,11 +69,7 @@ public:
+       handle_accepted);
+   }
+ 
+-private:
+-  rclcpp_action::Server<Fibonacci>::SharedPtr action_server_;
+-
+-  ACTION_TUTORIALS_CPP_LOCAL
+-  void execute(const std::shared_ptr<GoalHandleFibonacci> goal_handle)
++void FibonacciActionServer::execute(const std::shared_ptr<GoalHandleFibonacci> goal_handle)
+   {
+     RCLCPP_INFO(this->get_logger(), "Executing goal");
+     rclcpp::Rate loop_rate(1);
+@@ -115,7 +104,6 @@ private:
+       RCLCPP_INFO(this->get_logger(), "Goal succeeded");
+     }
+   }
+-};  // class FibonacciActionServer
+ 
+ }  // namespace action_tutorials_cpp
+ 
+diff --git a/demo_nodes_cpp/CMakeLists.txt b/demo_nodes_cpp/CMakeLists.txt
+index 52c504b..68d5a56 100644
+--- a/demo_nodes_cpp/CMakeLists.txt
++++ b/demo_nodes_cpp/CMakeLists.txt
+@@ -23,6 +23,28 @@ find_package(rcutils REQUIRED)
+ find_package(rmw REQUIRED)
+ find_package(std_msgs REQUIRED)
+ 
++function(add_ohos_direct_launcher executable source_file node_type)
++  set(SOURCE_FILE "${source_file}")
++  set(NODE_TYPE "${node_type}")
++  set(LOGGER_NAME "${node_type}")
++
++  set(launcher_source "${CMAKE_CURRENT_BINARY_DIR}/ohos/${executable}_launcher.cpp")
++  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ohos")
++  configure_file(
++    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ohos_direct_launcher.cpp.in"
++    "${launcher_source}"
++    @ONLY
++  )
++
++  add_executable(${executable} "${launcher_source}")
++  target_include_directories(${executable} PRIVATE
++    "${CMAKE_CURRENT_SOURCE_DIR}"
++    "${CMAKE_CURRENT_SOURCE_DIR}/include")
++  target_link_libraries(${executable} PRIVATE ${ARGN})
++  install(TARGETS ${executable}
++    DESTINATION lib/${PROJECT_NAME})
++endfunction()
++
+ function(custom_executable subfolder target)
+   cmake_parse_arguments(ARG "" "" "DEPENDENCIES" ${ARGN})
+   add_executable(${target} src/${subfolder}/${target}.cpp)
+@@ -78,6 +100,7 @@ custom_executable(logging use_logger_service
+ 
+ function(create_demo_library plugin executable)
+   cmake_parse_arguments(ARG "" "" "FILES;DEPENDENCIES" ${ARGN})
++  list(GET ARG_FILES 0 source_file)
+   set(library ${executable}_library)
+   add_library(${library} SHARED ${ARG_FILES})
+   target_compile_definitions(${library}
+@@ -94,10 +117,16 @@ function(create_demo_library plugin executable)
+     RUNTIME DESTINATION bin)
+   set(DEMO_EXECUTOR "rclcpp::executors::SingleThreadedExecutor" CACHE STRING "The executor for the demo nodes")
+   message(STATUS "Setting executor of ${executable} to ${DEMO_EXECUTOR}")
+-  rclcpp_components_register_node(${library}
+-    PLUGIN ${plugin}
+-    EXECUTABLE ${executable}
+-    EXECUTOR ${DEMO_EXECUTOR})
++  if(OHOS_ARCH)
++    rclcpp_components_register_nodes(${library} ${plugin})
++    add_ohos_direct_launcher(${executable} "${source_file}" "${plugin}"
++      ${ARG_DEPENDENCIES} rclcpp::rclcpp rclcpp_components::component)
++  else()
++    rclcpp_components_register_node(${library}
++      PLUGIN ${plugin}
++      EXECUTABLE ${executable}
++      EXECUTOR ${DEMO_EXECUTOR})
++  endif()
+ endfunction()
+ 
+ # Timers
+diff --git a/demo_nodes_cpp_native/CMakeLists.txt b/demo_nodes_cpp_native/CMakeLists.txt
+index 2bccfe5..9bec179 100644
+--- a/demo_nodes_cpp_native/CMakeLists.txt
++++ b/demo_nodes_cpp_native/CMakeLists.txt
+@@ -35,7 +35,19 @@ ament_target_dependencies(talker_native
+   "std_msgs"
+   "rclcpp_components"
+   "rmw_fastrtps_cpp")
+-rclcpp_components_register_node(talker_native PLUGIN "demo_nodes_cpp_native::Talker" EXECUTABLE talker)
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(talker_native "demo_nodes_cpp_native::Talker")
++  add_executable(talker
++    src/talker_main.cpp)
++  target_link_libraries(talker PRIVATE
++    talker_native
++    rclcpp::rclcpp
++  )
++  install(TARGETS talker
++    DESTINATION lib/${PROJECT_NAME})
++else()
++  rclcpp_components_register_node(talker_native PLUGIN "demo_nodes_cpp_native::Talker" EXECUTABLE talker)
++endif()
+ install(TARGETS
+   talker_native
+   ARCHIVE DESTINATION lib
+diff --git a/demo_nodes_cpp_native/src/talker.cpp b/demo_nodes_cpp_native/src/talker.cpp
+index 2481b5a..4eced66 100644
+--- a/demo_nodes_cpp_native/src/talker.cpp
++++ b/demo_nodes_cpp_native/src/talker.cpp
+@@ -13,27 +13,21 @@
+ // limitations under the License.
+ 
+ #include <iostream>
+-#include <memory>
+ #include <string>
+ #include <utility>
+ 
+ #include "rclcpp/rclcpp.hpp"
+ #include "rclcpp_components/register_node_macro.hpp"
+-#include "std_msgs/msg/string.hpp"
+ 
+ #include "rmw_fastrtps_cpp/get_participant.hpp"
+ #include "rmw_fastrtps_cpp/get_publisher.hpp"
+ 
+-#include "demo_nodes_cpp_native/visibility_control.h"
++#include "demo_nodes_cpp_native/talker.hpp"
+ 
+ using namespace std::chrono_literals;
+ namespace demo_nodes_cpp_native
+ {
+-class Talker : public rclcpp::Node
+-{
+-public:
+-  DEMO_NODES_CPP_NATIVE_PUBLIC
+-  explicit Talker(const rclcpp::NodeOptions & options)
++Talker::Talker(const rclcpp::NodeOptions & options)
+   : Node("talker_native", options)
+   {
+     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
+@@ -66,13 +60,6 @@ public:
+       reinterpret_cast<size_t>(dw));
+   }
+ 
+-private:
+-  size_t count_ = 1;
+-  std::unique_ptr<std_msgs::msg::String> msg_;
+-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_;
+-  rclcpp::TimerBase::SharedPtr timer_;
+-};
+-
+ }  // namespace demo_nodes_cpp_native
+ 
+ RCLCPP_COMPONENTS_REGISTER_NODE(demo_nodes_cpp_native::Talker)
+diff --git a/image_tools/CMakeLists.txt b/image_tools/CMakeLists.txt
+index d38c9d2..4a0c1df 100644
+--- a/image_tools/CMakeLists.txt
++++ b/image_tools/CMakeLists.txt
+@@ -36,8 +36,46 @@ target_link_libraries(${PROJECT_NAME}
+   ${std_msgs_TARGETS}
+   rclcpp_components::component
+   ${OpenCV_LIBS})
+-rclcpp_components_register_node(${PROJECT_NAME} PLUGIN "image_tools::Cam2Image" EXECUTABLE cam2image)
+-rclcpp_components_register_node(${PROJECT_NAME} PLUGIN "image_tools::ShowImage" EXECUTABLE showimage)
++
++function(add_ohos_direct_launcher executable source_file node_type)
++  set(SOURCE_FILE "${source_file}")
++  set(NODE_TYPE "${node_type}")
++  set(LOGGER_NAME "${executable}")
++
++  set(launcher_source "${CMAKE_CURRENT_BINARY_DIR}/ohos/${executable}_launcher.cpp")
++  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ohos")
++  configure_file(
++    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ohos_direct_launcher.cpp.in"
++    "${launcher_source}"
++    @ONLY
++  )
++
++  add_executable(${executable} "${launcher_source}")
++  target_include_directories(${executable} PRIVATE
++    "${CMAKE_CURRENT_SOURCE_DIR}"
++    "${CMAKE_CURRENT_SOURCE_DIR}/include")
++  target_link_libraries(${executable} PRIVATE
++    ${PROJECT_NAME}
++    rclcpp::rclcpp
++    ${sensor_msgs_TARGETS}
++    ${std_msgs_TARGETS}
++    rclcpp_components::component
++    ${OpenCV_LIBS})
++  install(TARGETS ${executable}
++    DESTINATION lib/${PROJECT_NAME})
++endfunction()
++
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(${PROJECT_NAME}
++    "image_tools::Cam2Image"
++    "image_tools::ShowImage")
++
++  add_ohos_direct_launcher(cam2image src/cam2image.cpp "image_tools::Cam2Image")
++  add_ohos_direct_launcher(showimage src/showimage.cpp "image_tools::ShowImage")
++else()
++  rclcpp_components_register_node(${PROJECT_NAME} PLUGIN "image_tools::Cam2Image" EXECUTABLE cam2image)
++  rclcpp_components_register_node(${PROJECT_NAME} PLUGIN "image_tools::ShowImage" EXECUTABLE showimage)
++endif()
+ 
+ install(
+   TARGETS ${PROJECT_NAME} EXPORT ${PROJECT_NAME}
+diff --git a/logging_demo/src/logging_demo_main.cpp b/logging_demo/src/logging_demo_main.cpp
+index 1320de2..e1791c7 100644
+--- a/logging_demo/src/logging_demo_main.cpp
++++ b/logging_demo/src/logging_demo_main.cpp
+@@ -12,7 +12,9 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include <exception>
+ #include <memory>
++#include <vector>
+ 
+ #include "logging_demo/logger_config_component.hpp"
+ #include "logging_demo/logger_usage_component.hpp"
+@@ -23,18 +25,27 @@ int main(int argc, char * argv[])
+   // Force flush of the stdout buffer.
+   setvbuf(stdout, NULL, _IONBF, BUFSIZ);
+ 
+-  rclcpp::init(argc, argv);
++  std::vector<std::string> args = rclcpp::init_and_remove_ros_arguments(argc, argv);
+   rclcpp::executors::SingleThreadedExecutor exec;
+   rclcpp::NodeOptions options;
++  options.arguments(args);
+ 
+-  // Create a node that processes logger configuration requests
+-  auto logger_config = std::make_shared<logging_demo::LoggerConfig>(options);
+-  exec.add_node(logger_config);
+-  // Create a node that has examples of different logger usage
+-  auto logger_usage = std::make_shared<logging_demo::LoggerUsage>(options);
+-  exec.add_node(logger_usage);
++  try {
++    // Create a node that processes logger configuration requests.
++    auto logger_config = std::make_shared<logging_demo::LoggerConfig>(options);
++    exec.add_node(logger_config);
++    // Create a node that has examples of different logger usage.
++    auto logger_usage = std::make_shared<logging_demo::LoggerUsage>(options);
++    exec.add_node(logger_usage);
+ 
+-  exec.spin();
++    exec.spin();
++    exec.remove_node(logger_usage);
++    exec.remove_node(logger_config);
++  } catch (const std::exception & ex) {
++    RCLCPP_ERROR(rclcpp::get_logger("logging_demo_main"), "%s", ex.what());
++    rclcpp::shutdown();
++    return 1;
++  }
+ 
+   rclcpp::shutdown();
+   return 0;
+diff --git a/quality_of_service_demo/rclcpp/CMakeLists.txt b/quality_of_service_demo/rclcpp/CMakeLists.txt
+index 53f048a..94c73c8 100644
+--- a/quality_of_service_demo/rclcpp/CMakeLists.txt
++++ b/quality_of_service_demo/rclcpp/CMakeLists.txt
+@@ -53,12 +53,31 @@ target_link_libraries(message_lost
+   ${sensor_msgs_TARGETS})
+ target_compile_definitions(message_lost
+   PRIVATE "QUALITY_OF_SERVICE_DEMO_BUILDING_DLL")
+-rclcpp_components_register_node(message_lost
+-  PLUGIN "quality_of_service_demo::MessageLostListener"
+-  EXECUTABLE message_lost_listener)
+-rclcpp_components_register_node(message_lost
+-  PLUGIN "quality_of_service_demo::MessageLostTalker"
+-  EXECUTABLE message_lost_talker)
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(message_lost
++    "quality_of_service_demo::MessageLostListener"
++    "quality_of_service_demo::MessageLostTalker")
++  add_executable(message_lost_listener
++    src/message_lost_listener_main.cpp)
++  target_link_libraries(message_lost_listener PRIVATE
++    message_lost
++    rclcpp::rclcpp)
++  install(TARGETS message_lost_listener DESTINATION lib/${PROJECT_NAME})
++
++  add_executable(message_lost_talker
++    src/message_lost_talker_main.cpp)
++  target_link_libraries(message_lost_talker PRIVATE
++    message_lost
++    rclcpp::rclcpp)
++  install(TARGETS message_lost_talker DESTINATION lib/${PROJECT_NAME})
++else()
++  rclcpp_components_register_node(message_lost
++    PLUGIN "quality_of_service_demo::MessageLostListener"
++    EXECUTABLE message_lost_listener)
++  rclcpp_components_register_node(message_lost
++    PLUGIN "quality_of_service_demo::MessageLostTalker"
++    EXECUTABLE message_lost_talker)
++endif()
+ 
+ add_library(qos_overrides SHARED
+   src/qos_overrides_listener.cpp
+@@ -71,12 +90,31 @@ target_link_libraries(qos_overrides
+   ${sensor_msgs_TARGETS})
+ target_compile_definitions(qos_overrides
+   PRIVATE "QUALITY_OF_SERVICE_DEMO_BUILDING_DLL")
+-rclcpp_components_register_node(qos_overrides
+-  PLUGIN "quality_of_service_demo::QosOverridesListener"
+-  EXECUTABLE qos_overrides_listener)
+-rclcpp_components_register_node(qos_overrides
+-  PLUGIN "quality_of_service_demo::QosOverridesTalker"
+-  EXECUTABLE qos_overrides_talker)
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(qos_overrides
++    "quality_of_service_demo::QosOverridesListener"
++    "quality_of_service_demo::QosOverridesTalker")
++  add_executable(qos_overrides_listener
++    src/qos_overrides_listener_main.cpp)
++  target_link_libraries(qos_overrides_listener PRIVATE
++    qos_overrides
++    rclcpp::rclcpp)
++  install(TARGETS qos_overrides_listener DESTINATION lib/${PROJECT_NAME})
++
++  add_executable(qos_overrides_talker
++    src/qos_overrides_talker_main.cpp)
++  target_link_libraries(qos_overrides_talker PRIVATE
++    qos_overrides
++    rclcpp::rclcpp)
++  install(TARGETS qos_overrides_talker DESTINATION lib/${PROJECT_NAME})
++else()
++  rclcpp_components_register_node(qos_overrides
++    PLUGIN "quality_of_service_demo::QosOverridesListener"
++    EXECUTABLE qos_overrides_listener)
++  rclcpp_components_register_node(qos_overrides
++    PLUGIN "quality_of_service_demo::QosOverridesTalker"
++    EXECUTABLE qos_overrides_talker)
++endif()
+ 
+ install(TARGETS
+   message_lost qos_overrides
+diff --git a/quality_of_service_demo/rclcpp/src/message_lost_listener.cpp b/quality_of_service_demo/rclcpp/src/message_lost_listener.cpp
+index 1ffa95e..f3b7115 100644
+--- a/quality_of_service_demo/rclcpp/src/message_lost_listener.cpp
++++ b/quality_of_service_demo/rclcpp/src/message_lost_listener.cpp
+@@ -12,56 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#include "rclcpp/rclcpp.hpp"
+-#include "rclcpp_components/register_node_macro.hpp"
+-
+-#include "sensor_msgs/msg/image.hpp"
+-
+-#include "quality_of_service_demo/visibility_control.h"
++#include "quality_of_service_demo/message_lost_listener.hpp"
+ 
+-namespace quality_of_service_demo
+-{
+-class MessageLostListener : public rclcpp::Node
+-{
+-public:
+-  QUALITY_OF_SERVICE_DEMO_PUBLIC
+-  explicit MessageLostListener(const rclcpp::NodeOptions & options)
+-  : Node("MessageLostListener", options)
+-  {
+-    // Callback that will be used when a message is received.
+-    auto callback =
+-      [this](const sensor_msgs::msg::Image::ConstSharedPtr msg) -> void
+-      {
+-        rclcpp::Time now = this->get_clock()->now();
+-        rclcpp::Time stamp_time(msg->header.stamp, RCL_ROS_TIME);
+-        auto diff = now - stamp_time;
+-        RCLCPP_INFO(
+-          this->get_logger(),
+-          "I heard an image. Message single trip latency: [%f]",
+-          diff.seconds());
+-      };
+-    rclcpp::SubscriptionOptions sub_opts;
+-    // Update the subscription options, so an event handler that will report the number of lost
+-    // messages is created together with the subscription.
+-    sub_opts.event_callbacks.message_lost_callback =
+-      [logger = this->get_logger()](rclcpp::QOSMessageLostInfo & info)
+-      {
+-        RCLCPP_INFO_STREAM(
+-          logger,
+-          "Some messages were lost:\n>\tNumber of new lost messages: " <<
+-            info.total_count_change << " \n>\tTotal number of messages lost: " <<
+-            info.total_count);
+-      };
+-    // Create the subscription. This will also create an event handler based on the above
+-    // subscription options.
+-    sub_ = create_subscription<sensor_msgs::msg::Image>(
+-      "message_lost_chatter", 1, callback, sub_opts);
+-  }
+-
+-private:
+-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_;
+-};
+-
+-}  // namespace quality_of_service_demo
++#include "rclcpp_components/register_node_macro.hpp"
+ 
+ RCLCPP_COMPONENTS_REGISTER_NODE(quality_of_service_demo::MessageLostListener)
+diff --git a/quality_of_service_demo/rclcpp/src/message_lost_talker.cpp b/quality_of_service_demo/rclcpp/src/message_lost_talker.cpp
+index c63d8b4..d33b690 100644
+--- a/quality_of_service_demo/rclcpp/src/message_lost_talker.cpp
++++ b/quality_of_service_demo/rclcpp/src/message_lost_talker.cpp
+@@ -12,104 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#include <chrono>
+-#include <memory>
+-#include <string>
+-#include <utility>
+-#include <vector>
++#include "quality_of_service_demo/message_lost_talker.hpp"
+ 
+-#include "rcutils/cmdline_parser.h"
+-
+-#include "rclcpp/rclcpp.hpp"
+ #include "rclcpp_components/register_node_macro.hpp"
+ 
+-#include "sensor_msgs/msg/image.hpp"
+-
+-#include "quality_of_service_demo/visibility_control.h"
+-
+-using namespace std::chrono_literals;
+-
+-namespace quality_of_service_demo
+-{
+-void print_usage()
+-{
+-  std::cout <<
+-    "Usage: message_lost_talker [-h] [-s SIZE]\n\n"
+-    "optional arguments:\n"
+-    "\t-h:                           Print this help message.\n"
+-    "\t-s <message_size>:            Message size in KiB, default to 8192 KiB" <<
+-    std::endl;
+-}
+-
+-class MessageLostTalker : public rclcpp::Node
+-{
+-public:
+-  QUALITY_OF_SERVICE_DEMO_PUBLIC
+-  explicit MessageLostTalker(const rclcpp::NodeOptions & options)
+-  : Node("message_lost_talker", options),
+-    message_size_(8u * 1024u * 1024u)  // 8MB
+-  {
+-    const std::vector<std::string> & args = this->get_node_options().arguments();
+-    if (args.size()) {
+-      // Argument usage
+-      if (args.cend() != std::find(args.cbegin(), args.cend(), "-h")) {
+-        print_usage();
+-        // TODO(ivanpauno): Update the rclcpp_components template to be able to handle
+-        // exceptions. Raise one here, so stack unwinding happens gracefully.
+-        std::exit(0);
+-      }
+-      // Argument: message size
+-      auto opt_it = std::find(args.cbegin(), args.cend(), "-s");
+-      if (opt_it != args.cend()) {
+-        ++opt_it;
+-        if (opt_it == args.cend()) {
+-          print_usage();
+-          std::cout << "\n-s must be followed by a possitive integer" << std::endl;
+-          // TODO(ivanpauno): Update the rclcpp_components template to be able to handle
+-          // exceptions. Raise one here, so stack unwinding happens gracefully.
+-          std::exit(0);
+-        }
+-        std::istringstream input_stream(*opt_it);
+-        input_stream >> message_size_;
+-        if (!input_stream) {
+-          print_usage();
+-          std::cout << "\n-s must be followed by a possitive integer, got: '" <<
+-            *opt_it << "'" << std::endl;
+-          // TODO(ivanpauno): Update the rclcpp_components template to be able to handle
+-          // exceptions. Raise one here, so stack unwinding happens gracefully.
+-          std::exit(0);
+-        }
+-        message_size_ *= 1024uL;
+-      }
+-    }
+-    msg_.data = std::vector<uint8_t>(message_size_, 0u);
+-    // Timer callback
+-    auto publish_message =
+-      [this]() -> void
+-      {
+-        rclcpp::Time now = this->get_clock()->now();
+-        msg_.header.stamp = now;
+-        RCLCPP_INFO(
+-          this->get_logger(),
+-          "Publishing an image, sent at [%f]",
+-          now.seconds());
+-
+-        pub_->publish(msg_);
+-      };
+-    // Create a publisher
+-    pub_ = this->create_publisher<sensor_msgs::msg::Image>("message_lost_chatter", 1);
+-
+-    // Use a timer to schedule periodic message publishing.
+-    timer_ = this->create_wall_timer(3s, publish_message);
+-  }
+-
+-private:
+-  size_t message_size_;
+-  sensor_msgs::msg::Image msg_;
+-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_;
+-  rclcpp::TimerBase::SharedPtr timer_;
+-};
+-
+-}  // namespace quality_of_service_demo
+-
+ RCLCPP_COMPONENTS_REGISTER_NODE(quality_of_service_demo::MessageLostTalker)
+diff --git a/quality_of_service_demo/rclcpp/src/qos_overrides_listener.cpp b/quality_of_service_demo/rclcpp/src/qos_overrides_listener.cpp
+index fe3d88d..981c0c0 100644
+--- a/quality_of_service_demo/rclcpp/src/qos_overrides_listener.cpp
++++ b/quality_of_service_demo/rclcpp/src/qos_overrides_listener.cpp
+@@ -12,81 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#include "rclcpp/qos_overriding_options.hpp"
+-#include "rclcpp/rclcpp.hpp"
+-#include "rclcpp_components/register_node_macro.hpp"
+-
+-#include "sensor_msgs/msg/image.hpp"
+-
+-#include "quality_of_service_demo/visibility_control.h"
++#include "quality_of_service_demo/qos_overrides_listener.hpp"
+ 
+-namespace quality_of_service_demo
+-{
+-class QosOverridesListener : public rclcpp::Node
+-{
+-public:
+-  QUALITY_OF_SERVICE_DEMO_PUBLIC
+-  explicit QosOverridesListener(const rclcpp::NodeOptions & options)
+-  : Node("qos_overrides_listener", options)
+-  {
+-    // Callback that will be used when a message is received.
+-    auto callback =
+-      [this](sensor_msgs::msg::Image::ConstSharedPtr msg) -> void
+-      {
+-        rclcpp::Time now = this->get_clock()->now();
+-        rclcpp::Time stamp_time(msg->header.stamp, RCL_ROS_TIME);
+-        auto diff = now - stamp_time;
+-        RCLCPP_INFO(
+-          this->get_logger(),
+-          "I heard an image. Message single trip latency: [%f]",
+-          diff.seconds());
+-      };
+-    rclcpp::SubscriptionOptions sub_opts;
+-    // Update the subscription options to allow reconfigurable qos settings.
+-    sub_opts.qos_overriding_options = rclcpp::QosOverridingOptions {
+-      {
+-        // Here all policies that are desired to be reconfigurable are listed.
+-        rclcpp::QosPolicyKind::Depth,
+-        rclcpp::QosPolicyKind::Durability,
+-        rclcpp::QosPolicyKind::History,
+-        rclcpp::QosPolicyKind::Reliability,
+-      },
+-      [](const rclcpp::QoS & qos) {
+-        /** This is a qos validation callback, that can optionally be provided.
+-         * Here, arbitrary constraints in the final qos profile can be checked.
+-         * The function will return true if the user provided qos profile is accepted.
+-         * If the profile is not accepted, the user will get an InvalidQosOverridesException.
+-         */
+-        rclcpp::QosCallbackResult result;
+-        result.successful = false;
+-        if (qos.depth() > 10u) {
+-          result.reason = "expected history depth less or equal than 10";
+-          return result;
+-        }
+-        result.successful = true;
+-        return result;
+-      }
+-      /**
+-       * The "id" option is useful when you want to have subscriptions
+-       * listening to the same topic with different QoS profiles within a node.
+-       * You can try uncommenting and modifying
+-       * `qos_overrides./qos_overrides_topic.subscription`
+-       * to
+-       * `qos_overrides./qos_overrides_topic.subscription_custom_identifier`
+-       *
+-       * Uncomment the next line to try it.
+-       */
+-      // , "custom_identifier"
+-    };
+-    // create the subscription
+-    sub_ = create_subscription<sensor_msgs::msg::Image>(
+-      "qos_overrides_chatter", 1, callback, sub_opts);
+-  }
+-
+-private:
+-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_;
+-};
+-
+-}  // namespace quality_of_service_demo
++#include "rclcpp_components/register_node_macro.hpp"
+ 
+ RCLCPP_COMPONENTS_REGISTER_NODE(quality_of_service_demo::QosOverridesListener)
+diff --git a/quality_of_service_demo/rclcpp/src/qos_overrides_talker.cpp b/quality_of_service_demo/rclcpp/src/qos_overrides_talker.cpp
+index 9ff43cc..f315dd1 100644
+--- a/quality_of_service_demo/rclcpp/src/qos_overrides_talker.cpp
++++ b/quality_of_service_demo/rclcpp/src/qos_overrides_talker.cpp
+@@ -12,101 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#include <chrono>
+-#include <memory>
+-#include <string>
+-#include <utility>
+-#include <vector>
++#include "quality_of_service_demo/qos_overrides_talker.hpp"
+ 
+-#include "rcutils/cmdline_parser.h"
+-
+-#include "rclcpp/rclcpp.hpp"
+ #include "rclcpp_components/register_node_macro.hpp"
+ 
+-#include "sensor_msgs/msg/image.hpp"
+-
+-#include "quality_of_service_demo/visibility_control.h"
+-
+-using namespace std::chrono_literals;
+-
+-namespace quality_of_service_demo
+-{
+-
+-class QosOverridesTalker : public rclcpp::Node
+-{
+-public:
+-  QUALITY_OF_SERVICE_DEMO_PUBLIC
+-  explicit QosOverridesTalker(const rclcpp::NodeOptions & options)
+-  : Node("qos_overrides_talker", options)
+-  {
+-    // Timer callback
+-    auto publish_message =
+-      [this]() -> void
+-      {
+-        for (size_t i = 0; i < 1u * 1024u * 1024u; ++i) {
+-          msg_.data.push_back(0);
+-        }
+-        rclcpp::Time now = this->get_clock()->now();
+-        msg_.header.stamp = now;
+-        RCLCPP_INFO(
+-          this->get_logger(),
+-          "Publishing an image, sent at [%f]",
+-          now.seconds());
+-
+-        pub_->publish(msg_);
+-      };
+-
+-    rclcpp::PublisherOptions pub_opts;
+-    // Update the subscription options to allow reconfigurable qos settings.
+-    pub_opts.qos_overriding_options = rclcpp::QosOverridingOptions {
+-      {
+-        // Here all policies that are desired to be reconfigurable are listed.
+-        rclcpp::QosPolicyKind::Depth,
+-        rclcpp::QosPolicyKind::Durability,
+-        rclcpp::QosPolicyKind::History,
+-        rclcpp::QosPolicyKind::Reliability
+-      },
+-      [](const rclcpp::QoS & qos) {
+-        /** This is a qos validation callback, that can optionally be provided.
+-         * Here, arbitrary constraints in the final qos profile can be checked.
+-         * The function will return true if the user provided qos profile is accepted.
+-         * If the profile is not accepted, the user will get an InvalidQosOverridesException.
+-         */
+-        rclcpp::QosCallbackResult result;
+-        result.successful = false;
+-        if (qos.depth() > 10u) {
+-          result.reason = "expected history depth less or equal than 10";
+-          return result;
+-        }
+-        result.successful = true;
+-        return result;
+-      }
+-      /**
+-       * The "id" option is useful when you want to have subscriptions
+-       * listening to the same topic with different QoS profiles within a node.
+-       * You can try uncommenting and modifying
+-       * `qos_overrides./qos_overrides_topic.subscription`
+-       * to
+-       * `qos_overrides./qos_overrides_topic.subscription_custom_identifier`
+-       *
+-       * Uncomment the next line to try it.
+-       */
+-      // , "custom_identifier"
+-    };
+-
+-    // Create a publisher
+-    pub_ = this->create_publisher<sensor_msgs::msg::Image>("qos_overrides_chatter", 1, pub_opts);
+-
+-    // Use a timer to schedule periodic message publishing.
+-    timer_ = this->create_wall_timer(3s, publish_message);
+-  }
+-
+-private:
+-  sensor_msgs::msg::Image msg_;
+-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_;
+-  rclcpp::TimerBase::SharedPtr timer_;
+-};
+-
+-}  // namespace quality_of_service_demo
+-
+ RCLCPP_COMPONENTS_REGISTER_NODE(quality_of_service_demo::QosOverridesTalker)

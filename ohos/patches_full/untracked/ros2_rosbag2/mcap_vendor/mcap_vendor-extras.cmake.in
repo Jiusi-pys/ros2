@@ -1,0 +1,11 @@
+if(NOT lz4_ROOT_DIR)
+  get_filename_component(_mcap_lz4_vendor_prefix "${mcap_vendor_DIR}/../../../opt/liblz4_vendor" ABSOLUTE)
+  set(lz4_ROOT_DIR "${_mcap_lz4_vendor_prefix}")
+  unset(_mcap_lz4_vendor_prefix)
+endif()
+
+if(NOT zstd_ROOT_DIR)
+  get_filename_component(_mcap_zstd_vendor_prefix "${mcap_vendor_DIR}/../../../opt/zstd_vendor" ABSOLUTE)
+  set(zstd_ROOT_DIR "${_mcap_zstd_vendor_prefix}")
+  unset(_mcap_zstd_vendor_prefix)
+endif()

@@ -1,0 +1,68 @@
+diff --git a/rclpy/CMakeLists.txt b/rclpy/CMakeLists.txt
+index 06c08de..387cce3 100644
+--- a/rclpy/CMakeLists.txt
++++ b/rclpy/CMakeLists.txt
+@@ -40,7 +40,16 @@ find_package(rmw_implementation_cmake REQUIRED)
+ find_package(rosidl_runtime_c REQUIRED)
+ 
+ # Find python before pybind11
+-find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
++set(RCLPY_OHOS_TARGET_PYTHON_INCLUDE_DIR "" CACHE PATH "Target Python include directory for OHOS cross builds")
++set(RCLPY_OHOS_TARGET_PYTHON_LIBRARY "" CACHE FILEPATH "Target Python library for OHOS cross builds")
++set(RCLPY_OHOS_TARGET_PYTHON_EXTENSION_SUFFIX "" CACHE STRING "Extension suffix for OHOS Python modules")
++set(RCLPY_OHOS_TARGET_PYBIND11_INCLUDE_DIR "" CACHE PATH "pybind11 include directory for OHOS cross builds")
++
++if(RCLPY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND RCLPY_OHOS_TARGET_PYTHON_LIBRARY)
++  find_package(Python3 REQUIRED COMPONENTS Interpreter)
++else()
++  find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
++endif()
+ 
+ find_package(pybind11_vendor REQUIRED)
+ find_package(pybind11 REQUIRED)
+@@ -72,7 +81,7 @@ function(configure_build_install_location _library_name)
+ endfunction()
+ 
+ # Split from main extension and converted to pybind11
+-pybind11_add_module(_rclpy_pybind11
++set(_rclpy_sources
+   src/rclpy/_rclpy_logging.cpp
+   src/rclpy/_rclpy_pybind11.cpp
+   src/rclpy/action_client.cpp
+@@ -112,13 +121,32 @@ pybind11_add_module(_rclpy_pybind11
+   src/rclpy/wait_set.cpp
+ )
+ 
+-if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE)
++if(RCLPY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND RCLPY_OHOS_TARGET_PYTHON_LIBRARY)
++  add_library(_rclpy_pybind11 MODULE ${_rclpy_sources})
++  set_target_properties(_rclpy_pybind11 PROPERTIES PREFIX "")
++  if(RCLPY_OHOS_TARGET_PYTHON_EXTENSION_SUFFIX)
++    set_target_properties(_rclpy_pybind11 PROPERTIES SUFFIX "${RCLPY_OHOS_TARGET_PYTHON_EXTENSION_SUFFIX}")
++  endif()
++  set(_rclpy_pybind11_include_dirs
++    src/rclpy/
++    ${RCLPY_OHOS_TARGET_PYTHON_INCLUDE_DIR}
++  )
++  if(RCLPY_OHOS_TARGET_PYBIND11_INCLUDE_DIR)
++    list(APPEND _rclpy_pybind11_include_dirs ${RCLPY_OHOS_TARGET_PYBIND11_INCLUDE_DIR})
++  endif()
++  target_include_directories(_rclpy_pybind11 PRIVATE ${_rclpy_pybind11_include_dirs})
++  target_link_libraries(_rclpy_pybind11 PRIVATE ${RCLPY_OHOS_TARGET_PYTHON_LIBRARY})
++else()
++  pybind11_add_module(_rclpy_pybind11 ${_rclpy_sources})
++  target_include_directories(_rclpy_pybind11 PRIVATE
++    src/rclpy/
++  )
++endif()
++
++if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "OHOS")
+   target_link_libraries(_rclpy_pybind11 PRIVATE atomic)
+ endif()
+ 
+-target_include_directories(_rclpy_pybind11 PRIVATE
+-  src/rclpy/
+-)
+ target_link_libraries(_rclpy_pybind11 PRIVATE
+   lifecycle_msgs::lifecycle_msgs__rosidl_generator_c
+   lifecycle_msgs::lifecycle_msgs__rosidl_typesupport_c

@@ -1,0 +1,15 @@
+diff --git a/ament_cmake_vendor_package/cmake/ament_vendor.cmake b/ament_cmake_vendor_package/cmake/ament_vendor.cmake
+index c9b963c..b2fcb49 100644
+--- a/ament_cmake_vendor_package/cmake/ament_vendor.cmake
++++ b/ament_cmake_vendor_package/cmake/ament_vendor.cmake
+@@ -233,6 +233,10 @@ function(_ament_vendor TARGET_NAME VCS_TYPE VCS_URL VCS_VERSION PATCHES CMAKE_AR
+     set(CMAKE_ARGS_CONTENT "${CMAKE_ARGS_CONTENT}\nset(CMAKE_VERBOSE_MAKEFILE [=[${CMAKE_VERBOSE_MAKEFILE}]=] CACHE INTERNAL \"\")")
+   endif()
+ 
++  if(DEFINED CMAKE_MAKE_PROGRAM)
++    set(CMAKE_ARGS_CONTENT "${CMAKE_ARGS_CONTENT}\nset(CMAKE_MAKE_PROGRAM [=[${CMAKE_MAKE_PROGRAM}]=] CACHE FILEPATH \"\")")
++  endif()
++
+   if(DEFINED CMAKE_FIND_DEBUG_MODE)
+     set(CMAKE_ARGS_CONTENT "${CMAKE_ARGS_CONTENT}\nset(CMAKE_FIND_DEBUG_MODE [=[${CMAKE_FIND_DEBUG_MODE}]=] CACHE INTERNAL \"\")")
+   endif()

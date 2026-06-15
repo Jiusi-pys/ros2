@@ -1,0 +1,87 @@
+diff --git a/rosidl_generator_py/cmake/rosidl_generator_py_generate_interfaces.cmake b/rosidl_generator_py/cmake/rosidl_generator_py_generate_interfaces.cmake
+index cfc424a..65e48d3 100644
+--- a/rosidl_generator_py/cmake/rosidl_generator_py_generate_interfaces.cmake
++++ b/rosidl_generator_py/cmake/rosidl_generator_py_generate_interfaces.cmake
+@@ -19,7 +19,31 @@ find_package(rosidl_runtime_c REQUIRED)
+ find_package(rosidl_typesupport_c REQUIRED)
+ find_package(rosidl_typesupport_interface REQUIRED)
+ 
+-find_package(Python3 REQUIRED COMPONENTS Interpreter Development NumPy)
++set(ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR "" CACHE PATH "Target Python include directory for OHOS cross builds")
++set(ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_LIBRARY "" CACHE FILEPATH "Target Python library for OHOS cross builds")
++set(ROSIDL_GENERATOR_PY_OHOS_TARGET_NUMPY_INCLUDE_DIR "" CACHE PATH "Target NumPy include directory for OHOS cross builds")
++set(ROSIDL_GENERATOR_PY_OHOS_TARGET_EXTENSION_SUFFIX "" CACHE STRING "Extension suffix for OHOS Python modules")
++
++if(ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND
++    ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_LIBRARY AND
++    ROSIDL_GENERATOR_PY_OHOS_TARGET_NUMPY_INCLUDE_DIR)
++  find_package(Python3 REQUIRED COMPONENTS Interpreter)
++
++  if(NOT TARGET Python3::Python)
++    add_library(Python3::Python UNKNOWN IMPORTED)
++    set_target_properties(Python3::Python PROPERTIES
++      IMPORTED_LOCATION "${ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_LIBRARY}"
++      INTERFACE_INCLUDE_DIRECTORIES "${ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR}")
++  endif()
++
++  if(NOT TARGET Python3::NumPy)
++    add_library(Python3::NumPy INTERFACE IMPORTED)
++    set_target_properties(Python3::NumPy PROPERTIES
++      INTERFACE_INCLUDE_DIRECTORIES "${ROSIDL_GENERATOR_PY_OHOS_TARGET_NUMPY_INCLUDE_DIR}")
++  endif()
++else()
++  find_package(Python3 REQUIRED COMPONENTS Interpreter Development NumPy)
++endif()
+ 
+ # Get a list of typesupport implementations from valid rmw implementations.
+ rosidl_generator_py_get_typesupports(_typesupport_impls)
+@@ -147,7 +171,7 @@ add_dependencies(
+ )
+ 
+ target_link_libraries(
+-  ${_target_name_lib} PRIVATE
++  ${_target_name_lib} PUBLIC
+   Python3::NumPy
+   Python3::Python
+ )
+@@ -175,9 +199,22 @@ foreach(_typesupport_impl ${_typesupport_impls})
+ 
+   set(_target_name "${PROJECT_NAME}_s__${_typesupport_impl}")
+ 
+-  python3_add_library(${_target_name} MODULE
+-    ${_generated_extension_${_typesupport_impl}_files}
+-  )
++  if(ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND
++      ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_LIBRARY AND
++      ROSIDL_GENERATOR_PY_OHOS_TARGET_NUMPY_INCLUDE_DIR)
++    add_library(${_target_name} MODULE
++      ${_generated_extension_${_typesupport_impl}_files}
++    )
++    set_target_properties(${_target_name} PROPERTIES PREFIX "")
++    if(ROSIDL_GENERATOR_PY_OHOS_TARGET_EXTENSION_SUFFIX)
++      set_target_properties(${_target_name} PROPERTIES
++        SUFFIX "${ROSIDL_GENERATOR_PY_OHOS_TARGET_EXTENSION_SUFFIX}")
++    endif()
++  else()
++    python3_add_library(${_target_name} MODULE
++      ${_generated_extension_${_typesupport_impl}_files}
++    )
++  endif()
+   add_dependencies(
+     ${_target_name}
+     ${rosidl_generate_interfaces_TARGET}${_target_suffix}
+@@ -208,6 +245,14 @@ foreach(_typesupport_impl ${_typesupport_impls})
+     ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_c
+     ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_py
+   )
++  if(ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND
++      ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_LIBRARY AND
++      ROSIDL_GENERATOR_PY_OHOS_TARGET_NUMPY_INCLUDE_DIR)
++    target_include_directories(${_target_name}
++      PRIVATE
++      "${ROSIDL_GENERATOR_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR}"
++      "${ROSIDL_GENERATOR_PY_OHOS_TARGET_NUMPY_INCLUDE_DIR}")
++  endif()
+ 
+   foreach(_pkg_name ${rosidl_generate_interfaces_DEPENDENCY_PACKAGE_NAMES})
+     target_link_libraries(${_target_name} PRIVATE ${${_pkg_name}__TARGETS})

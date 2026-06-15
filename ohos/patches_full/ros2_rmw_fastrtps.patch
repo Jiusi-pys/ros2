@@ -1,0 +1,581 @@
+diff --git a/rmw_fastrtps_cpp/src/init_rmw_context_impl.cpp b/rmw_fastrtps_cpp/src/init_rmw_context_impl.cpp
+index 8e141ff..983f824 100644
+--- a/rmw_fastrtps_cpp/src/init_rmw_context_impl.cpp
++++ b/rmw_fastrtps_cpp/src/init_rmw_context_impl.cpp
+@@ -47,6 +47,7 @@ init_context_impl(
+ {
+   rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
+   rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
++  const bool disable_graph = nullptr != std::getenv("ROS2_OHOS_DISABLE_GRAPH");
+ 
+   // Avoid receiving graph updates from our own publication
+   subscription_options.ignore_local_publications = true;
+@@ -83,83 +84,88 @@ init_context_impl(
+ 
+   rmw_qos_profile_t qos = rmw_qos_profile_default;
+ 
+-  qos.avoid_ros_namespace_conventions = true;
+-  qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
+-  qos.depth = 1;
+-  qos.durability = RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+-  qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
++  std::unique_ptr<rmw_guard_condition_t, std::function<void(rmw_guard_condition_t *)>>
++  graph_guard_condition(
++    rmw_fastrtps_shared_cpp::__rmw_create_guard_condition(eprosima_fastrtps_identifier),
++    [&](rmw_guard_condition_t * p)
++    {
++      rmw_ret_t ret = rmw_fastrtps_shared_cpp::__rmw_destroy_guard_condition(p);
++      if (ret != RMW_RET_OK) {
++        RMW_SAFE_FWRITE_TO_STDERR(
++          "Failed to destroy guard condition after function: '"
++          RCUTILS_STRINGIFY(__function__) "' failed.\n");
++      }
++    });
++  if (!graph_guard_condition) {
++    return RMW_RET_BAD_ALLOC;
++  }
+ 
+   std::unique_ptr<rmw_publisher_t, std::function<void(rmw_publisher_t *)>>
+-  publisher(
+-    rmw_fastrtps_cpp::create_publisher(
+-      participant_info.get(),
+-      rosidl_typesupport_cpp::get_message_type_support_handle<ParticipantEntitiesInfo>(),
+-      "ros_discovery_info",
+-      &qos,
+-      &publisher_options),
+-    [&](rmw_publisher_t * pub)
++  publisher(nullptr, [&](rmw_publisher_t * pub)
+     {
+-      if (RMW_RET_OK != rmw_fastrtps_shared_cpp::destroy_publisher(
+-        eprosima_fastrtps_identifier,
+-        participant_info.get(),
+-        pub))
++      if (pub && RMW_RET_OK != rmw_fastrtps_shared_cpp::destroy_publisher(
++          eprosima_fastrtps_identifier,
++          participant_info.get(),
++          pub))
+       {
+         RCUTILS_SAFE_FWRITE_TO_STDERR(
+           "Failed to destroy publisher after function: '"
+           RCUTILS_STRINGIFY(__function__) "' failed.\n");
+       }
+     });
+-  if (!publisher) {
+-    return RMW_RET_BAD_ALLOC;
+-  }
+ 
+-  // If we would have support for keyed topics, this could be KEEP_LAST and depth 1.
+-  qos.history = RMW_QOS_POLICY_HISTORY_KEEP_ALL;
+   std::unique_ptr<rmw_subscription_t, std::function<void(rmw_subscription_t *)>>
+-  subscription(
+-    rmw_fastrtps_cpp::create_subscription(
+-      participant_info.get(),
+-      rosidl_typesupport_cpp::get_message_type_support_handle<ParticipantEntitiesInfo>(),
+-      "ros_discovery_info",
+-      &qos,
+-      &subscription_options,
+-      false),       // our fastrtps typesupport doesn't support keyed topics
+-    [&](rmw_subscription_t * sub)
++  subscription(nullptr, [&](rmw_subscription_t * sub)
+     {
+-      if (RMW_RET_OK != rmw_fastrtps_shared_cpp::destroy_subscription(
+-        eprosima_fastrtps_identifier,
+-        participant_info.get(),
+-        sub))
++      if (sub && RMW_RET_OK != rmw_fastrtps_shared_cpp::destroy_subscription(
++          eprosima_fastrtps_identifier,
++          participant_info.get(),
++          sub))
+       {
+         RMW_SAFE_FWRITE_TO_STDERR(
+           "Failed to destroy subscription after function: '"
+           RCUTILS_STRINGIFY(__function__) "' failed.\n");
+       }
+     });
+-  if (!subscription) {
+-    return RMW_RET_BAD_ALLOC;
+-  }
+ 
+-  std::unique_ptr<rmw_guard_condition_t, std::function<void(rmw_guard_condition_t *)>>
+-  graph_guard_condition(
+-    rmw_fastrtps_shared_cpp::__rmw_create_guard_condition(eprosima_fastrtps_identifier),
+-    [&](rmw_guard_condition_t * p)
+-    {
+-      rmw_ret_t ret = rmw_fastrtps_shared_cpp::__rmw_destroy_guard_condition(p);
+-      if (ret != RMW_RET_OK) {
+-        RMW_SAFE_FWRITE_TO_STDERR(
+-          "Failed to destroy guard condition after function: '"
+-          RCUTILS_STRINGIFY(__function__) "' failed.\n");
+-      }
+-    });
+-  if (!graph_guard_condition) {
+-    return RMW_RET_BAD_ALLOC;
++  if (!disable_graph) {
++    qos.avoid_ros_namespace_conventions = true;
++    qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
++    qos.depth = 1;
++    qos.durability = RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
++    qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
++
++    publisher.reset(
++      rmw_fastrtps_cpp::create_publisher(
++        participant_info.get(),
++        rosidl_typesupport_cpp::get_message_type_support_handle<ParticipantEntitiesInfo>(),
++        "ros_discovery_info",
++        &qos,
++        &publisher_options));
++    if (!publisher) {
++      return RMW_RET_BAD_ALLOC;
++    }
++
++    // If we would have support for keyed topics, this could be KEEP_LAST and depth 1.
++    qos.history = RMW_QOS_POLICY_HISTORY_KEEP_ALL;
++    subscription.reset(
++      rmw_fastrtps_cpp::create_subscription(
++        participant_info.get(),
++        rosidl_typesupport_cpp::get_message_type_support_handle<ParticipantEntitiesInfo>(),
++        "ros_discovery_info",
++        &qos,
++        &subscription_options,
++        false));       // our fastrtps typesupport doesn't support keyed topics
++    if (!subscription) {
++      return RMW_RET_BAD_ALLOC;
++    }
+   }
+ 
+   common_context->gid = rmw_fastrtps_shared_cpp::create_rmw_gid(
+     eprosima_fastrtps_identifier, participant_info->participant_->guid());
+   common_context->pub = publisher.get();
+-  common_context->publish_callback = [](const rmw_publisher_t * pub, const void * msg) {
++  common_context->publish_callback = disable_graph ? nullptr :
++    [](const rmw_publisher_t * pub, const void * msg) {
+       return rmw_fastrtps_shared_cpp::__rmw_publish(
+         eprosima_fastrtps_identifier,
+         pub,
+@@ -172,18 +178,21 @@ init_context_impl(
+   context->impl->common = common_context.get();
+   context->impl->participant_info = participant_info.get();
+ 
+-  rmw_ret_t ret = rmw_fastrtps_shared_cpp::run_listener_thread(context);
+-  if (RMW_RET_OK != ret) {
+-    return ret;
+-  }
++  if (!disable_graph) {
++    rmw_ret_t ret = rmw_fastrtps_shared_cpp::run_listener_thread(context);
++    if (RMW_RET_OK != ret) {
++      return ret;
++    }
+ 
+-  common_context->graph_cache.set_on_change_callback(
+-    [guard_condition = graph_guard_condition.get()]()
+-    {
+-      rmw_fastrtps_shared_cpp::__rmw_trigger_guard_condition(
+-        eprosima_fastrtps_identifier,
+-        guard_condition);
+-    });
++    common_context->graph_cache.set_on_change_callback(
++      [guard_condition = graph_guard_condition.get()]()
++      {
++        rmw_fastrtps_shared_cpp::__rmw_trigger_guard_condition(
++          eprosima_fastrtps_identifier,
++          guard_condition);
++      });
++
++  }
+ 
+   common_context->graph_cache.add_participant(
+     common_context->gid,
+diff --git a/rmw_fastrtps_shared_cpp/include/rmw_fastrtps_shared_cpp/custom_participant_info.hpp b/rmw_fastrtps_shared_cpp/include/rmw_fastrtps_shared_cpp/custom_participant_info.hpp
+index c6a642e..18fc37f 100644
+--- a/rmw_fastrtps_shared_cpp/include/rmw_fastrtps_shared_cpp/custom_participant_info.hpp
++++ b/rmw_fastrtps_shared_cpp/include/rmw_fastrtps_shared_cpp/custom_participant_info.hpp
+@@ -22,6 +22,8 @@
+ #include <string>
+ #include <utility>
+ #include <vector>
++#include <cstdlib>
++#include <cstdio>
+ 
+ #include "fastdds/dds/domain/DomainParticipant.hpp"
+ #include "fastdds/dds/domain/DomainParticipantListener.hpp"
+@@ -125,7 +127,7 @@ typedef struct CustomParticipantInfo
+     EventListenerInterface * event_listener);
+ 
+   RMW_FASTRTPS_SHARED_CPP_PUBLIC
+-  void delete_topic(
++  bool delete_topic(
+     const eprosima::fastdds::dds::Topic * topic,
+     EventListenerInterface * event_listener);
+ } CustomParticipantInfo;
+@@ -145,6 +147,9 @@ public:
+     eprosima::fastrtps::rtps::ParticipantDiscoveryInfo && info,
+     bool & should_be_ignored) override
+   {
++    if (discovery_debug_enabled()) {
++      std::fprintf(stderr, "[ohos-discovery] participant status=%d\n", static_cast<int>(info.status));
++    }
+     should_be_ignored = false;
+     switch (info.status) {
+       case eprosima::fastrtps::rtps::ParticipantDiscoveryInfo::DISCOVERED_PARTICIPANT:
+@@ -180,6 +185,11 @@ public:
+     eprosima::fastdds::dds::DomainParticipant *,
+     eprosima::fastrtps::rtps::ReaderDiscoveryInfo && info) override
+   {
++    if (discovery_debug_enabled()) {
++      std::fprintf(
++        stderr, "[ohos-discovery] reader status=%d topic=%s\n",
++        static_cast<int>(info.status), info.info.topicName().to_string().c_str());
++    }
+     if (eprosima::fastrtps::rtps::ReaderDiscoveryInfo::CHANGED_QOS_READER != info.status) {
+       bool is_alive =
+         eprosima::fastrtps::rtps::ReaderDiscoveryInfo::DISCOVERED_READER == info.status;
+@@ -191,6 +201,11 @@ public:
+     eprosima::fastdds::dds::DomainParticipant *,
+     eprosima::fastrtps::rtps::WriterDiscoveryInfo && info) override
+   {
++    if (discovery_debug_enabled()) {
++      std::fprintf(
++        stderr, "[ohos-discovery] writer status=%d topic=%s\n",
++        static_cast<int>(info.status), info.info.topicName().to_string().c_str());
++    }
+     if (eprosima::fastrtps::rtps::WriterDiscoveryInfo::CHANGED_QOS_WRITER != info.status) {
+       bool is_alive =
+         eprosima::fastrtps::rtps::WriterDiscoveryInfo::DISCOVERED_WRITER == info.status;
+@@ -199,6 +214,11 @@ public:
+   }
+ 
+ private:
++  static bool discovery_debug_enabled()
++  {
++    return nullptr != std::getenv("ROS2_OHOS_DEBUG_DISCOVERY");
++  }
++
+   template<class T>
+   void
+   process_discovery_info(T & proxyData, bool is_alive, bool is_reader)
+diff --git a/rmw_fastrtps_shared_cpp/src/custom_participant_info.cpp b/rmw_fastrtps_shared_cpp/src/custom_participant_info.cpp
+index 2bef4ee..8f2a10f 100644
+--- a/rmw_fastrtps_shared_cpp/src/custom_participant_info.cpp
++++ b/rmw_fastrtps_shared_cpp/src/custom_participant_info.cpp
+@@ -96,12 +96,12 @@ eprosima::fastdds::dds::Topic * CustomParticipantInfo::find_or_create_topic(
+   return topic;
+ }
+ 
+-void CustomParticipantInfo::delete_topic(
++bool CustomParticipantInfo::delete_topic(
+   const eprosima::fastdds::dds::Topic * topic,
+   EventListenerInterface * event_listener)
+ {
+   if (topic == nullptr) {
+-    return;
++    return false;
+   }
+ 
+   std::lock_guard<std::mutex> lck(topic_name_to_topic_mutex_);
+@@ -118,6 +118,7 @@ void CustomParticipantInfo::delete_topic(
+       delete it->second->topic_listener;
+ 
+       topic_name_to_topic_.erase(it);
++      return true;
+     }
+   } else {
+     RCUTILS_LOG_WARN_NAMED(
+@@ -125,4 +126,6 @@ void CustomParticipantInfo::delete_topic(
+       "Attempted to delete topic '%s', but it was never created.  Ignoring",
+       topic->get_name().c_str());
+   }
++
++  return false;
+ }
+diff --git a/rmw_fastrtps_shared_cpp/src/init_rmw_context_impl.cpp b/rmw_fastrtps_shared_cpp/src/init_rmw_context_impl.cpp
+index 917a100..4bc1a22 100644
+--- a/rmw_fastrtps_shared_cpp/src/init_rmw_context_impl.cpp
++++ b/rmw_fastrtps_shared_cpp/src/init_rmw_context_impl.cpp
+@@ -56,33 +56,39 @@ rmw_fastrtps_shared_cpp::decrement_context_impl_ref_count(
+   auto common_context = static_cast<rmw_dds_common::Context *>(context->impl->common);
+   auto participant_info = static_cast<CustomParticipantInfo *>(context->impl->participant_info);
+ 
+-  if (!common_context->graph_cache.remove_participant(common_context->gid)) {
++  if (nullptr == std::getenv("ROS2_OHOS_DISABLE_GRAPH") &&
++    !common_context->graph_cache.remove_participant(common_context->gid))
++  {
+     RMW_SAFE_FWRITE_TO_STDERR(
+       RCUTILS_STRINGIFY(__function__) ":" RCUTILS_STRINGIFY(__line__) ": "
+       "couldn't remove Participant gid from graph_cache when destroying Participant");
+   }
+ 
+-  ret = rmw_fastrtps_shared_cpp::destroy_subscription(
+-    context->implementation_identifier,
+-    participant_info,
+-    common_context->sub);
+-  // Try to clean the other objects if the above failed.
+-  if (RMW_RET_OK != ret) {
+-    error_string = rmw_get_error_string();
+-    rmw_reset_error();
++  if (common_context->sub) {
++    ret = rmw_fastrtps_shared_cpp::destroy_subscription(
++      context->implementation_identifier,
++      participant_info,
++      common_context->sub);
++    // Try to clean the other objects if the above failed.
++    if (RMW_RET_OK != ret) {
++      error_string = rmw_get_error_string();
++      rmw_reset_error();
++    }
+   }
+-  err = rmw_fastrtps_shared_cpp::destroy_publisher(
+-    context->implementation_identifier,
+-    participant_info,
+-    common_context->pub);
+-  if (RMW_RET_OK != ret && RMW_RET_OK != err) {
+-    // We can just return one error, log about the previous one.
+-    RMW_SAFE_FWRITE_TO_STDERR(
+-      RCUTILS_STRINGIFY(__function__) ":" RCUTILS_STRINGIFY(__LINE__)
+-      ": 'destroy_subscription' failed\n");
+-    ret = err;
+-    error_string = rmw_get_error_string();
+-    rmw_reset_error();
++  if (common_context->pub) {
++    err = rmw_fastrtps_shared_cpp::destroy_publisher(
++      context->implementation_identifier,
++      participant_info,
++      common_context->pub);
++    if (RMW_RET_OK != ret && RMW_RET_OK != err) {
++      // We can just return one error, log about the previous one.
++      RMW_SAFE_FWRITE_TO_STDERR(
++        RCUTILS_STRINGIFY(__function__) ":" RCUTILS_STRINGIFY(__LINE__)
++        ": 'destroy_subscription' failed\n");
++      ret = err;
++      error_string = rmw_get_error_string();
++      rmw_reset_error();
++    }
+   }
+   err = rmw_fastrtps_shared_cpp::destroy_participant(participant_info);
+   if (RMW_RET_OK != ret && RMW_RET_OK != err) {
+@@ -94,8 +100,11 @@ rmw_fastrtps_shared_cpp::decrement_context_impl_ref_count(
+     RMW_SET_ERROR_MSG(error_string.str);
+   }
+ 
+-  common_context->graph_cache.clear_on_change_callback();
+-  if (RMW_RET_OK != rmw_fastrtps_shared_cpp::__rmw_destroy_guard_condition(
++  if (nullptr == std::getenv("ROS2_OHOS_DISABLE_GRAPH")) {
++    common_context->graph_cache.clear_on_change_callback();
++  }
++  if (common_context->graph_guard_condition &&
++    RMW_RET_OK != rmw_fastrtps_shared_cpp::__rmw_destroy_guard_condition(
+       common_context->graph_guard_condition))
+   {
+     RMW_SAFE_FWRITE_TO_STDERR(
+diff --git a/rmw_fastrtps_shared_cpp/src/listener_thread.cpp b/rmw_fastrtps_shared_cpp/src/listener_thread.cpp
+index cde9cae..4ed47a3 100644
+--- a/rmw_fastrtps_shared_cpp/src/listener_thread.cpp
++++ b/rmw_fastrtps_shared_cpp/src/listener_thread.cpp
+@@ -49,6 +49,11 @@ rmw_fastrtps_shared_cpp::run_listener_thread(
+   RCUTILS_CAN_RETURN_WITH_ERROR_OF(RMW_RET_ERROR);
+ 
+   auto common_context = static_cast<rmw_dds_common::Context *>(context->impl->common);
++  if (nullptr != std::getenv("ROS2_OHOS_DISABLE_GRAPH")) {
++    common_context->thread_is_running.store(false);
++    common_context->listener_thread_gc = nullptr;
++    return RMW_RET_OK;
++  }
+   common_context->thread_is_running.store(true);
+   common_context->listener_thread_gc = rmw_fastrtps_shared_cpp::__rmw_create_guard_condition(
+     context->implementation_identifier);
+@@ -82,6 +87,9 @@ rmw_fastrtps_shared_cpp::join_listener_thread(
+   rmw_context_t * context)
+ {
+   auto common_context = static_cast<rmw_dds_common::Context *>(context->impl->common);
++  if (nullptr == common_context->listener_thread_gc || !common_context->listener_thread.joinable()) {
++    return RMW_RET_OK;
++  }
+   common_context->thread_is_running.exchange(false);
+   rmw_ret_t rmw_ret = rmw_fastrtps_shared_cpp::__rmw_trigger_guard_condition(
+     context->implementation_identifier, common_context->listener_thread_gc);
+diff --git a/rmw_fastrtps_shared_cpp/src/participant.cpp b/rmw_fastrtps_shared_cpp/src/participant.cpp
+index 7989545..68fa286 100644
+--- a/rmw_fastrtps_shared_cpp/src/participant.cpp
++++ b/rmw_fastrtps_shared_cpp/src/participant.cpp
+@@ -28,6 +28,7 @@
+ #include "fastdds/dds/subscriber/Subscriber.hpp"
+ #include "fastdds/dds/subscriber/qos/SubscriberQos.hpp"
+ #include "fastdds/rtps/attributes/PropertyPolicy.h"
++#include "fastdds/rtps/attributes/ServerAttributes.h"
+ #include "fastdds/rtps/common/Locator.h"
+ #include "fastdds/rtps/common/Property.h"
+ #include "fastdds/rtps/transport/UDPv4TransportDescriptor.h"
+@@ -48,6 +49,50 @@
+ 
+ #include "rmw_dds_common/security.hpp"
+ 
++#include <cstdlib>
++#include <cstdio>
++#include <sstream>
++
++// Private function to create Participant with QoS
++static
++bool
++configure_discovery_server_from_env(
++  eprosima::fastdds::dds::DomainParticipantQos & domainParticipantQos)
++{
++  const char * discovery_server = std::getenv("ROS_DISCOVERY_SERVER");
++  if (nullptr == discovery_server || discovery_server[0] == '\0') {
++    return false;
++  }
++
++  std::string discovery_server_str(discovery_server);
++  auto separator = discovery_server_str.find(':');
++  if (std::string::npos == separator) {
++    return false;
++  }
++
++  std::string ip = discovery_server_str.substr(0, separator);
++  std::string port_str = discovery_server_str.substr(separator + 1);
++  int port = std::stoi(port_str);
++
++  auto udp_transport = std::make_shared<eprosima::fastdds::rtps::UDPv4TransportDescriptor>();
++  domainParticipantQos.transport().user_transports.push_back(udp_transport);
++
++  eprosima::fastrtps::rtps::Locator_t server_locator;
++  server_locator.kind = LOCATOR_KIND_UDPv4;
++  eprosima::fastrtps::rtps::IPLocator::setLogicalPort(server_locator, static_cast<uint16_t>(port));
++  eprosima::fastrtps::rtps::IPLocator::setIPv4(server_locator, ip);
++
++  eprosima::fastrtps::rtps::RemoteServerAttributes remote_server;
++  std::istringstream(eprosima::fastdds::rtps::DEFAULT_ROS2_SERVER_GUIDPREFIX) >> remote_server.guidPrefix;
++  remote_server.metatrafficUnicastLocatorList.push_back(server_locator);
++
++  domainParticipantQos.wire_protocol().builtin.discovery_config.discoveryProtocol =
++    eprosima::fastrtps::rtps::DiscoveryProtocol_t::CLIENT;
++  domainParticipantQos.wire_protocol().builtin.discovery_config.m_DiscoveryServers.clear();
++  domainParticipantQos.wire_protocol().builtin.discovery_config.m_DiscoveryServers.push_back(remote_server);
++  return true;
++}
++
+ // Private function to create Participant with QoS
+ static CustomParticipantInfo *
+ __create_participant(
+@@ -82,12 +127,15 @@ __create_participant(
+ 
+   /////
+   // Create Participant listener
+-  try {
+-    participant_info->listener_ = new ParticipantListener(
+-      identifier, common_context);
+-  } catch (std::bad_alloc &) {
+-    RMW_SET_ERROR_MSG("__create_participant failed to allocate participant listener");
+-    return nullptr;
++  const bool disable_graph = nullptr != std::getenv("ROS2_OHOS_DISABLE_GRAPH");
++  if (!disable_graph) {
++    try {
++      participant_info->listener_ = new ParticipantListener(
++        identifier, common_context);
++    } catch (std::bad_alloc &) {
++      RMW_SET_ERROR_MSG("__create_participant failed to allocate participant listener");
++      return nullptr;
++    }
+   }
+ 
+   /////
+@@ -158,9 +206,12 @@ rmw_fastrtps_shared_cpp::create_participant(
+     return nullptr;
+   }
+ 
++  eprosima::fastdds::dds::DomainParticipantQos domainParticipantQos;
++#if !defined(__OHOS__)
+   // Load default XML profile.
+   eprosima::fastdds::dds::DomainParticipantFactory::get_instance()->load_profiles();
+-  eprosima::fastdds::dds::DomainParticipantQos domainParticipantQos =
++#endif
++  domainParticipantQos =
+     eprosima::fastdds::dds::DomainParticipantFactory::get_instance()->get_default_participant_qos();
+ 
+   // Configure discovery
+@@ -191,10 +242,12 @@ rmw_fastrtps_shared_cpp::create_participant(
+         .builtin.metatrafficUnicastLocatorList.push_back(default_unicast_locator);
+         // Disable built-in transports, since we are configuring our own.
+         domainParticipantQos.transport().use_builtin_transports = false;
+-        // Add a shared memory transport
++        // Shared memory transport is not usable on KaihongOS/OpenHarmony here.
++#if !defined(__OHOS__)
+         auto shm_transport =
+           std::make_shared<eprosima::fastdds::rtps::SharedMemTransportDescriptor>();
+         domainParticipantQos.transport().user_transports.push_back(shm_transport);
++#endif
+         // Add UDP transport with increased max initial peers.
+         // This controls the number of participants that can be discovered on a single host,
+         // which is roughly equivalent to the number of ROS 2 processes.
+@@ -202,12 +255,16 @@ rmw_fastrtps_shared_cpp::create_participant(
+         // If it's too large then we will send a lot of announcement traffic.
+         // The default number here is picked arbitrarily.
+         auto udp_transport = std::make_shared<eprosima::fastdds::rtps::UDPv4TransportDescriptor>();
+-        udp_transport->maxInitialPeersRange = 32;
++        udp_transport->maxInitialPeersRange = 4096;
+         domainParticipantQos.transport().user_transports.push_back(udp_transport);
+         break;
+       }
+     case RMW_AUTOMATIC_DISCOVERY_RANGE_SUBNET:
+-      // Nothing to do; use the default FastDDS behaviour
++#if defined(__OHOS__)
++      domainParticipantQos.transport().use_builtin_transports = false;
++      domainParticipantQos.transport().user_transports.push_back(
++        std::make_shared<eprosima::fastdds::rtps::UDPv4TransportDescriptor>());
++#endif
+       break;
+     case RMW_AUTOMATIC_DISCOVERY_RANGE_SYSTEM_DEFAULT:
+       // Nothing to do; use the default FastDDS behaviour
+@@ -262,6 +319,22 @@ rmw_fastrtps_shared_cpp::create_participant(
+     .builtin.initialPeersList.push_back(locator);
+   }
+ 
++  (void)configure_discovery_server_from_env(domainParticipantQos);
++
++  if (nullptr != std::getenv("ROS2_OHOS_DEBUG_DISCOVERY")) {
++    std::fprintf(
++      stderr,
++      "[ohos-participant] range=%d builtin_transports=%d user_transports=%zu initial_peers=%zu multicast_locators=%zu unicast_locators=%zu protocol=%d servers=%zu\n",
++      static_cast<int>(discovery_options->automatic_discovery_range),
++      domainParticipantQos.transport().use_builtin_transports ? 1 : 0,
++      domainParticipantQos.transport().user_transports.size(),
++      domainParticipantQos.wire_protocol().builtin.initialPeersList.size(),
++      domainParticipantQos.wire_protocol().builtin.metatrafficMulticastLocatorList.size(),
++      domainParticipantQos.wire_protocol().builtin.metatrafficUnicastLocatorList.size(),
++      static_cast<int>(domainParticipantQos.wire_protocol().builtin.discovery_config.discoveryProtocol),
++      domainParticipantQos.wire_protocol().builtin.discovery_config.m_DiscoveryServers.size());
++  }
++
+   size_t length = snprintf(nullptr, 0, "enclave=%s;", enclave) + 1;
+   domainParticipantQos.user_data().resize(length);
+ 
+@@ -431,6 +504,11 @@ rmw_fastrtps_shared_cpp::destroy_participant(CustomParticipantInfo * participant
+     remove_topic_and_type(participant_info, nullptr, topic, dummy_type);
+   }
+ 
++  ret = participant_info->participant_->delete_contained_entities();
++  if (ReturnCode_t::RETCODE_OK != ret) {
++    RCUTILS_SAFE_FWRITE_TO_STDERR("Failed to delete contained participant entities");
++  }
++
+   // Delete Domain Participant
+   ret =
+     eprosima::fastdds::dds::DomainParticipantFactory::get_instance()->delete_participant(
+diff --git a/rmw_fastrtps_shared_cpp/src/utils.cpp b/rmw_fastrtps_shared_cpp/src/utils.cpp
+index 4742968..4b838ee 100644
+--- a/rmw_fastrtps_shared_cpp/src/utils.cpp
++++ b/rmw_fastrtps_shared_cpp/src/utils.cpp
+@@ -87,12 +87,13 @@ remove_topic_and_type(
+   // change in the future if we start supporting other kinds of TopicDescription
+   // (like ContentFilteredTopic)
+   auto topic = dynamic_cast<const eprosima::fastdds::dds::Topic *>(topic_desc);
++  bool topic_deleted = false;
+ 
+   if (nullptr != topic) {
+-    participant_info->delete_topic(topic, event_listener);
++    topic_deleted = participant_info->delete_topic(topic, event_listener);
+   }
+ 
+-  if (type) {
++  if (type && topic_deleted) {
+     participant_info->participant_->unregister_type(type.get_type_name());
+   }
+ }

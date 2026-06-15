@@ -1,0 +1,392 @@
+diff --git a/liblz4_vendor/liblz4_vendor-extras.cmake b/liblz4_vendor/liblz4_vendor-extras.cmake
+index 2a25c93a..29e7689e 100644
+--- a/liblz4_vendor/liblz4_vendor-extras.cmake
++++ b/liblz4_vendor/liblz4_vendor-extras.cmake
+@@ -1 +1,4 @@
+ list(INSERT CMAKE_MODULE_PATH 0 "${liblz4_vendor_DIR}/Modules")
++get_filename_component(_liblz4_vendor_prefix "${liblz4_vendor_DIR}/../../../opt/liblz4_vendor" ABSOLUTE)
++set(lz4_ROOT_DIR "${_liblz4_vendor_prefix}")
++unset(_liblz4_vendor_prefix)
+diff --git a/mcap_vendor/CMakeLists.txt b/mcap_vendor/CMakeLists.txt
+index 5e9d6d8e..91e9ca27 100644
+--- a/mcap_vendor/CMakeLists.txt
++++ b/mcap_vendor/CMakeLists.txt
+@@ -4,9 +4,35 @@ project(mcap_vendor LANGUAGES C CXX)
+ ## Dependencies
+ find_package(ament_cmake REQUIRED)
+ find_package(liblz4_vendor REQUIRED)
+-find_package(lz4 REQUIRED)
+ find_package(zstd_vendor REQUIRED)
+-find_package(zstd REQUIRED)
++
++if(NOT TARGET LZ4::lz4)
++  get_filename_component(_liblz4_vendor_prefix "${liblz4_vendor_DIR}/../../.." ABSOLUTE)
++  set(_liblz4_include_dir "${_liblz4_vendor_prefix}/opt/liblz4_vendor/include")
++  set(_liblz4_library "${_liblz4_vendor_prefix}/opt/liblz4_vendor/lib/liblz4.so")
++  if(EXISTS "${_liblz4_include_dir}/lz4.h" AND EXISTS "${_liblz4_library}")
++    add_library(LZ4::lz4 UNKNOWN IMPORTED)
++    set_target_properties(LZ4::lz4 PROPERTIES
++      IMPORTED_LOCATION "${_liblz4_library}"
++      INTERFACE_INCLUDE_DIRECTORIES "${_liblz4_include_dir}")
++  else()
++    find_package(lz4 REQUIRED)
++  endif()
++endif()
++
++if(NOT TARGET zstd::zstd)
++  get_filename_component(_zstd_vendor_prefix "${zstd_vendor_DIR}/../../.." ABSOLUTE)
++  set(_zstd_include_dir "${_zstd_vendor_prefix}/opt/zstd_vendor/include")
++  set(_zstd_library "${_zstd_vendor_prefix}/opt/zstd_vendor/lib/libzstd.so")
++  if(EXISTS "${_zstd_include_dir}/zstd.h" AND EXISTS "${_zstd_library}")
++    add_library(zstd::zstd UNKNOWN IMPORTED)
++    set_target_properties(zstd::zstd PROPERTIES
++      IMPORTED_LOCATION "${_zstd_library}"
++      INTERFACE_INCLUDE_DIRECTORIES "${_zstd_include_dir}")
++  else()
++    find_package(zstd REQUIRED)
++  endif()
++endif()
+ 
+ # Avoid DOWNLOAD_EXTRACT_TIMESTAMP warning for CMake >= 3.24
+ if (POLICY CMP0135)
+@@ -82,4 +108,6 @@ ament_export_targets(mcap HAS_LIBRARY_TARGET)
+ ament_export_dependencies(liblz4_vendor lz4 zstd_vendor zstd)
+ 
+ ## Package
+-ament_package()
++ament_package(
++  CONFIG_EXTRAS "mcap_vendor-extras.cmake.in"
++)
+diff --git a/ros2bag/ros2bag/api/__init__.py b/ros2bag/ros2bag/api/__init__.py
+index 42af8c9b..626a92f2 100644
+--- a/ros2bag/ros2bag/api/__init__.py
++++ b/ros2bag/ros2bag/api/__init__.py
+@@ -300,7 +300,7 @@ def add_writer_storage_plugin_extensions(parser: ArgumentParser) -> None:
+             [('none', 'Default writer configuration.')]
+     except AttributeError:
+         print(f'Storage plugin {plugin_id} does not provide function "get_preset_profiles".')
+-        preset_profiles = ['none']
++        preset_profiles = [('none', 'Default writer configuration.')]
+     default_preset_profile = preset_profiles[0][0]
+     parser.add_argument(
+         '--storage-preset-profile', type=str, default=default_preset_profile,
+diff --git a/rosbag2_py/CMakeLists.txt b/rosbag2_py/CMakeLists.txt
+index 6364a104..9cabf4db 100644
+--- a/rosbag2_py/CMakeLists.txt
++++ b/rosbag2_py/CMakeLists.txt
+@@ -25,6 +25,17 @@ if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+   set(Python3_EXECUTABLE "${PYTHON_EXECUTABLE_DEBUG}")
+ endif()
+ 
++set(ROSBAG2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR "" CACHE PATH "Target Python include directory for OHOS cross builds")
++set(ROSBAG2_PY_OHOS_TARGET_PYTHON_LIBRARY "" CACHE FILEPATH "Target Python library for OHOS cross builds")
++set(ROSBAG2_PY_OHOS_TARGET_EXTENSION_SUFFIX "" CACHE STRING "Extension suffix for OHOS Python modules")
++
++if(NOT ROSBAG2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND DEFINED ROS2_OHOS_TARGET_PYTHON_INCLUDE_DIR)
++  set(ROSBAG2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR "${ROS2_OHOS_TARGET_PYTHON_INCLUDE_DIR}")
++endif()
++if(NOT ROSBAG2_PY_OHOS_TARGET_PYTHON_LIBRARY AND DEFINED ROS2_OHOS_TARGET_PYTHON_LIBRARY)
++  set(ROSBAG2_PY_OHOS_TARGET_PYTHON_LIBRARY "${ROS2_OHOS_TARGET_PYTHON_LIBRARY}")
++endif()
++
+ find_package(ament_cmake REQUIRED)
+ find_package(ament_cmake_python REQUIRED)
+ find_package(ament_cmake_ros REQUIRED)
+@@ -34,28 +45,56 @@ find_package(rosbag2_storage REQUIRED)
+ find_package(rosbag2_transport REQUIRED)
+ 
+ # Find python before pybind11
+-find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
++if(ROSBAG2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND ROSBAG2_PY_OHOS_TARGET_PYTHON_LIBRARY)
++  find_package(Python3 REQUIRED COMPONENTS Interpreter)
++  if(NOT TARGET Python3::Python)
++    add_library(Python3::Python SHARED IMPORTED)
++    set_target_properties(Python3::Python PROPERTIES
++      IMPORTED_LOCATION "${ROSBAG2_PY_OHOS_TARGET_PYTHON_LIBRARY}"
++      INTERFACE_INCLUDE_DIRECTORIES "${ROSBAG2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR}")
++  endif()
++  if(NOT TARGET Python3::Module)
++    add_library(Python3::Module INTERFACE IMPORTED)
++    target_link_libraries(Python3::Module INTERFACE Python3::Python)
++  endif()
++else()
++  find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
++endif()
+ 
+ find_package(pybind11_vendor REQUIRED)
+ find_package(pybind11 REQUIRED)
+ 
+ ament_python_install_package(${PROJECT_NAME})
+ 
+-pybind11_add_module(_compression_options
++function(rosbag2_py_add_module target)
++  if(ROSBAG2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR AND ROSBAG2_PY_OHOS_TARGET_PYTHON_LIBRARY)
++    add_library(${target} MODULE ${ARGN})
++    set_target_properties(${target} PROPERTIES PREFIX "")
++    if(ROSBAG2_PY_OHOS_TARGET_EXTENSION_SUFFIX)
++      set_target_properties(${target} PROPERTIES SUFFIX "${ROSBAG2_PY_OHOS_TARGET_EXTENSION_SUFFIX}")
++    endif()
++    target_include_directories(${target} PRIVATE "${ROSBAG2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR}")
++    target_link_libraries(${target} PRIVATE pybind11::module Python3::Python)
++  else()
++    pybind11_add_module(${target} ${ARGN})
++  endif()
++endfunction()
++
++rosbag2_py_add_module(_compression_options
+   src/rosbag2_py/_compression_options.cpp
+ )
+ target_link_libraries(_compression_options PUBLIC
+   rosbag2_compression::rosbag2_compression
+ )
+ 
+-pybind11_add_module(_message_definitions
++rosbag2_py_add_module(_message_definitions
+   src/rosbag2_py/_message_definitions.cpp
+ )
+ target_link_libraries(_message_definitions PUBLIC
+   rosbag2_cpp::rosbag2_cpp
+ )
+ 
+-pybind11_add_module(_reader
++rosbag2_py_add_module(_reader
+   src/rosbag2_py/_reader.cpp
+ )
+ target_link_libraries(_reader PUBLIC
+@@ -64,7 +103,7 @@ target_link_libraries(_reader PUBLIC
+   rosbag2_storage::rosbag2_storage
+ )
+ 
+-pybind11_add_module(_storage
++rosbag2_py_add_module(_storage
+   src/rosbag2_py/_storage.cpp
+   src/rosbag2_py/format_bag_metadata.cpp
+   src/rosbag2_py/info_sorting_method.cpp
+@@ -74,7 +113,7 @@ target_link_libraries(_storage PUBLIC
+   rosbag2_storage::rosbag2_storage
+ )
+ 
+-pybind11_add_module(_writer
++rosbag2_py_add_module(_writer
+   src/rosbag2_py/_writer.cpp
+ )
+ target_link_libraries(_writer PUBLIC
+@@ -83,7 +122,7 @@ target_link_libraries(_writer PUBLIC
+   rosbag2_storage::rosbag2_storage
+ )
+ 
+-pybind11_add_module(_info
++rosbag2_py_add_module(_info
+   src/rosbag2_py/_info.cpp
+   src/rosbag2_py/format_bag_metadata.cpp
+   src/rosbag2_py/format_service_info.cpp
+@@ -94,7 +133,7 @@ target_link_libraries(_info PUBLIC
+   rosbag2_storage::rosbag2_storage
+ )
+ 
+-pybind11_add_module(_transport
++rosbag2_py_add_module(_transport
+   src/rosbag2_py/_transport.cpp
+ )
+ target_link_libraries(_transport PUBLIC
+@@ -104,7 +143,7 @@ target_link_libraries(_transport PUBLIC
+   rosbag2_transport::rosbag2_transport
+ )
+ 
+-pybind11_add_module(_reindexer
++rosbag2_py_add_module(_reindexer
+   src/rosbag2_py/_reindexer.cpp
+ )
+ target_link_libraries(_reindexer PUBLIC
+diff --git a/rosbag2_py/rosbag2_py/__init__.py b/rosbag2_py/rosbag2_py/__init__.py
+index f6825099..6dd0896e 100644
+--- a/rosbag2_py/rosbag2_py/__init__.py
++++ b/rosbag2_py/rosbag2_py/__init__.py
+@@ -12,8 +12,25 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++import os
++import sys
++
+ from rpyutils import add_dll_directories_from_env
+ 
++board_ament_prefix = os.environ.get('AMENT_PREFIX_PATH', '')
++is_ohos_board_runtime = (
++    board_ament_prefix.startswith('/data/local/tmp/ohos-prefix') or
++    board_ament_prefix.startswith('/data/local/tmp/ohos-')
++)
++
++if (
++    hasattr(os, 'RTLD_GLOBAL') and (
++        os.environ.get('ROSBAG2_PY_TEST_WITH_RTLD_GLOBAL', None) is not None or
++        is_ohos_board_runtime
++    )
++):
++    sys.setdlopenflags(os.RTLD_GLOBAL | os.RTLD_LAZY)
++
+ # Since Python 3.8, on Windows we should ensure DLL directories are explicitly added
+ # to the search path.
+ # See https://docs.python.org/3/whatsnew/3.8.html#bpo-36085-whatsnew
+diff --git a/rosbag2_storage_mcap/CMakeLists.txt b/rosbag2_storage_mcap/CMakeLists.txt
+index 88bf75d2..6df0b8cf 100644
+--- a/rosbag2_storage_mcap/CMakeLists.txt
++++ b/rosbag2_storage_mcap/CMakeLists.txt
+@@ -24,6 +24,37 @@ endif()
+ find_package(ament_cmake REQUIRED)
+ find_package(ament_cmake_python REQUIRED)
+ find_package(ament_index_cpp REQUIRED)
++
++if(OHOS_ARCH)
++  set(_rosbag2_storage_mcap_prefix "${CMAKE_INSTALL_PREFIX}")
++  if(NOT TARGET LZ4::lz4)
++    set(_lz4_include_dir "${_rosbag2_storage_mcap_prefix}/opt/liblz4_vendor/include")
++    set(_lz4_library "${_rosbag2_storage_mcap_prefix}/opt/liblz4_vendor/lib/liblz4.so")
++    if(EXISTS "${_lz4_include_dir}/lz4.h" AND EXISTS "${_lz4_library}")
++      add_library(LZ4::lz4 UNKNOWN IMPORTED)
++      set_target_properties(LZ4::lz4 PROPERTIES
++        IMPORTED_LOCATION "${_lz4_library}"
++        INTERFACE_INCLUDE_DIRECTORIES "${_lz4_include_dir}")
++      set(lz4_FOUND TRUE)
++      set(lz4_INCLUDE_DIR "${_lz4_include_dir}")
++      set(lz4_LIBRARY "${_lz4_library}")
++    endif()
++  endif()
++  if(NOT TARGET zstd::zstd)
++    set(_zstd_include_dir "${_rosbag2_storage_mcap_prefix}/opt/zstd_vendor/include")
++    set(_zstd_library "${_rosbag2_storage_mcap_prefix}/opt/zstd_vendor/lib/libzstd.so")
++    if(EXISTS "${_zstd_include_dir}/zstd.h" AND EXISTS "${_zstd_library}")
++      add_library(zstd::zstd UNKNOWN IMPORTED)
++      set_target_properties(zstd::zstd PROPERTIES
++        IMPORTED_LOCATION "${_zstd_library}"
++        INTERFACE_INCLUDE_DIRECTORIES "${_zstd_include_dir}")
++      set(zstd_FOUND TRUE)
++      set(zstd_INCLUDE_DIR "${_zstd_include_dir}")
++      set(zstd_LIBRARY "${_zstd_library}")
++    endif()
++  endif()
++endif()
++
+ find_package(mcap_vendor REQUIRED)
+ find_package(pluginlib REQUIRED)
+ find_package(rcutils REQUIRED)
+diff --git a/rosbag2_storage_sqlite3/CMakeLists.txt b/rosbag2_storage_sqlite3/CMakeLists.txt
+index bc814ba1..66f1fb25 100644
+--- a/rosbag2_storage_sqlite3/CMakeLists.txt
++++ b/rosbag2_storage_sqlite3/CMakeLists.txt
+@@ -28,10 +28,25 @@ find_package(rcpputils REQUIRED)
+ find_package(rcutils REQUIRED)
+ find_package(rosbag2_storage REQUIRED)
+ find_package(sqlite3_vendor REQUIRED)
+-find_package(SQLite3 REQUIRED)  # provided by sqlite3_vendor
+ find_package(yaml_cpp_vendor REQUIRED)
+ find_package(yaml-cpp REQUIRED)
+ 
++if(NOT TARGET SQLite::SQLite3)
++  # OHOS installs sqlite3_vendor under <prefix>/opt/sqlite3_vendor, while the
++  # bundled FindSQLite3.cmake looks for a different layout.
++  get_filename_component(_sqlite3_vendor_prefix "${sqlite3_vendor_DIR}/../../.." ABSOLUTE)
++  set(_sqlite3_include_dir "${_sqlite3_vendor_prefix}/opt/sqlite3_vendor/include")
++  set(_sqlite3_library "${_sqlite3_vendor_prefix}/opt/sqlite3_vendor/lib/libsqlite3.so")
++  if(EXISTS "${_sqlite3_include_dir}/sqlite3.h" AND EXISTS "${_sqlite3_library}")
++    add_library(SQLite::SQLite3 UNKNOWN IMPORTED)
++    set_target_properties(SQLite::SQLite3 PROPERTIES
++      IMPORTED_LOCATION "${_sqlite3_library}"
++      INTERFACE_INCLUDE_DIRECTORIES "${_sqlite3_include_dir}")
++  else()
++    find_package(SQLite3 REQUIRED)  # provided by sqlite3_vendor on desktop builds
++  endif()
++endif()
++
+ ament_python_install_package(ros2bag_sqlite3_cli)
+ 
+ add_library(${PROJECT_NAME} SHARED
+@@ -77,7 +92,7 @@ install(
+ ament_export_include_directories("include/${PROJECT_NAME}")
+ ament_export_libraries(${PROJECT_NAME})
+ 
+-ament_export_dependencies(rosbag2_storage rcpputils rcutils sqlite3_vendor SQLite3)
++ament_export_dependencies(rosbag2_storage rcpputils rcutils sqlite3_vendor)
+ 
+ if(BUILD_TESTING)
+   find_package(ament_cmake_gmock REQUIRED)
+diff --git a/rosbag2_transport/CMakeLists.txt b/rosbag2_transport/CMakeLists.txt
+index 2cb34206..f544166a 100644
+--- a/rosbag2_transport/CMakeLists.txt
++++ b/rosbag2_transport/CMakeLists.txt
+@@ -74,11 +74,52 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
+   yaml-cpp::yaml-cpp
+ )
+ 
+-rclcpp_components_register_node(
+-  ${PROJECT_NAME} PLUGIN "rosbag2_transport::Player" EXECUTABLE player)
++function(add_ohos_direct_launcher executable source_file node_type logger_name)
++  set(SOURCE_FILE "${source_file}")
++  set(NODE_TYPE "${node_type}")
++  set(LOGGER_NAME "${logger_name}")
++
++  set(launcher_source "${CMAKE_CURRENT_BINARY_DIR}/ohos/${executable}_launcher.cpp")
++  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ohos")
++  configure_file(
++    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ohos_direct_launcher.cpp.in"
++    "${launcher_source}"
++    @ONLY
++  )
+ 
+-rclcpp_components_register_node(
+-  ${PROJECT_NAME} PLUGIN "rosbag2_transport::Recorder" EXECUTABLE recorder)
++  add_executable(${executable} "${launcher_source}")
++  target_include_directories(${executable} PRIVATE
++    "${CMAKE_CURRENT_SOURCE_DIR}"
++    "${CMAKE_CURRENT_SOURCE_DIR}/include")
++  target_link_libraries(${executable} PRIVATE
++    ${PROJECT_NAME}
++    rclcpp::rclcpp
++    rclcpp_components::component)
++  install(TARGETS ${executable}
++    DESTINATION lib/${PROJECT_NAME})
++endfunction()
++
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(${PROJECT_NAME}
++    "rosbag2_transport::Player"
++    "rosbag2_transport::Recorder")
++  add_ohos_direct_launcher(
++    player
++    src/rosbag2_transport/player.cpp
++    "rosbag2_transport::Player"
++    "rosbag2_transport::Player")
++  add_ohos_direct_launcher(
++    recorder
++    src/rosbag2_transport/recorder.cpp
++    "rosbag2_transport::Recorder"
++    "rosbag2_transport::Recorder")
++else()
++  rclcpp_components_register_node(
++    ${PROJECT_NAME} PLUGIN "rosbag2_transport::Player" EXECUTABLE player)
++
++  rclcpp_components_register_node(
++    ${PROJECT_NAME} PLUGIN "rosbag2_transport::Recorder" EXECUTABLE recorder)
++endif()
+ 
+ # Causes the visibility macros to use dllexport rather than dllimport,
+ # which is appropriate when building the dll but not consuming it.
+diff --git a/sqlite3_vendor/sqlite3_vendor-extras.cmake b/sqlite3_vendor/sqlite3_vendor-extras.cmake
+index eee462b0..50e72027 100644
+--- a/sqlite3_vendor/sqlite3_vendor-extras.cmake
++++ b/sqlite3_vendor/sqlite3_vendor-extras.cmake
+@@ -13,3 +13,5 @@
+ # limitations under the License.
+ 
+ list(INSERT CMAKE_MODULE_PATH 0 "${sqlite3_vendor_DIR}/Modules")
++set(SQLite3_ROOT_DIR "${sqlite3_vendor_DIR}/../../../opt/sqlite3_vendor")
++set(SQLite3_ROOT_DIR "${sqlite3_vendor_DIR}/../../../opt/sqlite3_vendor")
+diff --git a/zstd_vendor/zstd_vendor-extras.cmake b/zstd_vendor/zstd_vendor-extras.cmake
+index 07472aca..fc48579d 100644
+--- a/zstd_vendor/zstd_vendor-extras.cmake
++++ b/zstd_vendor/zstd_vendor-extras.cmake
+@@ -1 +1,4 @@
+ list(INSERT CMAKE_MODULE_PATH 0 "${zstd_vendor_DIR}/Modules")
++get_filename_component(_zstd_vendor_prefix "${zstd_vendor_DIR}/../../../opt/zstd_vendor" ABSOLUTE)
++set(zstd_ROOT_DIR "${_zstd_vendor_prefix}")
++unset(_zstd_vendor_prefix)

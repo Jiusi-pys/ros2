@@ -1,0 +1,25 @@
+diff --git a/kdl_parser/CMakeLists.txt b/kdl_parser/CMakeLists.txt
+index a187c33..d5ae942 100644
+--- a/kdl_parser/CMakeLists.txt
++++ b/kdl_parser/CMakeLists.txt
+@@ -8,6 +8,7 @@ find_package(orocos_kdl REQUIRED)
+ find_package(urdf REQUIRED)
+ find_package(urdfdom_headers REQUIRED)
+ find_package(rcutils REQUIRED)
++find_package(Eigen3 REQUIRED)
+ 
+ # Default to C++17
+ if(NOT CMAKE_CXX_STANDARD)
+@@ -22,6 +23,12 @@ target_include_directories(${PROJECT_NAME} PUBLIC
+   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
+ )
++if(EIGEN3_INCLUDE_DIR)
++  target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC ${EIGEN3_INCLUDE_DIR})
++endif()
++if(EIGEN3_INCLUDE_DIRS)
++  target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC ${EIGEN3_INCLUDE_DIRS})
++endif()
+ target_link_libraries(${PROJECT_NAME} PUBLIC
+   orocos-kdl
+   urdfdom_headers::urdfdom_headers)

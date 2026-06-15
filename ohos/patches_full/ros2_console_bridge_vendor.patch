@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c7a491c..db16221 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -13,7 +13,7 @@ endif()
+ find_package(ament_cmake REQUIRED)
+ find_package(ament_cmake_vendor_package REQUIRED)
+ 
+-find_package(console_bridge 1.0.1 QUIET)
++find_package(console_bridge QUIET)
+ 
+ ament_vendor(console_bridge_vendor
+   SATISFIED ${console_bridge_FOUND}

@@ -1,0 +1,568 @@
+diff --git a/rclcpp/topics/minimal_subscriber/CMakeLists.txt b/rclcpp/topics/minimal_subscriber/CMakeLists.txt
+index 125b51a..9300fc1 100644
+--- a/rclcpp/topics/minimal_subscriber/CMakeLists.txt
++++ b/rclcpp/topics/minimal_subscriber/CMakeLists.txt
+@@ -43,17 +43,42 @@ add_library(wait_set_subscriber_library SHARED
+     time_triggered_wait_set_subscriber.cpp)
+ ament_target_dependencies(wait_set_subscriber_library rclcpp rclcpp_components std_msgs)
+ 
+-rclcpp_components_register_node(wait_set_subscriber_library
+-    PLUGIN "WaitSetSubscriber"
+-    EXECUTABLE wait_set_subscriber)
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(wait_set_subscriber_library
++    "WaitSetSubscriber"
++    "StaticWaitSetSubscriber"
++    "TimeTriggeredWaitSetSubscriber")
++
++  add_executable(wait_set_subscriber
++    wait_set_subscriber_main.cpp)
++  target_link_libraries(wait_set_subscriber PRIVATE
++    wait_set_subscriber_library
++    rclcpp::rclcpp)
+ 
+-rclcpp_components_register_node(wait_set_subscriber_library
+-    PLUGIN "StaticWaitSetSubscriber"
+-    EXECUTABLE static_wait_set_subscriber)
++  add_executable(static_wait_set_subscriber
++    static_wait_set_subscriber_main.cpp)
++  target_link_libraries(static_wait_set_subscriber PRIVATE
++    wait_set_subscriber_library
++    rclcpp::rclcpp)
+ 
+-rclcpp_components_register_node(wait_set_subscriber_library
+-    PLUGIN "TimeTriggeredWaitSetSubscriber"
+-    EXECUTABLE time_triggered_wait_set_subscriber)
++  add_executable(time_triggered_wait_set_subscriber
++    time_triggered_wait_set_subscriber_main.cpp)
++  target_link_libraries(time_triggered_wait_set_subscriber PRIVATE
++    wait_set_subscriber_library
++    rclcpp::rclcpp)
++else()
++  rclcpp_components_register_node(wait_set_subscriber_library
++      PLUGIN "WaitSetSubscriber"
++      EXECUTABLE wait_set_subscriber)
++
++  rclcpp_components_register_node(wait_set_subscriber_library
++      PLUGIN "StaticWaitSetSubscriber"
++      EXECUTABLE static_wait_set_subscriber)
++
++  rclcpp_components_register_node(wait_set_subscriber_library
++      PLUGIN "TimeTriggeredWaitSetSubscriber"
++      EXECUTABLE time_triggered_wait_set_subscriber)
++endif()
+ 
+ install(TARGETS
+     wait_set_subscriber_library
+@@ -61,6 +86,14 @@ install(TARGETS
+     LIBRARY DESTINATION lib
+     RUNTIME DESTINATION bin)
+ 
++if(OHOS_ARCH)
++  install(TARGETS
++    wait_set_subscriber
++    static_wait_set_subscriber
++    time_triggered_wait_set_subscriber
++    DESTINATION lib/${PROJECT_NAME})
++endif()
++
+ install(TARGETS
+   subscriber_lambda
+   subscriber_member_function
+diff --git a/rclcpp/topics/minimal_subscriber/static_wait_set_subscriber.cpp b/rclcpp/topics/minimal_subscriber/static_wait_set_subscriber.cpp
+index d72c7ab..93bef43 100644
+--- a/rclcpp/topics/minimal_subscriber/static_wait_set_subscriber.cpp
++++ b/rclcpp/topics/minimal_subscriber/static_wait_set_subscriber.cpp
+@@ -12,84 +12,69 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#include <iostream>
+-#include <memory>
+-
+-#include "rclcpp/rclcpp.hpp"
+-#include "std_msgs/msg/string.hpp"
++#include "static_wait_set_subscriber.hpp"
+ 
+ /* This example creates a subclass of Node and uses static a wait-set based loop to wait on
+  * a subscription to have messages available and then handles them manually without an executor */
+ 
+-class StaticWaitSetSubscriber : public rclcpp::Node
++StaticWaitSetSubscriber::StaticWaitSetSubscriber(rclcpp::NodeOptions options)
++: Node("static_wait_set_subscriber", options),
++  subscription_(
++    [this]()
++    {
++      // create subscription with a callback-group not added to the executor
++      rclcpp::CallbackGroup::SharedPtr cb_group_waitset = this->create_callback_group(
++        rclcpp::CallbackGroupType::MutuallyExclusive, false);
++      auto subscription_options = rclcpp::SubscriptionOptions();
++      subscription_options.callback_group = cb_group_waitset;
++      auto subscription_callback = [this](std_msgs::msg::String::UniquePtr msg) {
++        RCLCPP_INFO(this->get_logger(), "I heard: '%s'", msg->data.c_str());
++      };
++      return this->create_subscription<std_msgs::msg::String>(
++        "topic",
++        10,
++        subscription_callback,
++        subscription_options);
++    } ()
++  ),
++  wait_set_(std::array<MyStaticWaitSet::SubscriptionEntry, 1>{{{subscription_}}}),
++  thread_(std::thread([this]() -> void {spin_wait_set();}))
+ {
+-  using MyStaticWaitSet = rclcpp::StaticWaitSet<1, 0, 0, 0, 0, 0>;
+-
+-public:
+-  explicit StaticWaitSetSubscriber(rclcpp::NodeOptions options)
+-  : Node("static_wait_set_subscriber", options),
+-    subscription_(
+-      [this]()
+-      {
+-        // create subscription with a callback-group not added to the executor
+-        rclcpp::CallbackGroup::SharedPtr cb_group_waitset = this->create_callback_group(
+-          rclcpp::CallbackGroupType::MutuallyExclusive, false);
+-        auto subscription_options = rclcpp::SubscriptionOptions();
+-        subscription_options.callback_group = cb_group_waitset;
+-        auto subscription_callback = [this](std_msgs::msg::String::UniquePtr msg) {
+-          RCLCPP_INFO(this->get_logger(), "I heard: '%s'", msg->data.c_str());
+-        };
+-        return this->create_subscription<std_msgs::msg::String>(
+-          "topic",
+-          10,
+-          subscription_callback,
+-          subscription_options);
+-      } ()
+-    ),
+-    wait_set_(std::array<MyStaticWaitSet::SubscriptionEntry, 1>{{{subscription_}}}),
+-    thread_(std::thread([this]() -> void {spin_wait_set();}))
+-  {
+-  }
++}
+ 
+-  ~StaticWaitSetSubscriber()
+-  {
+-    if (thread_.joinable()) {
+-      thread_.join();
+-    }
++StaticWaitSetSubscriber::~StaticWaitSetSubscriber()
++{
++  if (thread_.joinable()) {
++    thread_.join();
+   }
++}
+ 
+-  void spin_wait_set()
+-  {
+-    while (rclcpp::ok()) {
+-      // Wait for the subscriber event to trigger. Set a 1 ms margin to trigger a timeout.
+-      const auto wait_result = wait_set_.wait(std::chrono::milliseconds(501));
+-      switch (wait_result.kind()) {
+-        case rclcpp::WaitResultKind::Ready:
+-          {
+-            std_msgs::msg::String msg;
+-            rclcpp::MessageInfo msg_info;
+-            if (subscription_->take(msg, msg_info)) {
+-              std::shared_ptr<void> type_erased_msg = std::make_shared<std_msgs::msg::String>(msg);
+-              subscription_->handle_message(type_erased_msg, msg_info);
+-            }
+-            break;
+-          }
+-        case rclcpp::WaitResultKind::Timeout:
+-          if (rclcpp::ok()) {
+-            RCLCPP_WARN(this->get_logger(), "Timeout. No message received after given wait-time");
++void StaticWaitSetSubscriber::spin_wait_set()
++{
++  while (rclcpp::ok()) {
++    // Wait for the subscriber event to trigger. Set a 1 ms margin to trigger a timeout.
++    const auto wait_result = wait_set_.wait(std::chrono::milliseconds(501));
++    switch (wait_result.kind()) {
++      case rclcpp::WaitResultKind::Ready:
++        {
++          std_msgs::msg::String msg;
++          rclcpp::MessageInfo msg_info;
++          if (subscription_->take(msg, msg_info)) {
++            std::shared_ptr<void> type_erased_msg = std::make_shared<std_msgs::msg::String>(msg);
++            subscription_->handle_message(type_erased_msg, msg_info);
+           }
+           break;
+-        default:
+-          RCLCPP_ERROR(this->get_logger(), "Error. Wait-set failed.");
+-      }
++        }
++      case rclcpp::WaitResultKind::Timeout:
++        if (rclcpp::ok()) {
++          RCLCPP_WARN(this->get_logger(), "Timeout. No message received after given wait-time");
++        }
++        break;
++      default:
++        RCLCPP_ERROR(this->get_logger(), "Error. Wait-set failed.");
+     }
+   }
+-
+-private:
+-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr subscription_;
+-  MyStaticWaitSet wait_set_;
+-  std::thread thread_;
+-};
++}
+ 
+ #include "rclcpp_components/register_node_macro.hpp"
+ 
+diff --git a/rclcpp/topics/minimal_subscriber/time_triggered_wait_set_subscriber.cpp b/rclcpp/topics/minimal_subscriber/time_triggered_wait_set_subscriber.cpp
+index 47e4dc7..f70f803 100644
+--- a/rclcpp/topics/minimal_subscriber/time_triggered_wait_set_subscriber.cpp
++++ b/rclcpp/topics/minimal_subscriber/time_triggered_wait_set_subscriber.cpp
+@@ -12,88 +12,76 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#include <iostream>
+-#include <memory>
+-
+-#include "rclcpp/rclcpp.hpp"
+-#include "std_msgs/msg/string.hpp"
++#include "time_triggered_wait_set_subscriber.hpp"
+ 
+ using namespace std::chrono_literals;
+ 
+ /* This example creates a subclass of Node and uses a wait-set based loop to periodically poll
+  * for messages in a timer callback using a wait-set based loop. */
+ 
+-class TimeTriggeredWaitSetSubscriber : public rclcpp::Node
++TimeTriggeredWaitSetSubscriber::TimeTriggeredWaitSetSubscriber(rclcpp::NodeOptions options)
++: Node("time_triggered_wait_set_subscriber", options)
+ {
+-public:
+-  explicit TimeTriggeredWaitSetSubscriber(rclcpp::NodeOptions options)
+-  : Node("time_triggered_wait_set_subscriber", options)
+-  {
+-    rclcpp::CallbackGroup::SharedPtr cb_group_waitset = this->create_callback_group(
+-      rclcpp::CallbackGroupType::MutuallyExclusive, false);
++  rclcpp::CallbackGroup::SharedPtr cb_group_waitset = this->create_callback_group(
++    rclcpp::CallbackGroupType::MutuallyExclusive, false);
+ 
+-    auto subscription_options = rclcpp::SubscriptionOptions();
+-    subscription_options.callback_group = cb_group_waitset;
+-    auto subscription_callback = [this](std_msgs::msg::String::UniquePtr msg) {
+-        RCLCPP_INFO(this->get_logger(), "I heard: '%s'", msg->data.c_str());
+-      };
+-    subscription_ = this->create_subscription<std_msgs::msg::String>(
+-      "topic",
+-      10,
+-      subscription_callback,
+-      subscription_options);
+-    auto timer_callback = [this]() -> void {
+-        std_msgs::msg::String msg;
+-        rclcpp::MessageInfo msg_info;
+-        if (subscription_->take(msg, msg_info)) {
+-          std::shared_ptr<void> type_erased_msg = std::make_shared<std_msgs::msg::String>(msg);
+-          subscription_->handle_message(type_erased_msg, msg_info);
+-        } else {
+-          RCLCPP_WARN(this->get_logger(), "No message available");
+-        }
+-      };
+-    timer_ = create_wall_timer(500ms, timer_callback, cb_group_waitset);
+-    wait_set_.add_timer(timer_);
+-    thread_ = std::thread([this]() -> void {spin_wait_set();});
+-  }
++  auto subscription_options = rclcpp::SubscriptionOptions();
++  subscription_options.callback_group = cb_group_waitset;
++  auto subscription_callback = [this](std_msgs::msg::String::UniquePtr msg) {
++      RCLCPP_INFO(this->get_logger(), "I heard: '%s'", msg->data.c_str());
++    };
++  subscription_ = this->create_subscription<std_msgs::msg::String>(
++    "topic",
++    10,
++    subscription_callback,
++    subscription_options);
++  auto timer_callback = [this]() -> void {
++      std_msgs::msg::String msg;
++      rclcpp::MessageInfo msg_info;
++      if (subscription_->take(msg, msg_info)) {
++        std::shared_ptr<void> type_erased_msg = std::make_shared<std_msgs::msg::String>(msg);
++        subscription_->handle_message(type_erased_msg, msg_info);
++      } else {
++        RCLCPP_WARN(this->get_logger(), "No message available");
++      }
++    };
++  timer_ = create_wall_timer(500ms, timer_callback, cb_group_waitset);
++  wait_set_.add_timer(timer_);
++  thread_ = std::thread([this]() -> void {spin_wait_set();});
++}
+ 
+-  ~TimeTriggeredWaitSetSubscriber()
+-  {
++TimeTriggeredWaitSetSubscriber::~TimeTriggeredWaitSetSubscriber()
++{
++  if (thread_.joinable()) {
+     thread_.join();
+   }
++}
+ 
+-  void spin_wait_set()
+-  {
+-    while (rclcpp::ok()) {
+-      // Wait for the timer event to trigger. Set a 1 ms margin to trigger a timeout.
+-      const auto wait_result = wait_set_.wait(501ms);
+-      switch (wait_result.kind()) {
+-        case rclcpp::WaitResultKind::Ready:
+-          {
+-            if (wait_result.get_wait_set().get_rcl_wait_set().timers[0U]) {
+-              if (auto data = timer_->call()) {
+-                timer_->execute_callback(data);
+-              }
++void TimeTriggeredWaitSetSubscriber::spin_wait_set()
++{
++  while (rclcpp::ok()) {
++    // Wait for the timer event to trigger. Set a 1 ms margin to trigger a timeout.
++    const auto wait_result = wait_set_.wait(501ms);
++    switch (wait_result.kind()) {
++      case rclcpp::WaitResultKind::Ready:
++        {
++          if (wait_result.get_wait_set().get_rcl_wait_set().timers[0U]) {
++            if (auto data = timer_->call()) {
++              timer_->execute_callback(data);
+             }
+-            break;
+-          }
+-        case rclcpp::WaitResultKind::Timeout:
+-          if (rclcpp::ok()) {
+-            RCLCPP_WARN(this->get_logger(), "Timeout. No message received after given wait-time");
+           }
+           break;
+-        default:
+-          RCLCPP_ERROR(this->get_logger(), "Error. Wait-set failed.");
+-      }
++        }
++      case rclcpp::WaitResultKind::Timeout:
++        if (rclcpp::ok()) {
++          RCLCPP_WARN(this->get_logger(), "Timeout. No message received after given wait-time");
++        }
++        break;
++      default:
++        RCLCPP_ERROR(this->get_logger(), "Error. Wait-set failed.");
+     }
+   }
+-
+-private:
+-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr subscription_;
+-  rclcpp::TimerBase::SharedPtr timer_;
+-  rclcpp::WaitSet wait_set_;
+-  std::thread thread_;
+-};
++}
+ 
+ #include "rclcpp_components/register_node_macro.hpp"
+ 
+diff --git a/rclcpp/topics/minimal_subscriber/wait_set_subscriber.cpp b/rclcpp/topics/minimal_subscriber/wait_set_subscriber.cpp
+index 79dddce..e5d1cf6 100644
+--- a/rclcpp/topics/minimal_subscriber/wait_set_subscriber.cpp
++++ b/rclcpp/topics/minimal_subscriber/wait_set_subscriber.cpp
+@@ -12,76 +12,63 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#include <iostream>
+-#include <memory>
+-
+-#include "rclcpp/rclcpp.hpp"
+-#include "std_msgs/msg/string.hpp"
++#include "wait_set_subscriber.hpp"
+ 
+ /* This example creates a subclass of Node and uses a wait-set based loop to wait on
+  * a subscription to have messages available and then handles them manually without an executor */
+ 
+-class WaitSetSubscriber : public rclcpp::Node
++WaitSetSubscriber::WaitSetSubscriber(rclcpp::NodeOptions options)
++: Node("wait_set_subscriber", options)
+ {
+-public:
+-  explicit WaitSetSubscriber(rclcpp::NodeOptions options)
+-  : Node("wait_set_subscriber", options)
+-  {
+-    rclcpp::CallbackGroup::SharedPtr cb_group_waitset = this->create_callback_group(
+-      rclcpp::CallbackGroupType::MutuallyExclusive, false);
+-    auto subscription_options = rclcpp::SubscriptionOptions();
+-    subscription_options.callback_group = cb_group_waitset;
+-    auto subscription_callback = [this](std_msgs::msg::String::UniquePtr msg) {
+-        RCLCPP_INFO(this->get_logger(), "I heard: '%s'", msg->data.c_str());
+-      };
+-    subscription_ = this->create_subscription<std_msgs::msg::String>(
+-      "topic",
+-      10,
+-      subscription_callback,
+-      subscription_options);
+-    wait_set_.add_subscription(subscription_);
+-    thread_ = std::thread([this]() -> void {spin_wait_set();});
+-  }
++  rclcpp::CallbackGroup::SharedPtr cb_group_waitset = this->create_callback_group(
++    rclcpp::CallbackGroupType::MutuallyExclusive, false);
++  auto subscription_options = rclcpp::SubscriptionOptions();
++  subscription_options.callback_group = cb_group_waitset;
++  auto subscription_callback = [this](std_msgs::msg::String::UniquePtr msg) {
++      RCLCPP_INFO(this->get_logger(), "I heard: '%s'", msg->data.c_str());
++    };
++  subscription_ = this->create_subscription<std_msgs::msg::String>(
++    "topic",
++    10,
++    subscription_callback,
++    subscription_options);
++  wait_set_.add_subscription(subscription_);
++  thread_ = std::thread([this]() -> void {spin_wait_set();});
++}
+ 
+-  ~WaitSetSubscriber()
+-  {
+-    if (thread_.joinable()) {
+-      thread_.join();
+-    }
++WaitSetSubscriber::~WaitSetSubscriber()
++{
++  if (thread_.joinable()) {
++    thread_.join();
+   }
++}
+ 
+-  void spin_wait_set()
+-  {
+-    while (rclcpp::ok()) {
+-      // Wait for the subscriber event to trigger. Set a 1 ms margin to trigger a timeout.
+-      const auto wait_result = wait_set_.wait(std::chrono::milliseconds(501));
+-      switch (wait_result.kind()) {
+-        case rclcpp::WaitResultKind::Ready:
+-          {
+-            std_msgs::msg::String msg;
+-            rclcpp::MessageInfo msg_info;
+-            if (subscription_->take(msg, msg_info)) {
+-              std::shared_ptr<void> type_erased_msg = std::make_shared<std_msgs::msg::String>(msg);
+-              subscription_->handle_message(type_erased_msg, msg_info);
+-            }
+-            break;
+-          }
+-        case rclcpp::WaitResultKind::Timeout:
+-          if (rclcpp::ok()) {
+-            RCLCPP_WARN(this->get_logger(), "Timeout. No message received after given wait-time");
++void WaitSetSubscriber::spin_wait_set()
++{
++  while (rclcpp::ok()) {
++    // Wait for the subscriber event to trigger. Set a 1 ms margin to trigger a timeout.
++    const auto wait_result = wait_set_.wait(std::chrono::milliseconds(501));
++    switch (wait_result.kind()) {
++      case rclcpp::WaitResultKind::Ready:
++        {
++          std_msgs::msg::String msg;
++          rclcpp::MessageInfo msg_info;
++          if (subscription_->take(msg, msg_info)) {
++            std::shared_ptr<void> type_erased_msg = std::make_shared<std_msgs::msg::String>(msg);
++            subscription_->handle_message(type_erased_msg, msg_info);
+           }
+           break;
+-        default:
+-          RCLCPP_ERROR(this->get_logger(), "Error. Wait-set failed.");
+-      }
++        }
++      case rclcpp::WaitResultKind::Timeout:
++        if (rclcpp::ok()) {
++          RCLCPP_WARN(this->get_logger(), "Timeout. No message received after given wait-time");
++        }
++        break;
++      default:
++        RCLCPP_ERROR(this->get_logger(), "Error. Wait-set failed.");
+     }
+   }
+-
+-private:
+-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr subscription_;
+-  rclcpp::WaitSet wait_set_;
+-  std::thread thread_;
+-};
++}
+ 
+ #include "rclcpp_components/register_node_macro.hpp"
+ 
+diff --git a/rclcpp/wait_set/CMakeLists.txt b/rclcpp/wait_set/CMakeLists.txt
+index 0d3b9e8..b83564a 100644
+--- a/rclcpp/wait_set/CMakeLists.txt
++++ b/rclcpp/wait_set/CMakeLists.txt
+@@ -22,18 +22,32 @@ include_directories(include)
+ add_library(talker SHARED src/talker.cpp)
+ target_compile_definitions(talker PRIVATE WAIT_SET_DLL)
+ ament_target_dependencies(talker rclcpp rclcpp_components std_msgs)
+-rclcpp_components_register_node(
+-    talker
+-    PLUGIN "Talker"
+-    EXECUTABLE wait_set_talker)
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(talker "Talker")
++
++  add_executable(wait_set_talker src/talker_main.cpp)
++  target_link_libraries(wait_set_talker PRIVATE talker rclcpp::rclcpp)
++else()
++  rclcpp_components_register_node(
++      talker
++      PLUGIN "Talker"
++      EXECUTABLE wait_set_talker)
++endif()
+ 
+ add_library(listener SHARED src/listener.cpp)
+ target_compile_definitions(listener PRIVATE WAIT_SET_DLL)
+ ament_target_dependencies(listener rclcpp rclcpp_components std_msgs)
+-rclcpp_components_register_node(
+-    listener
+-    PLUGIN "Listener"
+-    EXECUTABLE wait_set_listener)
++if(OHOS_ARCH)
++  rclcpp_components_register_nodes(listener "Listener")
++
++  add_executable(wait_set_listener src/listener_main.cpp)
++  target_link_libraries(wait_set_listener PRIVATE listener rclcpp::rclcpp)
++else()
++  rclcpp_components_register_node(
++      listener
++      PLUGIN "Listener"
++      EXECUTABLE wait_set_listener)
++endif()
+ 
+ add_executable(wait_set src/wait_set.cpp)
+ ament_target_dependencies(wait_set example_interfaces rclcpp std_msgs)
+@@ -68,6 +82,13 @@ install(TARGETS
+     RUNTIME DESTINATION bin
+ )
+ 
++if(OHOS_ARCH)
++  install(TARGETS
++    wait_set_talker
++    wait_set_listener
++    DESTINATION lib/${PROJECT_NAME})
++endif()
++
+ install(TARGETS
+   wait_set
+   static_wait_set
+diff --git a/rclpy/executors/examples_rclpy_executors/custom_executor.py b/rclpy/executors/examples_rclpy_executors/custom_executor.py
+index 5a3d8ad..23923d8 100644
+--- a/rclpy/executors/examples_rclpy_executors/custom_executor.py
++++ b/rclpy/executors/examples_rclpy_executors/custom_executor.py
+@@ -54,7 +54,7 @@ class PriorityExecutor(Executor):
+         # add_node inherited
+         self.add_node(node)
+ 
+-    def spin_once(self, timeout_sec=None):
++    def _dispatch_ready_callback(self, timeout_sec=None):
+         """
+         Execute a single callback, then return.
+ 
+@@ -76,6 +76,12 @@ class PriorityExecutor(Executor):
+             else:
+                 self.lp_executor.submit(handler)
+ 
++    def spin_once(self, timeout_sec=None):
++        self._dispatch_ready_callback(timeout_sec=timeout_sec)
++
++    def _spin_once_impl(self, timeout_sec=None, wait_condition=lambda: False):
++        self._dispatch_ready_callback(timeout_sec=timeout_sec)
++
+ 
+ def main(args=None):
+     rclpy.init(args=args)

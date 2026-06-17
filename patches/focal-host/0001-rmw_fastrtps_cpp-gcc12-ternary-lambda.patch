@@ -1,0 +1,13 @@
+diff --git a/rmw_fastrtps_cpp/src/init_rmw_context_impl.cpp b/rmw_fastrtps_cpp/src/init_rmw_context_impl.cpp
+index 983f824..684ba63 100644
+--- a/rmw_fastrtps_cpp/src/init_rmw_context_impl.cpp
++++ b/rmw_fastrtps_cpp/src/init_rmw_context_impl.cpp
+@@ -165,7 +165,7 @@ init_context_impl(
+     eprosima_fastrtps_identifier, participant_info->participant_->guid());
+   common_context->pub = publisher.get();
+   common_context->publish_callback = disable_graph ? nullptr :
+-    [](const rmw_publisher_t * pub, const void * msg) {
++    +[](const rmw_publisher_t * pub, const void * msg) {
+       return rmw_fastrtps_shared_cpp::__rmw_publish(
+         eprosima_fastrtps_identifier,
+         pub,

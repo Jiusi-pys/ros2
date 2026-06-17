@@ -22,12 +22,15 @@ NUMPY_INC="$("$PYTHON_EXE" -c 'import numpy; print(numpy.get_include())' 2>/dev/
 
 PKGS=("$@")
 if [ ${#PKGS[@]} -eq 0 ]; then
-  # Core runtime + rclpy + demo nodes + the ros2 CLI command verbs
-  # (run/node/topic/pkg/... are separate packages that depend on ros2cli).
+  # Core runtime + rclpy + demo nodes + ros2 CLI verbs + tf2 + rosbag2.
+  # (run/node/topic/bag/... are separate packages that depend on ros2cli.)
   PKGS=(demo_nodes_cpp demo_nodes_py rclpy
         ros2run ros2node ros2topic ros2pkg ros2service ros2param
         ros2interface ros2action ros2component ros2doctor
-        ros2lifecycle ros2multicast ros2launch)
+        ros2lifecycle ros2multicast ros2launch
+        tf2 tf2_ros tf2_geometry_msgs tf2_sensor_msgs tf2_eigen
+        rosbag2 ros2bag rosbag2_transport rosbag2_storage_default_plugins
+        sensor_msgs nav_msgs)
 fi
 
 # Expose ONLY asio headers (not the whole conda include dir, which would leak
@@ -38,6 +41,16 @@ if [ -f "${ENV_PREFIX}/include/asio.hpp" ]; then
   ln -sfn "${ENV_PREFIX}/include/asio.hpp" "${ASIO_INC_DIR}/asio.hpp"
   ln -sfn "${ENV_PREFIX}/include/asio"     "${ASIO_INC_DIR}/asio"
 fi
+
+# Pre-seed system SQLite3 / lz4 paths so rosbag2's sqlite3_vendor / liblz4_vendor
+# custom Find modules (which can otherwise miss multiarch libdirs under the conda
+# build env) resolve them. find_library/find_path treat a pre-cached value as a
+# no-op, so FPHSA passes.
+_libdir="/usr/lib/$(uname -m)-linux-gnu"
+SQLITE3_LIB="$( [ -e "${_libdir}/libsqlite3.so" ] && echo "${_libdir}/libsqlite3.so" || echo /usr/lib/libsqlite3.so )"
+SQLITE3_INC="/usr/include"
+LZ4_LIB="$( [ -e "${_libdir}/liblz4.so" ] && echo "${_libdir}/liblz4.so" || echo /usr/lib/liblz4.so )"
+LZ4_INC="/usr/include"
 
 export CC=gcc-12
 export CXX=g++-12
@@ -61,6 +74,10 @@ exec micromamba run -n "$ENV_NAME" \
       -DAsio_INCLUDE_DIR="${ASIO_INC_DIR}" \
       -DCMAKE_PROJECT_INCLUDE_BEFORE="${WS}/cmake/ensure_python_targets_host.cmake" \
       -DHOST_NUMPY_INCLUDE_DIR="${NUMPY_INC}" \
+      -DSQLite3_LIBRARY="${SQLITE3_LIB}" \
+      -DSQLite3_INCLUDE_DIR="${SQLITE3_INC}" \
+      -Dlz4_LIBRARY="${LZ4_LIB}" \
+      -Dlz4_INCLUDE_DIR="${LZ4_INC}" \
     --parallel-workers 4 \
     --continue-on-error \
     --event-handlers console_cohesion+ console_package_list+

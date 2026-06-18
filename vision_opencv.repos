@@ -1,7 +1,0 @@
-# Extra repo not in ros2.repos (jazzy core). Cloned for cv_bridge/image_geometry.
-# vision_opencv has no 'jazzy' branch; 'rolling' is jazzy-API-compatible.
-repositories:
-  ros-perception/vision_opencv:
-    type: git
-    url: https://github.com/ros-perception/vision_opencv.git
-    version: rolling

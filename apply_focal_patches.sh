@@ -18,3 +18,11 @@ apply_one() {
 
 apply_one "$WS/src/ros2/rmw_fastrtps" \
   "$WS/patches/focal-host/0001-rmw_fastrtps_cpp-gcc12-ternary-lambda.patch"
+
+# nav2 (navigation2) — only present when the extra repos have been imported.
+if [ -d "$WS/src/ros-navigation/navigation2" ]; then
+  apply_one "$WS/src/ros-navigation/navigation2" \
+    "$WS/patches/focal-host/0002-nav2_common-drop-werror-gcc12.patch"
+  apply_one "$WS/src/ros-navigation/navigation2" \
+    "$WS/patches/focal-host/0003-nav2_route-include-filesystem.patch"
+fi

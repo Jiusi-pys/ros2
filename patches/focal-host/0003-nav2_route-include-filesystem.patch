@@ -1,0 +1,12 @@
+diff --git a/nav2_route/src/plugins/graph_file_loaders/geojson_graph_file_loader.cpp b/nav2_route/src/plugins/graph_file_loaders/geojson_graph_file_loader.cpp
+index 22ded47..bb10c6f 100644
+--- a/nav2_route/src/plugins/graph_file_loaders/geojson_graph_file_loader.cpp
++++ b/nav2_route/src/plugins/graph_file_loaders/geojson_graph_file_loader.cpp
+@@ -16,6 +16,7 @@
+ #include <string>
+ #include <vector>
+ #include <fstream>
++#include <filesystem>  // GCC 12: std::filesystem::exists needs explicit include
+ 
+ #include "nav2_route/plugins/graph_file_loaders/geojson_graph_file_loader.hpp"
+ 

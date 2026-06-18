@@ -49,6 +49,21 @@ if [ ${#PKGS[@]} -eq 0 ]; then
   if [ -d "${WS}/src/ros-perception/vision_opencv/cv_bridge" ]; then
     PKGS+=(cv_bridge image_geometry opencv_tests)
   fi
+  # Extra repos (see extra_repos.repos) — appended only when checked out.
+  [ -d "${WS}/src/ros-perception/vision_msgs" ] && PKGS+=(vision_msgs)
+  [ -d "${WS}/src/ros/diagnostics" ] && PKGS+=(diagnostic_updater diagnostic_aggregator
+        diagnostic_common_diagnostics diagnostic_remote_logging self_test diagnostics)
+  [ -d "${WS}/src/ros-perception/image_pipeline" ] && PKGS+=(image_proc depth_image_proc
+        stereo_image_proc image_publisher image_rotate image_view camera_calibration
+        tracetools_image_pipeline image_pipeline)
+  if [ -d "${WS}/src/ros-navigation/navigation2" ]; then
+    PKGS+=(nav2_bt_navigator nav2_planner nav2_controller nav2_behaviors nav2_waypoint_follower
+        nav2_navfn_planner nav2_smac_planner nav2_theta_star_planner
+        nav2_mppi_controller nav2_regulated_pure_pursuit_controller nav2_rotation_shim_controller
+        nav2_graceful_controller nav2_dwb_controller nav2_collision_monitor nav2_velocity_smoother
+        nav2_smoother nav2_constrained_smoother nav2_amcl nav2_map_server nav2_lifecycle_manager
+        nav2_route opennav_docking opennav_docking_bt opennav_docking_core nav2_simple_commander)
+  fi
 fi
 
 # Expose ONLY asio headers (not the whole conda include dir, which would leak
@@ -75,9 +90,27 @@ LZ4_INC="/usr/include"
 # Only cv_bridge / image_geometry consume these; harmless for other packages.
 OPENCV_DIR_HINT="$(ls -d "${ENV_PREFIX}/lib/cmake/opencv4" 2>/dev/null || true)"
 BOOST_DIR_HINT="$(ls -d "${ENV_PREFIX}"/lib/cmake/Boost-* 2>/dev/null | head -1 || true)"
+# Other conda CONFIG packages consumed by nav2 (Ceres -> nav2_constrained_smoother,
+# xsimd -> nav2_mppi_controller). Harmless when the package doesn't use them.
+CERES_DIR_HINT="$(ls -d "${ENV_PREFIX}/lib/cmake/Ceres" 2>/dev/null || true)"
+XSIMD_DIR_HINT="$(ls -d "${ENV_PREFIX}/share/cmake/xsimd" 2>/dev/null || true)"
 
 export CC=gcc-12
 export CXX=g++-12
+
+# Conda-provided native libs (OpenCV, OMPL, Boost) are built against a newer
+# libstdc++ (CXXABI_1.3.15) than system gcc-12 ships. Prefer the conda
+# libstdc++ at link AND runtime so those symbols resolve. libstdc++ is
+# backward-compatible, so this is safe for system-gcc-12-compiled objects too.
+CONDA_LINK_FLAGS="-L${ENV_PREFIX}/lib -Wl,-rpath,${ENV_PREFIX}/lib"
+
+# Make conda CONFIG packages (OpenCV, Boost, OMPL, Ceres, xsimd, xtensor,
+# GeographicLib, METIS, nanoflann ...) discoverable to find_package, including
+# transitive finds (e.g. Ceres -> METIS) that per-package -D<Pkg>_DIR hints
+# cannot satisfy. colcon prepends the workspace install dirs, so workspace
+# packages still win. Safe now that fastrtps (the only openssl consumer that
+# could mis-pick conda's openssl 3.x headers) is already built.
+export CMAKE_PREFIX_PATH="${ENV_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
 # CMake 4.x removed compatibility with cmake_minimum_required(<3.5); many ROS
 # vendored modules still declare it. This floor keeps them configurable.
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
@@ -104,6 +137,10 @@ exec micromamba run -n "$ENV_NAME" \
       -Dlz4_INCLUDE_DIR="${LZ4_INC}" \
       -DOpenCV_DIR="${OPENCV_DIR_HINT}" \
       -DBoost_DIR="${BOOST_DIR_HINT}" \
+      -DCeres_DIR="${CERES_DIR_HINT}" \
+      -Dxsimd_DIR="${XSIMD_DIR_HINT}" \
+      "-DCMAKE_EXE_LINKER_FLAGS=${CONDA_LINK_FLAGS}" \
+      "-DCMAKE_SHARED_LINKER_FLAGS=${CONDA_LINK_FLAGS}" \
     --parallel-workers 4 \
     --continue-on-error \
     --event-handlers console_cohesion+ console_package_list+

@@ -1,0 +1,48 @@
+# Repos NOT in ros2.repos (jazzy core), cloned for extension migration on Focal.
+# Import with:  vcs import src < extra_repos.repos
+repositories:
+  ros-perception/vision_opencv:
+    type: git
+    url: https://github.com/ros-perception/vision_opencv.git
+    version: rolling          # cv_bridge, image_geometry (no jazzy branch)
+  ros-perception/vision_msgs:
+    type: git
+    url: https://github.com/ros-perception/vision_msgs.git
+    version: jazzy
+  ros/diagnostics:
+    type: git
+    url: https://github.com/ros/diagnostics.git
+    version: ros2-jazzy
+  ros-perception/image_pipeline:
+    type: git
+    url: https://github.com/ros-perception/image_pipeline.git
+    version: jazzy
+  ros-navigation/navigation2:
+    type: git
+    url: https://github.com/ros-navigation/navigation2.git
+    version: jazzy
+  # nav2 underlay (from navigation2/tools/underlay.repos)
+  BehaviorTree/BehaviorTree.CPP:
+    type: git
+    url: https://github.com/BehaviorTree/BehaviorTree.CPP.git
+    version: 4.9.0            # nav2 jazzy HEAD needs NodeExecutionError (>=4.9)
+  ros/angles:
+    type: git
+    url: https://github.com/ros/angles.git
+    version: ros2
+  ros/bond_core:
+    type: git
+    url: https://github.com/ros/bond_core.git
+    version: jazzy
+  ros-geographic-info/geographic_info:
+    type: git
+    url: https://github.com/ros-geographic-info/geographic_info.git
+    version: jazzy
+  pal-robotics/backward_ros:
+    type: git
+    url: https://github.com/pal-robotics/backward_ros.git
+    version: foxy-devel
+  cra-ros-pkg/robot_localization:
+    type: git
+    url: https://github.com/cra-ros-pkg/robot_localization.git
+    version: jazzy-devel

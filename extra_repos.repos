@@ -46,3 +46,40 @@ repositories:
     type: git
     url: https://github.com/cra-ros-pkg/robot_localization.git
     version: jazzy-devel
+  # --- slam_toolbox / ros2_control / moveit2 stacks (Focal headless) ---
+  SteveMacenski/slam_toolbox:
+    type: git
+    url: https://github.com/SteveMacenski/slam_toolbox.git
+    version: jazzy
+  ros-controls/ros2_control:
+    type: git
+    url: https://github.com/ros-controls/ros2_control.git
+    version: jazzy
+  ros-controls/ros2_controllers:
+    type: git
+    url: https://github.com/ros-controls/ros2_controllers.git
+    version: jazzy
+  ros-controls/control_msgs: {type: git, url: https://github.com/ros-controls/control_msgs.git, version: jazzy}
+  ros-controls/realtime_tools: {type: git, url: https://github.com/ros-controls/realtime_tools.git, version: jazzy}
+  ros-controls/control_toolbox: {type: git, url: https://github.com/ros-controls/control_toolbox.git, version: jazzy}
+  ros-controls/kinematics_interface: {type: git, url: https://github.com/ros-controls/kinematics_interface.git, version: jazzy}
+  ros-controls/ros2_control_cmake: {type: git, url: https://github.com/ros-controls/ros2_control_cmake.git, version: jazzy}
+  PickNikRobotics/RSL: {type: git, url: https://github.com/PickNikRobotics/RSL.git, version: main}
+  PickNikRobotics/generate_parameter_library: {type: git, url: https://github.com/PickNikRobotics/generate_parameter_library.git, version: main}
+  PickNikRobotics/cpp_polyfills: {type: git, url: https://github.com/PickNikRobotics/cpp_polyfills.git, version: main}
+  PickNikRobotics/launch_param_builder: {type: git, url: https://github.com/PickNikRobotics/launch_param_builder.git, version: main}
+  ros/filters: {type: git, url: https://github.com/ros/filters.git, version: ros2}
+  ros/eigen_stl_containers: {type: git, url: https://github.com/ros/eigen_stl_containers.git, version: ros2}
+  ros/urdfdom_headers: {type: git, url: https://github.com/ros/urdfdom_headers.git, version: ros2}
+  ros-drivers/ackermann_msgs: {type: git, url: https://github.com/ros-drivers/ackermann_msgs.git, version: ros2}
+  pal-robotics/pal_statistics: {type: git, url: https://github.com/pal-robotics/pal_statistics.git, version: humble-devel}
+  moveit/moveit2: {type: git, url: https://github.com/moveit/moveit2.git, version: jazzy}
+  moveit/moveit_msgs: {type: git, url: https://github.com/moveit/moveit_msgs.git, version: ros2}
+  moveit/geometric_shapes: {type: git, url: https://github.com/moveit/geometric_shapes.git, version: ros2}
+  moveit/srdfdom: {type: git, url: https://github.com/moveit/srdfdom.git, version: ros2}
+  moveit/random_numbers: {type: git, url: https://github.com/moveit/random_numbers.git, version: ros2}
+  moveit/warehouse_ros: {type: git, url: https://github.com/moveit/warehouse_ros.git, version: ros2}
+  OctoMap/octomap_msgs: {type: git, url: https://github.com/OctoMap/octomap_msgs.git, version: ros2}
+  tier4/osqp_vendor: {type: git, url: https://github.com/tier4/osqp_vendor.git, version: main}
+  pantor/ruckig: {type: git, url: https://github.com/pantor/ruckig.git, version: main}
+  wg-perception/object_recognition_msgs: {type: git, url: https://github.com/wg-perception/object_recognition_msgs.git, version: ros2}

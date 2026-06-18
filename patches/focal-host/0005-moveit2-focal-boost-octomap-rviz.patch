@@ -1,0 +1,146 @@
+diff --git a/moveit_core/CMakeLists.txt b/moveit_core/CMakeLists.txt
+index ca30488..9e4492e 100644
+--- a/moveit_core/CMakeLists.txt
++++ b/moveit_core/CMakeLists.txt
+@@ -20,7 +20,7 @@ find_package(kdl_parser REQUIRED)
+ find_package(moveit_msgs REQUIRED)
+ # Enforce system version liboctomap-dev
+ # https://github.com/moveit/moveit2/issues/2862
+-find_package(octomap 1.9.7...<1.10.0 REQUIRED)
++find_package(octomap 1.9.7 REQUIRED)  # Focal: accept conda octomap 1.10 (API stable)
+ find_package(octomap_msgs REQUIRED)
+ find_package(osqp REQUIRED)
+ find_package(pluginlib REQUIRED)
+diff --git a/moveit_core/ConfigExtras.cmake b/moveit_core/ConfigExtras.cmake
+index 8475da4..5b931c4 100644
+--- a/moveit_core/ConfigExtras.cmake
++++ b/moveit_core/ConfigExtras.cmake
+@@ -10,5 +10,4 @@ find_package(
+   program_options
+   regex
+   serialization
+-  system
+-  thread)
++  thread)  # Boost 1.90: system is header-only, not a findable component
+diff --git a/moveit_kinematics/ConfigExtras.cmake b/moveit_kinematics/ConfigExtras.cmake
+index adca88d..cbe96e2 100644
+--- a/moveit_kinematics/ConfigExtras.cmake
++++ b/moveit_kinematics/ConfigExtras.cmake
+@@ -1,3 +1,3 @@
+ # Extras module needed for dependencies to find boost components
+ 
+-find_package(Boost REQUIRED program_options system)
++find_package(Boost REQUIRED program_options)
+diff --git a/moveit_planners/ompl/CMakeLists.txt b/moveit_planners/ompl/CMakeLists.txt
+index 6462894..b6fd6ca 100644
+--- a/moveit_planners/ompl/CMakeLists.txt
++++ b/moveit_planners/ompl/CMakeLists.txt
+@@ -8,7 +8,6 @@ moveit_package()
+ find_package(
+   Boost
+   REQUIRED
+-  system
+   filesystem
+   date_time
+   thread
+diff --git a/moveit_plugins/moveit_ros_control_interface/ConfigExtras.cmake b/moveit_plugins/moveit_ros_control_interface/ConfigExtras.cmake
+index 01c3760..53dcf07 100644
+--- a/moveit_plugins/moveit_ros_control_interface/ConfigExtras.cmake
++++ b/moveit_plugins/moveit_ros_control_interface/ConfigExtras.cmake
+@@ -1,3 +1,3 @@
+ # Extras module needed for dependencies to find boost components
+ 
+-find_package(Boost REQUIRED COMPONENTS system thread)
++find_package(Boost REQUIRED COMPONENTS thread)
+diff --git a/moveit_ros/move_group/ConfigExtras.cmake b/moveit_ros/move_group/ConfigExtras.cmake
+index 30817cf..66d025a 100644
+--- a/moveit_ros/move_group/ConfigExtras.cmake
++++ b/moveit_ros/move_group/ConfigExtras.cmake
+@@ -3,7 +3,6 @@
+ find_package(
+   Boost
+   REQUIRED
+-  system
+   filesystem
+   date_time
+   program_options
+diff --git a/moveit_ros/moveit_servo/package.xml b/moveit_ros/moveit_servo/package.xml
+index 0f00c9e..66e3627 100644
+--- a/moveit_ros/moveit_servo/package.xml
++++ b/moveit_ros/moveit_servo/package.xml
+@@ -45,7 +45,6 @@
+   <exec_depend>joy</exec_depend>
+   <exec_depend>launch_param_builder</exec_depend>
+   <exec_depend>moveit_configs_utils</exec_depend>
+-  <exec_depend>moveit_ros_visualization</exec_depend>
+   <exec_depend>robot_state_publisher</exec_depend>
+   <exec_depend>tf2_ros</exec_depend>
+ 
+diff --git a/moveit_ros/occupancy_map_monitor/CMakeLists.txt b/moveit_ros/occupancy_map_monitor/CMakeLists.txt
+index b8dd549..7ac07ad 100644
+--- a/moveit_ros/occupancy_map_monitor/CMakeLists.txt
++++ b/moveit_ros/occupancy_map_monitor/CMakeLists.txt
+@@ -15,7 +15,7 @@ find_package(pluginlib REQUIRED)
+ find_package(Eigen3 REQUIRED)
+ # Enforce system version liboctomap-dev
+ # https://github.com/moveit/moveit2/issues/2862
+-find_package(octomap 1.9.7...<1.10.0 REQUIRED)
++find_package(octomap 1.9.7 REQUIRED)  # Focal: accept conda octomap 1.10 (API stable)
+ find_package(geometric_shapes REQUIRED)
+ find_package(tf2_ros REQUIRED)
+ 
+diff --git a/moveit_ros/planning/ConfigExtras.cmake b/moveit_ros/planning/ConfigExtras.cmake
+index 3a527d9..b101f9b 100644
+--- a/moveit_ros/planning/ConfigExtras.cmake
++++ b/moveit_ros/planning/ConfigExtras.cmake
+@@ -3,7 +3,6 @@
+ find_package(
+   Boost
+   REQUIRED
+-  system
+   filesystem
+   date_time
+   program_options
+diff --git a/moveit_ros/planning_interface/ConfigExtras.cmake b/moveit_ros/planning_interface/ConfigExtras.cmake
+index 63a5f42..cdad690 100644
+--- a/moveit_ros/planning_interface/ConfigExtras.cmake
++++ b/moveit_ros/planning_interface/ConfigExtras.cmake
+@@ -8,4 +8,4 @@ find_package(
+   Boost REQUIRED
+   COMPONENTS date_time filesystem program_options
+              # ${BOOST_PYTHON_COMPONENT}
+-             system thread)
++             thread)  # Boost 1.90: system is header-only
+diff --git a/moveit_ros/planning_interface/package.xml b/moveit_ros/planning_interface/package.xml
+index 18bcc11..2499f9b 100644
+--- a/moveit_ros/planning_interface/package.xml
++++ b/moveit_ros/planning_interface/package.xml
+@@ -42,7 +42,6 @@
+   <test_depend>moveit_resources_fanuc_moveit_config</test_depend>
+   <test_depend>moveit_resources_panda_moveit_config</test_depend>
+   <test_depend>moveit_simple_controller_manager</test_depend>
+-  <test_depend>rviz2</test_depend>
+   <test_depend>ros_testing</test_depend>
+   <test_depend>ament_cmake_gtest</test_depend>
+   <test_depend>moveit_configs_utils</test_depend>
+diff --git a/moveit_ros/visualization/ConfigExtras.cmake b/moveit_ros/visualization/ConfigExtras.cmake
+index ddda760..3b7b969 100644
+--- a/moveit_ros/visualization/ConfigExtras.cmake
++++ b/moveit_ros/visualization/ConfigExtras.cmake
+@@ -1,3 +1,3 @@
+ # Extras module needed for dependencies to find boost components
+ 
+-find_package(Boost REQUIRED thread date_time system filesystem)
++find_package(Boost REQUIRED thread date_time filesystem)
+diff --git a/moveit_ros/warehouse/ConfigExtras.cmake b/moveit_ros/warehouse/ConfigExtras.cmake
+index 22f3754..aafdf62 100644
+--- a/moveit_ros/warehouse/ConfigExtras.cmake
++++ b/moveit_ros/warehouse/ConfigExtras.cmake
+@@ -4,7 +4,6 @@ find_package(
+   Boost
+   REQUIRED
+   thread
+-  system
+   filesystem
+   regex
+   date_time

@@ -26,3 +26,15 @@ if [ -d "$WS/src/ros-navigation/navigation2" ]; then
   apply_one "$WS/src/ros-navigation/navigation2" \
     "$WS/patches/focal-host/0003-nav2_route-include-filesystem.patch"
 fi
+
+# slam_toolbox (Focal headless: drop rviz/Qt5 plugin, G2O/CSparse/CHOLMOD, Boost 1.90 system)
+if [ -d "$WS/src/SteveMacenski/slam_toolbox" ]; then
+  apply_one "$WS/src/SteveMacenski/slam_toolbox" \
+    "$WS/patches/focal-host/0004-slam_toolbox-focal-headless-eigen-boost.patch"
+fi
+
+# moveit2 (Focal: Boost 1.90 system, octomap 1.10, drop rviz exec/test deps)
+if [ -d "$WS/src/moveit/moveit2" ]; then
+  apply_one "$WS/src/moveit/moveit2" \
+    "$WS/patches/focal-host/0005-moveit2-focal-boost-octomap-rviz.patch"
+fi

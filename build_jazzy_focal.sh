@@ -64,6 +64,23 @@ if [ ${#PKGS[@]} -eq 0 ]; then
         nav2_smoother nav2_constrained_smoother nav2_amcl nav2_map_server nav2_lifecycle_manager
         nav2_route opennav_docking opennav_docking_bt opennav_docking_core nav2_simple_commander)
   fi
+  [ -d "${WS}/src/SteveMacenski/slam_toolbox" ] && PKGS+=(slam_toolbox)
+  if [ -d "${WS}/src/ros-controls/ros2_control" ]; then
+    PKGS+=(controller_manager hardware_interface controller_interface transmission_interface joint_limits)
+  fi
+  if [ -d "${WS}/src/ros-controls/ros2_controllers" ]; then
+    # all controllers except the rqt GUI package
+    while IFS= read -r _p; do PKGS+=("$_p"); done < <(
+      find "${WS}/src/ros-controls/ros2_controllers" -name package.xml -exec dirname {} \; |
+        xargs -n1 basename | grep -vE 'rqt' | sort)
+  fi
+  if [ -d "${WS}/src/moveit/moveit2" ]; then
+    # moveit2 HEADLESS core (no setup_assistant/Qt, rviz, perception, chomp/stomp/pilz, py)
+    PKGS+=(moveit_core moveit_ros_occupancy_map_monitor moveit_ros_planning moveit_ros_move_group
+        moveit_ros_warehouse moveit_ros_planning_interface moveit_kinematics moveit_planners_ompl
+        moveit_simple_controller_manager moveit_ros_control_interface moveit_servo
+        moveit_configs_utils moveit_plugins)
+  fi
 fi
 
 # Expose ONLY asio headers (not the whole conda include dir, which would leak
@@ -94,6 +111,11 @@ BOOST_DIR_HINT="$(ls -d "${ENV_PREFIX}"/lib/cmake/Boost-* 2>/dev/null | head -1 
 # xsimd -> nav2_mppi_controller). Harmless when the package doesn't use them.
 CERES_DIR_HINT="$(ls -d "${ENV_PREFIX}/lib/cmake/Ceres" 2>/dev/null || true)"
 XSIMD_DIR_HINT="$(ls -d "${ENV_PREFIX}/share/cmake/xsimd" 2>/dev/null || true)"
+# Eigen 3.4.0 from conda: the version Jazzy targets. apt's 3.3.7 has GCC-12
+# bugs (BDCSVD operator== non-bool, Eigen/Core preprocessor) that break
+# kinematics_interface_kdl / moveit; conda 5.0 is too new AND its config sets
+# no EIGEN3_INCLUDE_DIRS. conda 3.4.0 is GCC-12-clean and sets the vars.
+EIGEN3_DIR_HINT="$(ls -d "${ENV_PREFIX}/share/eigen3/cmake" 2>/dev/null || true)"
 
 export CC=gcc-12
 export CXX=g++-12
@@ -139,6 +161,7 @@ exec micromamba run -n "$ENV_NAME" \
       -DBoost_DIR="${BOOST_DIR_HINT}" \
       -DCeres_DIR="${CERES_DIR_HINT}" \
       -Dxsimd_DIR="${XSIMD_DIR_HINT}" \
+      -DEigen3_DIR="${EIGEN3_DIR_HINT}" \
       "-DCMAKE_EXE_LINKER_FLAGS=${CONDA_LINK_FLAGS}" \
       "-DCMAKE_SHARED_LINKER_FLAGS=${CONDA_LINK_FLAGS}" \
     --parallel-workers 4 \

@@ -80,6 +80,7 @@ if [ ${#PKGS[@]} -eq 0 ]; then
         moveit_ros_warehouse moveit_ros_planning_interface moveit_kinematics moveit_planners_ompl
         moveit_simple_controller_manager moveit_ros_control_interface moveit_servo
         moveit_configs_utils moveit_plugins)
+    [ -d "${WS}/src/ros/xacro" ] && PKGS+=(xacro)
   fi
 fi
 

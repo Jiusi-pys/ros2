@@ -83,3 +83,4 @@ repositories:
   tier4/osqp_vendor: {type: git, url: https://github.com/tier4/osqp_vendor.git, version: main}
   pantor/ruckig: {type: git, url: https://github.com/pantor/ruckig.git, version: main}
   wg-perception/object_recognition_msgs: {type: git, url: https://github.com/wg-perception/object_recognition_msgs.git, version: ros2}
+  ros/xacro: {type: git, url: https://github.com/ros/xacro.git, version: ros2}

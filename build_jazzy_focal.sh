@@ -65,6 +65,7 @@ if [ ${#PKGS[@]} -eq 0 ]; then
         nav2_route opennav_docking opennav_docking_bt opennav_docking_core nav2_simple_commander)
   fi
   [ -d "${WS}/src/SteveMacenski/slam_toolbox" ] && PKGS+=(slam_toolbox)
+  [ -d "${WS}/src/ros-perception/perception_pcl" ] && PKGS+=(pcl_msgs pcl_conversions pcl_ros)
   if [ -d "${WS}/src/ros-controls/ros2_control" ]; then
     PKGS+=(controller_manager hardware_interface controller_interface transmission_interface joint_limits)
   fi

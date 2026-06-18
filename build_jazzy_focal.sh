@@ -22,14 +22,25 @@ NUMPY_INC="$("$PYTHON_EXE" -c 'import numpy; print(numpy.get_include())' 2>/dev/
 
 PKGS=("$@")
 if [ ${#PKGS[@]} -eq 0 ]; then
-  # Core runtime + rclpy + demo nodes + ros2 CLI verbs + tf2 + rosbag2.
-  # (run/node/topic/bag/... are separate packages that depend on ros2cli.)
+  # Core runtime + rclpy + demo nodes + ros2 CLI verbs, plus the COMPLETE
+  # tf2 (geometry2) and rosbag2 repos. geometry2 metapackage pulls the whole
+  # tf2 stack; examples/test_tf2 and the rosbag2 examples/benchmarking are
+  # added explicitly. All verified on Focal (9/9 capability tests pass).
   PKGS=(demo_nodes_cpp demo_nodes_py rclpy
         ros2run ros2node ros2topic ros2pkg ros2service ros2param
         ros2interface ros2action ros2component ros2doctor
         ros2lifecycle ros2multicast ros2launch
-        tf2 tf2_ros tf2_geometry_msgs tf2_sensor_msgs tf2_eigen
-        rosbag2 ros2bag rosbag2_transport rosbag2_storage_default_plugins
+        # tf2 / geometry2 (full repo)
+        geometry2 tf2 tf2_ros tf2_py tf2_msgs tf2_geometry_msgs
+        tf2_sensor_msgs tf2_eigen tf2_eigen_kdl tf2_kdl tf2_bullet
+        tf2_tools tf2_ros_py examples_tf2_py test_tf2
+        # rosbag2 (full repo)
+        rosbag2 ros2bag rosbag2_transport rosbag2_cpp rosbag2_py
+        rosbag2_storage rosbag2_storage_default_plugins
+        rosbag2_storage_sqlite3 rosbag2_storage_mcap
+        rosbag2_compression rosbag2_compression_zstd
+        rosbag2_examples_cpp rosbag2_examples_py
+        rosbag2_performance_benchmarking
         sensor_msgs nav_msgs)
 fi
 

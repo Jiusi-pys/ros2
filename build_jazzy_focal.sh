@@ -139,15 +139,36 @@ export CMAKE_PREFIX_PATH="${ENV_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH
 # vendored modules still declare it. This floor keeps them configurable.
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
+# GUI packages skipped in JAZZY_BUILD_ALL mode (no display target on this host).
+GUI_SKIP=(rviz2 rviz_common rviz_rendering rviz_default_plugins rviz_ogre_vendor
+  rviz_assimp_vendor rviz_rendering_tests rviz_visual_testing_framework
+  qt_gui qt_gui_app qt_gui_core qt_gui_cpp qt_gui_py_common python_qt_binding
+  rqt rqt_gui rqt_gui_cpp rqt_gui_py rqt_py_common rqt_action rqt_bag rqt_bag_plugins
+  rqt_console rqt_controller_manager rqt_graph rqt_joint_trajectory_controller
+  rqt_msg rqt_plot rqt_publisher rqt_py_console rqt_reconfigure rqt_service_caller
+  rqt_shell rqt_srv rqt_topic nav2_rviz_plugins vision_msgs_rviz_plugins
+  moveit_setup_assistant moveit_setup_app_plugins moveit_setup_controllers
+  moveit_setup_core_plugins moveit_setup_framework moveit_setup_simulation
+  moveit_setup_srdf_plugins moveit_ros_visualization
+  turtlesim qt_dotgraph navigation2 ros2_ohos_smoke ros2_ohos_pubsub_smoke)
+
+# Selection: default = --packages-up-to PKGS; JAZZY_BUILD_ALL=1 = whole workspace
+# minus the GUI set (build "all features, no GUI").
+if [ "${JAZZY_BUILD_ALL:-0}" = "1" ]; then
+  SELECT=(--packages-skip "${GUI_SKIP[@]}")
+  echo "== mode           : BUILD ALL (skip ${#GUI_SKIP[@]} GUI pkgs)"
+else
+  SELECT=(--packages-up-to "${PKGS[@]}")
+  echo "== packages-up-to : ${PKGS[*]}"
+fi
 echo "== workspace      : $WS"
 echo "== build env      : $ENV_NAME ($PYTHON_EXE)"
 echo "== compiler       : $($CC --version | head -1)"
 echo "== cmake          : $(cmake --version | head -1)"
-echo "== packages-up-to : ${PKGS[*]}"
 
 exec micromamba run -n "$ENV_NAME" \
   colcon build --merge-install \
-    --packages-up-to "${PKGS[@]}" \
+    "${SELECT[@]}" \
     --cmake-args \
       -DCMAKE_BUILD_TYPE=Release \
       -DPython3_EXECUTABLE="$PYTHON_EXE" \

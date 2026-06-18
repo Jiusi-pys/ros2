@@ -43,6 +43,37 @@ index 6462894..b6fd6ca 100644
    filesystem
    date_time
    thread
+diff --git a/moveit_planners/pilz_industrial_motion_planner/include/pilz_industrial_motion_planner/planning_context_base.hpp b/moveit_planners/pilz_industrial_motion_planner/include/pilz_industrial_motion_planner/planning_context_base.hpp
+index 0abba27..07f840f 100644
+--- a/moveit_planners/pilz_industrial_motion_planner/include/pilz_industrial_motion_planner/planning_context_base.hpp
++++ b/moveit_planners/pilz_industrial_motion_planner/include/pilz_industrial_motion_planner/planning_context_base.hpp
+@@ -56,7 +56,7 @@ template <typename GeneratorT>
+ class PlanningContextBase : public planning_interface::PlanningContext
+ {
+ public:
+-  PlanningContextBase<GeneratorT>(const std::string& name, const std::string& group,
++  PlanningContextBase(const std::string& name, const std::string& group,
+                                   const moveit::core::RobotModelConstPtr& model,
+                                   const pilz_industrial_motion_planner::LimitsContainer& limits)
+     : planning_interface::PlanningContext(name, group)
+diff --git a/moveit_planners/test_configs/prbt_moveit_config/package.xml b/moveit_planners/test_configs/prbt_moveit_config/package.xml
+index f7aeea6..c8e96c9 100644
+--- a/moveit_planners/test_configs/prbt_moveit_config/package.xml
++++ b/moveit_planners/test_configs/prbt_moveit_config/package.xml
+@@ -26,13 +26,11 @@
+   <exec_depend>moveit_ros_move_group</exec_depend>
+   <exec_depend>moveit_kinematics</exec_depend>
+   <exec_depend>moveit_planners_ompl</exec_depend>
+-  <exec_depend>moveit_ros_visualization</exec_depend>
+   <exec_depend>moveit_simple_controller_manager</exec_depend>
+   -->
+   <exec_depend>joint_state_publisher</exec_depend>
+   <exec_depend>robot_state_publisher</exec_depend>
+   <exec_depend>xacro</exec_depend>
+-  <exec_depend>rviz2</exec_depend>
+   <exec_depend>moveit_resources_prbt_support</exec_depend>
+   <exec_depend>moveit_resources_prbt_ikfast_manipulator_plugin</exec_depend>
+   <exec_depend>moveit_ros_move_group</exec_depend>
 diff --git a/moveit_plugins/moveit_ros_control_interface/ConfigExtras.cmake b/moveit_plugins/moveit_ros_control_interface/ConfigExtras.cmake
 index 01c3760..53dcf07 100644
 --- a/moveit_plugins/moveit_ros_control_interface/ConfigExtras.cmake
@@ -52,6 +83,18 @@ index 01c3760..53dcf07 100644
  
 -find_package(Boost REQUIRED COMPONENTS system thread)
 +find_package(Boost REQUIRED COMPONENTS thread)
+diff --git a/moveit_ros/hybrid_planning/package.xml b/moveit_ros/hybrid_planning/package.xml
+index 95a2c8c..9e0f6e8 100644
+--- a/moveit_ros/hybrid_planning/package.xml
++++ b/moveit_ros/hybrid_planning/package.xml
+@@ -32,7 +32,6 @@
+   <exec_depend>controller_manager</exec_depend>
+   <exec_depend>position_controllers</exec_depend>
+   <exec_depend>robot_state_publisher</exec_depend>
+-  <exec_depend>rviz2</exec_depend>
+   <exec_depend>moveit_resources_panda_moveit_config</exec_depend>
+ 
+   <test_depend>ament_cmake_gtest</test_depend>
 diff --git a/moveit_ros/move_group/ConfigExtras.cmake b/moveit_ros/move_group/ConfigExtras.cmake
 index 30817cf..66d025a 100644
 --- a/moveit_ros/move_group/ConfigExtras.cmake

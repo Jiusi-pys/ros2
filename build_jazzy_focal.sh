@@ -41,7 +41,14 @@ if [ ${#PKGS[@]} -eq 0 ]; then
         rosbag2_compression rosbag2_compression_zstd
         rosbag2_examples_cpp rosbag2_examples_py
         rosbag2_performance_benchmarking
-        sensor_msgs nav_msgs)
+        sensor_msgs nav_msgs
+        # image pipeline (image_common is in core src)
+        image_transport camera_info_manager camera_calibration_parsers)
+  # cv_bridge / image_geometry live in vision_opencv (extra repo, see
+  # vision_opencv.repos). Add them only when that repo has been cloned.
+  if [ -d "${WS}/src/ros-perception/vision_opencv/cv_bridge" ]; then
+    PKGS+=(cv_bridge image_geometry opencv_tests)
+  fi
 fi
 
 # Expose ONLY asio headers (not the whole conda include dir, which would leak
@@ -62,6 +69,12 @@ SQLITE3_LIB="$( [ -e "${_libdir}/libsqlite3.so" ] && echo "${_libdir}/libsqlite3
 SQLITE3_INC="/usr/include"
 LZ4_LIB="$( [ -e "${_libdir}/liblz4.so" ] && echo "${_libdir}/liblz4.so" || echo /usr/lib/liblz4.so )"
 LZ4_INC="/usr/include"
+
+# OpenCV / Boost come from the conda env (no system OpenCV on Focal; Boost.Python
+# must match python3.12). Point CONFIG-mode find_package at the env's cmake dirs.
+# Only cv_bridge / image_geometry consume these; harmless for other packages.
+OPENCV_DIR_HINT="$(ls -d "${ENV_PREFIX}/lib/cmake/opencv4" 2>/dev/null || true)"
+BOOST_DIR_HINT="$(ls -d "${ENV_PREFIX}"/lib/cmake/Boost-* 2>/dev/null | head -1 || true)"
 
 export CC=gcc-12
 export CXX=g++-12
@@ -89,6 +102,8 @@ exec micromamba run -n "$ENV_NAME" \
       -DSQLite3_INCLUDE_DIR="${SQLITE3_INC}" \
       -Dlz4_LIBRARY="${LZ4_LIB}" \
       -Dlz4_INCLUDE_DIR="${LZ4_INC}" \
+      -DOpenCV_DIR="${OPENCV_DIR_HINT}" \
+      -DBoost_DIR="${BOOST_DIR_HINT}" \
     --parallel-workers 4 \
     --continue-on-error \
     --event-handlers console_cohesion+ console_package_list+

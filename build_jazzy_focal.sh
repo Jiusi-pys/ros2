@@ -138,6 +138,9 @@ export CMAKE_PREFIX_PATH="${ENV_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH
 # CMake 4.x removed compatibility with cmake_minimum_required(<3.5); many ROS
 # vendored modules still declare it. This floor keeps them configurable.
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
+# Conda env pkgconfig dir on PKG_CONFIG_PATH (e.g. our lttng-ctl.pc shim, since
+# focal's liblttng-ctl-dev ships no .pc; needed by lttngpy/tracetools).
+export PKG_CONFIG_PATH="${ENV_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 # GUI packages skipped in JAZZY_BUILD_ALL mode (no display target on this host).
 GUI_SKIP=(rviz2 rviz_common rviz_rendering rviz_default_plugins rviz_ogre_vendor

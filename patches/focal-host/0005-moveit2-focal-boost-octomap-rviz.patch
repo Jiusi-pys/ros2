@@ -166,6 +166,18 @@ index 18bcc11..2499f9b 100644
    <test_depend>ros_testing</test_depend>
    <test_depend>ament_cmake_gtest</test_depend>
    <test_depend>moveit_configs_utils</test_depend>
+diff --git a/moveit_ros/trajectory_cache/package.xml b/moveit_ros/trajectory_cache/package.xml
+index b4cda74..603cf76 100644
+--- a/moveit_ros/trajectory_cache/package.xml
++++ b/moveit_ros/trajectory_cache/package.xml
+@@ -17,7 +17,6 @@
+   <depend>tf2_ros</depend>
+   <depend>trajectory_msgs</depend>
+ 
+-  <exec_depend>moveit_ros</exec_depend>
+   <exec_depend>python3-yaml</exec_depend>
+   <exec_depend>xacro</exec_depend>
+ 
 diff --git a/moveit_ros/visualization/ConfigExtras.cmake b/moveit_ros/visualization/ConfigExtras.cmake
 index ddda760..3b7b969 100644
 --- a/moveit_ros/visualization/ConfigExtras.cmake

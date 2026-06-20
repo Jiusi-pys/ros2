@@ -80,7 +80,7 @@ if [ ${#PKGS[@]} -eq 0 ]; then
     PKGS+=(moveit_core moveit_ros_occupancy_map_monitor moveit_ros_planning moveit_ros_move_group
         moveit_ros_warehouse moveit_ros_planning_interface moveit_kinematics moveit_planners_ompl
         moveit_simple_controller_manager moveit_ros_control_interface moveit_servo
-        moveit_configs_utils moveit_plugins)
+        moveit_configs_utils moveit_plugins moveit_ros_trajectory_cache)
     [ -d "${WS}/src/ros/xacro" ] && PKGS+=(xacro)
   fi
 fi
@@ -160,6 +160,11 @@ GUI_SKIP=(rviz2 rviz_common rviz_rendering rviz_default_plugins rviz_ogre_vendor
 if [ "${JAZZY_BUILD_ALL:-0}" = "1" ]; then
   SELECT=(--packages-skip "${GUI_SKIP[@]}")
   echo "== mode           : BUILD ALL (skip ${#GUI_SKIP[@]} GUI pkgs)"
+elif [ "${JAZZY_SELECT:-0}" = "1" ]; then
+  # build ONLY the listed packages (deps assumed already installed); avoids
+  # pulling test_depend closures (e.g. rviz via a test-only dep).
+  SELECT=(--packages-select "${PKGS[@]}")
+  echo "== packages-select: ${PKGS[*]}"
 else
   SELECT=(--packages-up-to "${PKGS[@]}")
   echo "== packages-up-to : ${PKGS[*]}"

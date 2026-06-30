@@ -17,7 +17,10 @@
 #include <cstdlib>
 #include <string>
 
+#include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
+
+#include "rmw/subscription_content_filter_options.h"
 
 #include "rcutils/allocator.h"
 #include "rcutils/strdup.h"
@@ -395,6 +398,69 @@ TEST(RmwMddsEvent, MessageLostEventSupportedAndZeroWithoutLoss)
   EXPECT_EQ(0u, status.total_count);  // contiguous in-process delivery: no loss
 
   EXPECT_EQ(RMW_RET_OK, rmw_event_fini(&lost_event));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_subscription(node, subscription));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+}
+
+// R2: a numeric content filter on a non-String message type ("data > 5" over std_msgs/Int32). Setting
+// it must succeed (previously RMW_RET_UNSUPPORTED for any non-String type) and the filter must take
+// effect: a sample whose field fails the predicate is dropped before it reaches the reader's queue.
+TEST(RmwMddsEvent, NumericContentFilterDropsNonMatchingSamples)
+{
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_numeric_content_filter_test");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
+  rmw_node_t * node = rmw_create_node(&context, "mdds_numeric_filter_node", "/mdds");
+  ASSERT_NE(nullptr, node);
+
+  const rosidl_message_type_support_t * type_support =
+    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::Int32>();
+  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
+  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
+
+  rmw_publisher_t * publisher = rmw_create_publisher(
+    node, type_support, "/mdds_numeric_filter", &rmw_qos_profile_default, &publisher_options);
+  ASSERT_NE(nullptr, publisher);
+  rmw_subscription_t * subscription = rmw_create_subscription(
+    node, type_support, "/mdds_numeric_filter", &rmw_qos_profile_default, &subscription_options);
+  ASSERT_NE(nullptr, subscription);
+
+  // "data > 5" — numeric field comparison on a non-String type.
+  rmw_subscription_content_filter_options_t filter_options =
+    rmw_get_zero_initialized_content_filter_options();
+  ASSERT_EQ(
+    RMW_RET_OK,
+    rmw_subscription_content_filter_options_init(
+      "data > 5", 0, nullptr, &allocator, &filter_options));
+  ASSERT_EQ(RMW_RET_OK, rmw_subscription_set_content_filter(subscription, &filter_options));
+
+  std_msgs::msg::Int32 low;
+  low.data = 3;  // fails "data > 5" -> dropped
+  std_msgs::msg::Int32 high;
+  high.data = 10;  // passes -> delivered
+  ASSERT_EQ(RMW_RET_OK, rmw_publish(publisher, &low, nullptr));
+  ASSERT_EQ(RMW_RET_OK, rmw_publish(publisher, &high, nullptr));
+
+  std_msgs::msg::Int32 received;
+  bool taken = false;
+  ASSERT_EQ(RMW_RET_OK, rmw_take(subscription, &received, &taken, nullptr));
+  ASSERT_TRUE(taken);
+  EXPECT_EQ(10, received.data);  // only the matching sample survived the filter
+
+  taken = true;
+  ASSERT_EQ(RMW_RET_OK, rmw_take(subscription, &received, &taken, nullptr));
+  EXPECT_FALSE(taken);  // the non-matching sample (3) never entered the queue
+
+  EXPECT_EQ(
+    RMW_RET_OK, rmw_subscription_content_filter_options_fini(&filter_options, &allocator));
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_subscription(node, subscription));
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));

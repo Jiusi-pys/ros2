@@ -373,8 +373,117 @@ bool DecodeCdrStringPayload(const std::vector<uint8_t> & payload, std::string * 
   return true;
 }
 
+std::string TrimAsciiWhitespace(const std::string & value)
+{
+  size_t begin = 0;
+  size_t end = value.size();
+  while (begin < end && std::isspace(static_cast<unsigned char>(value[begin]))) {
+    ++begin;
+  }
+  while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+    --end;
+  }
+  return value.substr(begin, end - begin);
+}
+
+// Parse a numeric content-filter expression "<field> <op> <value>" (a DDS-SQL subset). `value` is a
+// numeric literal or a %N placeholder substituted from `parameters`. Recognized operators: < <= > >=
+// = == != <>. Returns false (with no side effects) for anything else.
+bool TryParseNumericFilter(
+  const std::string & expression, const std::vector<std::string> & parameters, std::string * field,
+  int * op, double * value)
+{
+  size_t i = 0;
+  while (i < expression.size() && expression[i] != '<' && expression[i] != '>' &&
+    expression[i] != '=' && expression[i] != '!')
+  {
+    ++i;
+  }
+  if (i == expression.size()) {
+    return false;
+  }
+  const std::string two = expression.substr(i, 2);
+  int code = 0;
+  size_t op_len = 1;
+  if (two == "<=") { code = 2; op_len = 2; }
+  else if (two == ">=") { code = 4; op_len = 2; }
+  else if (two == "==") { code = 5; op_len = 2; }
+  else if (two == "!=") { code = 6; op_len = 2; }
+  else if (two == "<>") { code = 6; op_len = 2; }
+  else if (expression[i] == '<') { code = 1; }
+  else if (expression[i] == '>') { code = 3; }
+  else if (expression[i] == '=') { code = 5; }
+  else { return false; }  // a lone '!' is not a valid operator
+
+  std::string lhs = TrimAsciiWhitespace(expression.substr(0, i));
+  std::string rhs = TrimAsciiWhitespace(expression.substr(i + op_len));
+  if (lhs.empty() || rhs.empty()) {
+    return false;
+  }
+  if (rhs[0] == '%') {
+    const std::string index_text = rhs.substr(1);
+    size_t consumed = 0;
+    long index = -1;
+    try {
+      index = std::stol(index_text, &consumed);
+    } catch (...) {
+      return false;
+    }
+    if (consumed != index_text.size() || index < 0 ||
+      static_cast<size_t>(index) >= parameters.size())
+    {
+      return false;
+    }
+    rhs = TrimAsciiWhitespace(parameters[static_cast<size_t>(index)]);
+  }
+  try {
+    size_t consumed = 0;
+    const double parsed = std::stod(rhs, &consumed);
+    if (consumed != rhs.size()) {
+      return false;
+    }
+    *value = parsed;
+  } catch (...) {
+    return false;
+  }
+  *field = lhs;
+  *op = code;
+  return true;
+}
+
+bool CompareNumeric(double lhs, int op, double rhs)
+{
+  switch (op) {
+    case 1: return lhs < rhs;
+    case 2: return lhs <= rhs;
+    case 3: return lhs > rhs;
+    case 4: return lhs >= rhs;
+    case 5: return lhs == rhs;
+    case 6: return lhs != rhs;
+    default: return true;
+  }
+}
+
 bool PayloadMatchesContentFilter(const SubscriptionData & subscription, const std::vector<uint8_t> & payload)
 {
+  if (subscription.numeric_filter_enabled) {
+    // Decode the sample and evaluate `field OP value` against the introspected field. If the sample
+    // cannot be decoded / the field read fails, keep it (a filter must not silently drop valid data).
+    void * message = subscription.adapter.AllocateMessage();
+    if (message == nullptr) {
+      return true;
+    }
+    bool keep = true;
+    double field_value = 0.0;
+    if (subscription.adapter.Decode(payload.data(), payload.size(), message) &&
+      subscription.adapter.ReadNumericField(message, subscription.numeric_filter_field, &field_value))
+    {
+      keep = CompareNumeric(
+        field_value, subscription.numeric_filter_op, subscription.numeric_filter_value);
+    }
+    subscription.adapter.DestroyMessage(message);
+    return keep;
+  }
   if (!subscription.content_filter_enabled) {
     return true;
   }
@@ -661,26 +770,55 @@ rmw_ret_t SetSubscriptionContentFilter(
   }
 
   const bool clear_filter = options->filter_expression[0] == '\0';
+  bool numeric = false;
+  std::string numeric_field;
+  int numeric_op = 0;
+  double numeric_value = 0.0;
   if (!clear_filter &&
       !IsSupportedStringContentFilter(
         *subscription, options->filter_expression, options->expression_parameters)) {
-    return RMW_RET_UNSUPPORTED;
+    // Not the supported std_msgs/String filter — try a numeric field filter for other message types.
+    rmw_reset_error();  // discard the string-filter rejection; a numeric filter may still be accepted
+    std::vector<std::string> params;
+    for (size_t i = 0; i < options->expression_parameters.size; ++i) {
+      params.emplace_back(
+        options->expression_parameters.data[i] != nullptr ? options->expression_parameters.data[i] : "");
+    }
+    if (!TryParseNumericFilter(
+          options->filter_expression, params, &numeric_field, &numeric_op, &numeric_value) ||
+        !subscription->adapter.HasNumericField(numeric_field)) {
+      RMW_SET_ERROR_MSG("content filter is not a supported string or numeric field expression");
+      return RMW_RET_UNSUPPORTED;
+    }
+    numeric = true;
   }
 
   std::lock_guard<std::mutex> lock(subscription->mutex);
   if (clear_filter) {
     subscription->content_filter_enabled = false;
+    subscription->numeric_filter_enabled = false;
     subscription->content_filter_expression.clear();
     subscription->content_filter_parameters.clear();
     return RMW_RET_OK;
   }
 
-  subscription->content_filter_enabled = true;
+  // Store the raw expression/parameters for get_content_filter round-trip in either mode.
   subscription->content_filter_expression = options->filter_expression;
   subscription->content_filter_parameters.clear();
   for (size_t i = 0; i < options->expression_parameters.size; ++i) {
-    subscription->content_filter_parameters.emplace_back(options->expression_parameters.data[i]);
+    subscription->content_filter_parameters.emplace_back(
+      options->expression_parameters.data[i] != nullptr ? options->expression_parameters.data[i] : "");
   }
+  if (numeric) {
+    subscription->numeric_filter_enabled = true;
+    subscription->content_filter_enabled = false;
+    subscription->numeric_filter_field = numeric_field;
+    subscription->numeric_filter_op = numeric_op;
+    subscription->numeric_filter_value = numeric_value;
+    return RMW_RET_OK;
+  }
+  subscription->content_filter_enabled = true;
+  subscription->numeric_filter_enabled = false;
   return RMW_RET_OK;
 }
 

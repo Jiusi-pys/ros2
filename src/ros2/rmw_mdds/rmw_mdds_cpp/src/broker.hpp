@@ -129,6 +129,13 @@ struct SubscriptionData
   bool content_filter_enabled = false;
   std::string content_filter_expression;
   std::vector<std::string> content_filter_parameters;
+  // Numeric content filter (`field OP number`, DDS-SQL subset) for non-String message types, evaluated
+  // against the introspected field. Mutually exclusive with the std_msgs/String string filter above:
+  // at most one of content_filter_enabled / numeric_filter_enabled is set.
+  bool numeric_filter_enabled = false;
+  std::string numeric_filter_field;
+  int numeric_filter_op = 0;  // 1:<  2:<=  3:>  4:>=  5:==  6:!=
+  double numeric_filter_value = 0.0;
   void * bridge_subscription = nullptr;
   void * broker_client = nullptr;
 };

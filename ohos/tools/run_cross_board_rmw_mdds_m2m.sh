@@ -12,19 +12,6 @@ set -euo pipefail
 #   A (mdds): topic pub  / service call / action send_goal   (client/publisher)
 #   B (mdds): topic echo / add_two_ints_server / fibonacci_action_server
 #
-# --- CRITICAL: the LD_PRELOAD rmw-selection fix ----------------------------
-# librmw_fastrtps_cpp.so and the rmw_implementation shim both export the rmw_*
-# symbols (rmw_get_implementation_identifier, ...). In a full ros2 process the
-# fastrtps rmw can land in the global symbol scope ahead of the shim, so rcl's
-# PLT-resolved rmw_get_implementation_identifier() binds to fastrtps directly,
-# bypassing the shim's RMW_IMPLEMENTATION selection -> rcl aborts with
-# "Expected 'rmw_mdds_cpp' but instead found 'rmw_fastrtps_cpp'". Forcing the
-# shim's symbols to the front of the global scope via
-#   LD_PRELOAD=<prefix>/lib/librmw_implementation.so
-# makes the shim win, so it honours RMW_IMPLEMENTATION and loads rmw_mdds. The
-# shim's own deps must be resolvable when the (shell) launcher is exec'd, hence
-# we also export the full LD_LIBRARY_PATH in the outer env.
-#
 # --- Prerequisites (operational) -------------------------------------------
 # * Both boards share an L2 subnet on eth1 (e.g. A=192.168.77.10, B=.11) and the
 #   IPs are re-applied after any reboot (RK3588A eth IPs are not persistent).
@@ -48,8 +35,7 @@ BR="${RMW_MDDS_BRIDGE_LIBRARY:-/data/local/tmp/libmdds_bridge_shared.z.so}"
 LOG=/data/local/tmp/rmw_mdds_m2m
 
 LDP="${PFX}/lib:/data/local/tmp/ohos-prefix/lib:/data/local/tmp/ohos-fastdds/lib:/data/local/release/usr/lib:/system/lib64/platformsdk:/system/lib64/chipset-pub-sdk:/system/lib64"
-PRE="${PFX}/lib/librmw_implementation.so"
-MDDS="LD_LIBRARY_PATH=${LDP} LD_PRELOAD=${PRE} RMW_IMPLEMENTATION=rmw_mdds_cpp RMW_MDDS_BROKER=1 RMW_MDDS_BRIDGE_LIBRARY=${BR}"
+MDDS="HOME=/data/local/tmp ROS_LOG_DIR=${LOG} LD_LIBRARY_PATH=${LDP} RMW_IMPLEMENTATION=rmw_mdds_cpp RMW_MDDS_BROKER=1 RMW_MDDS_BRIDGE_LIBRARY=${BR}"
 
 sh_cap() { timeout 60s "${HDC}" -t "$1" shell "$2" 2>&1 | grep -v "dumped core" || true; }
 # include fibonacci|action_tutorials — a leftover fibonacci_action_server from a prior
@@ -66,6 +52,9 @@ kill_all; sh_cap "$A" "mkdir -p ${LOG}; rm -f ${LOG}/*.log; true" >/dev/null
 sh_cap "$B" "mkdir -p ${LOG}; rm -f ${LOG}/*.log; true" >/dev/null
 sleep 2
 
+PASS_COUNT=0
+FAIL_COUNT=0
+
 # ---- Lane 1: pub/sub (std_msgs/String), A pub -> B echo --------------------
 # `-w 0` skips the CLI wait-for-matching-subscribers gate; the actual match is
 # handled by the bridge (MatchTriggerVisitor) and data flows once matched.
@@ -79,10 +68,13 @@ RX="$(sh_cap "$B" "grep -c dualmdds_ok ${LOG}/echo.log 2>/dev/null")"
 RX="${RX:-0}"; [[ "$RX" =~ ^[0-9]+$ ]] || RX=0
 if [[ "$RX" -eq 40 ]]; then
   echo "RESULT|m2m_pubsub_std_msgs_string|PASS|received=${RX}/40 exact(RELIABLE zero-loss)"
+  PASS_COUNT=$((PASS_COUNT + 1))
 elif [[ "$RX" -ge 38 && "$RX" -le 40 ]]; then
   echo "RESULT|m2m_pubsub_std_msgs_string|PASS|received=${RX}/40 WARN:lost $((40-RX)) in cross-board match-settle"
+  PASS_COUNT=$((PASS_COUNT + 1))
 else
   echo "RESULT|m2m_pubsub_std_msgs_string|FAIL|received=${RX}/40 (want 38-40)"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 # Reuse the broad cleanup (matches python3.12/ros2/topic on both boards): toybox
 # `ps -ef` can truncate the COMMAND column so a narrow 'topic pub'/'topic echo'
@@ -93,7 +85,7 @@ sleep 2
 # ---- Lane 2: service (AddTwoInts), A client -> B server --------------------
 # Capture client output to a file (NOT a pipe): `... | head` triggers SIGPIPE
 # and leaves the CLI hung after the response, masking the PASS.
-sh_cap "$B" "nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/bin/ros2 run demo_nodes_cpp add_two_ints_server > ${LOG}/srv.log 2>&1' >/dev/null 2>&1 & echo s" >/dev/null
+sh_cap "$B" "nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/lib/demo_nodes_cpp/add_two_ints_server > ${LOG}/srv.log 2>&1' >/dev/null 2>&1 & echo s" >/dev/null
 sleep 18
 sh_cap "$A" "nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/bin/ros2 service call /add_two_ints example_interfaces/srv/AddTwoInts \"{a: 41, b: 1}\" > ${LOG}/call.log 2>&1' >/dev/null 2>&1 & echo c" >/dev/null
 sleep 16
@@ -104,8 +96,10 @@ sleep 16
 SUM="$(sh_cap "$A" "grep -c 'sum=42' ${LOG}/call.log 2>/dev/null")"
 if [[ "${SUM:-0}" =~ ^[0-9]+$ && "${SUM:-0}" -gt 0 ]]; then
   echo "RESULT|m2m_service_add_two_ints|PASS|sum=42"
+  PASS_COUNT=$((PASS_COUNT + 1))
 else
   echo "RESULT|m2m_service_add_two_ints|FAIL"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
   echo "--- client call.log ---"; sh_cap "$A" "cat ${LOG}/call.log 2>/dev/null | tail -6"
   echo "--- server srv.log ---";  sh_cap "$B" "cat ${LOG}/srv.log 2>/dev/null | tail -4"
 fi
@@ -117,7 +111,7 @@ sleep 2
 # (feedback/status) at once, all over DSoftBus. PASS iff the goal reaches the
 # terminal SUCCEEDED state (numeric guard, same rationale as lane 2).
 ACT=action_tutorials_interfaces/action/Fibonacci
-sh_cap "$B" "nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/bin/ros2 run action_tutorials_cpp fibonacci_action_server > ${LOG}/asrv.log 2>&1' >/dev/null 2>&1 & echo s" >/dev/null
+sh_cap "$B" "nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/lib/action_tutorials_cpp/fibonacci_action_server > ${LOG}/asrv.log 2>&1' >/dev/null 2>&1 & echo s" >/dev/null
 sleep 20
 sh_cap "$A" "nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/bin/ros2 action send_goal /fibonacci ${ACT} \"{order: 5}\" --feedback > ${LOG}/goal.log 2>&1' >/dev/null 2>&1 & echo g" >/dev/null
 sleep 28
@@ -132,8 +126,16 @@ SEQ="$(printf '%s' "$SEQ_RAW" | tr '\n' ',' | sed 's/,$//')"
 FB="$(sh_cap "$A" "grep -c '^Feedback:' ${LOG}/goal.log 2>/dev/null")"; FB="${FB:-0}"
 if [[ "$SUCC" -ge 1 && "$SEQ" == "0,1,1,2,3,5" ]]; then
   echo "RESULT|m2m_action_fibonacci|PASS|status=SUCCEEDED;sequence=0,1,1,2,3,5;feedback_msgs=${FB}"
+  PASS_COUNT=$((PASS_COUNT + 1))
 else
   echo "RESULT|m2m_action_fibonacci|FAIL|succeeded=${SUCC};sequence=${SEQ:-none};feedback=${FB}"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
   echo "--- client goal.log ---"; sh_cap "$A" "cat ${LOG}/goal.log 2>/dev/null | tail -14"
   echo "--- server asrv.log ---"; sh_cap "$B" "cat ${LOG}/asrv.log 2>/dev/null | tail -4"
 fi
+
+echo "M2M_SUMMARY pass=${PASS_COUNT} fail=${FAIL_COUNT}"
+if [[ "${FAIL_COUNT}" -ne 0 ]]; then
+  exit 1
+fi
+echo "cross_board_rmw_mdds_m2m_ok"

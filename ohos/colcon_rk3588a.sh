@@ -153,6 +153,7 @@ fi
 CMAKE_PREFIX_PATH_CMAKE=""
 CMAKE_PREFIX_PATH_ENV=""
 PACKAGE_DIR_ARGS=()
+declare -A PACKAGE_DIR_SEEN=()
 for prefix_entry in "${PREFIX_PATH_ENTRIES[@]}"; do
   if [[ -d "${prefix_entry}" ]]; then
     if [[ -z "${CMAKE_PREFIX_PATH_CMAKE}" ]]; then
@@ -182,7 +183,10 @@ for prefix_entry in "${PREFIX_PATH_ENTRIES[@]}"; do
         fi
 
         for package_name in "${package_names[@]}"; do
-          PACKAGE_DIR_ARGS+=("-D${package_name}_DIR=${dir}")
+          if [[ -z "${PACKAGE_DIR_SEEN["${package_name}"]+x}" ]]; then
+            PACKAGE_DIR_ARGS+=("-D${package_name}_DIR=${dir}")
+            PACKAGE_DIR_SEEN["${package_name}"]=1
+          fi
         done
       fi
     done
@@ -224,6 +228,25 @@ if [[ -d "${TINYXML2_INCLUDE_DIR_HINT}" && -f "${TINYXML2_LIBRARY_HINT}" ]]; the
     "-DTINYXML2_LIBRARY=${TINYXML2_LIBRARY_HINT}"
   )
 fi
+OVERLAY_PACKAGE_DIR_OVERRIDES=(
+  rmw_implementation
+  rcl
+  rcl_action
+  rcl_lifecycle
+  rclcpp
+  rclcpp_action
+  rclcpp_components
+  rclcpp_lifecycle
+  rmw_mdds_cpp
+  demo_nodes_cpp
+  action_tutorials_cpp
+)
+for package_name in "${OVERLAY_PACKAGE_DIR_OVERRIDES[@]}"; do
+  package_cmake_dir="${INSTALL_BASE}/share/${package_name}/cmake"
+  if [[ -d "${package_cmake_dir}" ]]; then
+    PACKAGE_DIR_ARGS+=("-D${package_name}_DIR=${package_cmake_dir}")
+  fi
+done
 
 export CMAKE_COMMAND="${CMAKE_BIN}"
 export CMAKE_PREFIX_PATH="${INSTALL_BASE}:${CMAKE_PREFIX_PATH_ENV}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
@@ -280,7 +303,7 @@ fi
 if [ -z "\${ROS_LOG_DIR:-}" ]; then
   export ROS_LOG_DIR="/data/local/tmp/roslogs"
 fi
-export LD_LIBRARY_PATH="\${PREFIX}/lib:\${UNDERLAY_PREFIX}/lib:\${FASTDDS_PREFIX}/lib\${VENDOR_LIB_PATH:+:\${VENDOR_LIB_PATH}}\${UNDERLAY_VENDOR_LIB_PATH:+:\${UNDERLAY_VENDOR_LIB_PATH}}:/data/local/tmp:/data/local/release/usr/lib\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH="\${PREFIX}/lib:\${UNDERLAY_PREFIX}/lib:\${FASTDDS_PREFIX}/lib\${VENDOR_LIB_PATH:+:\${VENDOR_LIB_PATH}}\${UNDERLAY_VENDOR_LIB_PATH:+:\${UNDERLAY_VENDOR_LIB_PATH}}:/data/local/tmp:/data/local/release/usr/lib:/system/lib64/platformsdk:/system/lib64/chipset-pub-sdk:/system/lib64\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
 export AMENT_PREFIX_PATH="\${PREFIX}:\${UNDERLAY_PREFIX}\${AMENT_PREFIX_PATH:+:\${AMENT_PREFIX_PATH}}"
 export CMAKE_PREFIX_PATH="\${PREFIX}:\${UNDERLAY_PREFIX}:\${FASTDDS_PREFIX}\${CMAKE_PREFIX_PATH:+:\${CMAKE_PREFIX_PATH}}"
 export COLCON_PREFIX_PATH="\${PREFIX}:\${UNDERLAY_PREFIX}\${COLCON_PREFIX_PATH:+:\${COLCON_PREFIX_PATH}}"
@@ -616,15 +639,19 @@ build_direct_cmake_package() {
   local package_path="$2"
   local package_build_base="${BUILD_BASE}/${package_name}"
   local direct_cmake_prefix_path="${INSTALL_BASE}"
+  local direct_pythonpath="${PYTHONPATH:-}"
 
   if [[ -n "${CMAKE_PREFIX_PATH_CMAKE}" ]]; then
     direct_cmake_prefix_path="${direct_cmake_prefix_path};${CMAKE_PREFIX_PATH_CMAKE}"
+  fi
+  if [[ -d "${TARGET_PURELIB}" ]]; then
+    direct_pythonpath="${direct_pythonpath:+${direct_pythonpath}:}${TARGET_PURELIB}"
   fi
 
   rm -rf "${package_build_base}"
   mkdir -p "${package_build_base}" "${TARGET_PURELIB}"
 
-  PYTHONPATH="${TARGET_PURELIB}:${PYTHONPATH:-}" \
+  PYTHONPATH="${direct_pythonpath}" \
     "${CMAKE_BIN}" -S "${package_path}" -B "${package_build_base}" -G Ninja \
       -DCMAKE_MAKE_PROGRAM="${NINJA_BIN}" \
       -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
@@ -642,7 +669,7 @@ build_direct_cmake_package() {
       -DBUILD_TESTING=OFF \
       "${PACKAGE_DIR_ARGS[@]}"
 
-  PYTHONPATH="${TARGET_PURELIB}:${PYTHONPATH:-}" \
+  PYTHONPATH="${direct_pythonpath}" \
     "${CMAKE_BIN}" --build "${package_build_base}" --target install -- -j"$(nproc)"
 }
 

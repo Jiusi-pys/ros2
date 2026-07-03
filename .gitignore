@@ -6,4 +6,15 @@ log
 # Ignore everything in src except a .gitkeep file
 src/*
 !src/.gitkeep
+
+# rmw_mdds is maintained locally in this workspace rather than by ros2.repos.
+# Keep the files needed to rebuild and test the local integration visible to
+# the manifest repository while leaving other imported sources ignored.
+!src/ros2/
+src/ros2/*
+!src/ros2/rmw_mdds/
+src/ros2/rmw_mdds/*
+!src/ros2/rmw_mdds/rmw_mdds_cpp/
+!src/ros2/rmw_mdds/rmw_mdds_cpp/**
+src/ros2/rmw_mdds/rmw_mdds_cpp/src/log/**
 .deps/

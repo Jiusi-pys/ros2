@@ -18,10 +18,12 @@
 #include <fastcdr/FastBuffer.h>
 #include <fastcdr/exceptions/Exception.h>
 
+#include <cstdint>
 #include <new>
 
 #include "rmw/error_handling.h"
 #include "rosidl_runtime_c/message_initialization.h"
+#include "rosidl_runtime_c/string.h"
 #include "rosidl_runtime_cpp/message_initialization.hpp"
 #include "rosidl_typesupport_fastrtps_c/identifier.h"
 #include "rosidl_typesupport_fastrtps_cpp/identifier.hpp"
@@ -128,6 +130,13 @@ const rosidl_typesupport_introspection_c__MessageMembers * ResolveCMembers(
 
 bool MessageAdapter::Init(const rosidl_message_type_support_t * type_support)
 {
+  type_hash_ = rosidl_get_zero_initialized_type_hash();
+  if (type_support != nullptr && type_support->get_type_hash_func != nullptr) {
+    const rosidl_type_hash_t * type_hash = type_support->get_type_hash_func(type_support);
+    if (type_hash != nullptr) {
+      type_hash_ = *type_hash;
+    }
+  }
   const bool has_legacy_adapter = legacy_adapter_.Init(type_support);
   rmw_reset_error();
   c_members_ = nullptr;
@@ -171,6 +180,11 @@ bool MessageAdapter::IsValid() const
 const std::string & MessageAdapter::TypeName() const
 {
   return type_name_;
+}
+
+const rosidl_type_hash_t & MessageAdapter::TypeHash() const
+{
+  return type_hash_;
 }
 
 const std::string & MessageAdapter::WireTypeName() const
@@ -220,6 +234,55 @@ bool MessageAdapter::EncodeMdds(const void * ros_message, std::vector<uint8_t> *
     return legacy_adapter_.Encode(ros_message, payload);
   }
   return Encode(ros_message, payload);
+}
+
+bool MessageAdapter::EncodedMddsSize(const void * ros_message, size_t * payload_size) const
+{
+  if (payload_size == nullptr) {
+    return false;
+  }
+  if (legacy_adapter_.IsValid()) {
+    return legacy_adapter_.EncodedSize(ros_message, payload_size);
+  }
+  if (ros_message == nullptr || cdr_callbacks_ == nullptr) {
+    return false;
+  }
+  *payload_size = 4u + cdr_callbacks_->get_serialized_size(ros_message);
+  return true;
+}
+
+bool MessageAdapter::EncodeMddsIntoBuffer(
+  const void * ros_message, void * buffer, size_t capacity, size_t * payload_size) const
+{
+  if (payload_size == nullptr) {
+    return false;
+  }
+  if (legacy_adapter_.IsValid()) {
+    return legacy_adapter_.EncodeIntoBuffer(ros_message, buffer, capacity, payload_size);
+  }
+  if (ros_message == nullptr || buffer == nullptr || cdr_callbacks_ == nullptr) {
+    return false;
+  }
+  const size_t required_size = 4u + cdr_callbacks_->get_serialized_size(ros_message);
+  *payload_size = required_size;
+  if (required_size > capacity) {
+    return false;
+  }
+  try {
+    eprosima::fastcdr::FastBuffer fast_buffer(static_cast<char *>(buffer), capacity);
+    eprosima::fastcdr::Cdr serializer(
+      fast_buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, eprosima::fastcdr::CdrVersion::XCDRv1);
+    serializer.set_encoding_flag(eprosima::fastcdr::EncodingAlgorithmFlag::PLAIN_CDR);
+    serializer.serialize_encapsulation();
+    if (!cdr_callbacks_->cdr_serialize(ros_message, serializer)) {
+      return false;
+    }
+    *payload_size = serializer.get_serialized_data_length();
+  } catch (const eprosima::fastcdr::exception::Exception & exception) {
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("Fast CDR serialization failed: %s", exception.what());
+    return false;
+  }
+  return true;
 }
 
 bool MessageAdapter::Decode(const uint8_t * data, size_t len, void * ros_message) const
@@ -302,24 +365,379 @@ bool ReadScalarAsDouble(const uint8_t * field, uint8_t type_id, double * out)
       return false;
   }
 }
+
+bool CppScalarStorageSize(uint8_t type_id, size_t * size)
+{
+  if (size == nullptr) {
+    return false;
+  }
+  namespace ic = rosidl_typesupport_introspection_cpp;
+  switch (type_id) {
+    case ic::ROS_TYPE_FLOAT: *size = sizeof(float); return true;
+    case ic::ROS_TYPE_DOUBLE: *size = sizeof(double); return true;
+    case ic::ROS_TYPE_BOOLEAN: *size = sizeof(bool); return true;
+    case ic::ROS_TYPE_CHAR: *size = sizeof(char); return true;
+    case ic::ROS_TYPE_BYTE: *size = sizeof(uint8_t); return true;
+    case ic::ROS_TYPE_UINT8: *size = sizeof(uint8_t); return true;
+    case ic::ROS_TYPE_INT8: *size = sizeof(int8_t); return true;
+    case ic::ROS_TYPE_WCHAR: *size = sizeof(uint16_t); return true;
+    case ic::ROS_TYPE_UINT16: *size = sizeof(uint16_t); return true;
+    case ic::ROS_TYPE_INT16: *size = sizeof(int16_t); return true;
+    case ic::ROS_TYPE_UINT32: *size = sizeof(uint32_t); return true;
+    case ic::ROS_TYPE_INT32: *size = sizeof(int32_t); return true;
+    case ic::ROS_TYPE_UINT64: *size = sizeof(uint64_t); return true;
+    case ic::ROS_TYPE_INT64: *size = sizeof(int64_t); return true;
+    default:
+      return false;
+  }
+}
+
+bool CScalarStorageSize(uint8_t type_id, size_t * size)
+{
+  if (size == nullptr) {
+    return false;
+  }
+  switch (type_id) {
+    case rosidl_typesupport_introspection_c__ROS_TYPE_FLOAT: *size = sizeof(float); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_DOUBLE: *size = sizeof(double); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_BOOLEAN: *size = sizeof(bool); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_CHAR: *size = sizeof(char); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_BYTE: *size = sizeof(uint8_t); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_UINT8: *size = sizeof(uint8_t); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_INT8: *size = sizeof(int8_t); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_WCHAR: *size = sizeof(uint16_t); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_UINT16: *size = sizeof(uint16_t); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_INT16: *size = sizeof(int16_t); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_UINT32: *size = sizeof(uint32_t); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_INT32: *size = sizeof(int32_t); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_UINT64: *size = sizeof(uint64_t); return true;
+    case rosidl_typesupport_introspection_c__ROS_TYPE_INT64: *size = sizeof(int64_t); return true;
+    default:
+      return false;
+  }
+}
+
+bool SupportsFlatRawLoanedMessageCpp(
+  const rosidl_typesupport_introspection_cpp::MessageMembers * members)
+{
+  if (
+    members == nullptr || members->size_of_ == 0 || members->member_count_ == 0 ||
+    members->init_function == nullptr || members->fini_function == nullptr) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    size_t scalar_size = 0;
+    if (member.is_array_ || !CppScalarStorageSize(member.type_id_, &scalar_size)) {
+      return false;
+    }
+    if (member.offset_ > members->size_of_ || scalar_size > members->size_of_ - member.offset_) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SupportsFlatRawLoanedMessageC(
+  const rosidl_typesupport_introspection_c__MessageMembers * members)
+{
+  if (
+    members == nullptr || members->size_of_ == 0 || members->member_count_ == 0 ||
+    members->init_function == nullptr || members->fini_function == nullptr) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    size_t scalar_size = 0;
+    if (member.is_array_ || !CScalarStorageSize(member.type_id_, &scalar_size)) {
+      return false;
+    }
+    if (member.offset_ > members->size_of_ || scalar_size > members->size_of_ - member.offset_) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SplitFieldPath(const std::string & field_path, std::string * head, std::string * tail)
+{
+  if (field_path.empty() || head == nullptr || tail == nullptr) {
+    return false;
+  }
+  const size_t dot = field_path.find('.');
+  if (dot == std::string::npos) {
+    *head = field_path;
+    tail->clear();
+    return true;
+  }
+  if (dot == 0u || dot + 1u == field_path.size()) {
+    return false;
+  }
+  *head = field_path.substr(0u, dot);
+  *tail = field_path.substr(dot + 1u);
+  return true;
+}
+
+const rosidl_typesupport_introspection_cpp::MessageMembers * NestedCppMembers(
+  const rosidl_typesupport_introspection_cpp::MessageMember & member)
+{
+  namespace ic = rosidl_typesupport_introspection_cpp;
+  if (member.is_array_ || member.type_id_ != ic::ROS_TYPE_MESSAGE || member.members_ == nullptr) {
+    return nullptr;
+  }
+  return ResolveCppMembers(member.members_);
+}
+
+const rosidl_typesupport_introspection_c__MessageMembers * NestedCMembers(
+  const rosidl_typesupport_introspection_c__MessageMember & member)
+{
+  if (
+    member.is_array_ || member.type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE ||
+    member.members_ == nullptr) {
+    return nullptr;
+  }
+  return ResolveCMembers(member.members_);
+}
+
+bool HasNumericFieldCpp(
+  const rosidl_typesupport_introspection_cpp::MessageMembers * members,
+  const std::string & field_path, size_t depth = 0)
+{
+  if (members == nullptr || field_path.empty() || depth > 16u) {
+    return false;
+  }
+  std::string head;
+  std::string tail;
+  if (!SplitFieldPath(field_path, &head, &tail)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    if (member.name_ == nullptr || head != member.name_) {
+      continue;
+    }
+    if (tail.empty()) {
+      return !member.is_array_ && IsNumericIntrospectionType(member.type_id_);
+    }
+    return HasNumericFieldCpp(NestedCppMembers(member), tail, depth + 1u);
+  }
+  return false;
+}
+
+bool HasNumericFieldC(
+  const rosidl_typesupport_introspection_c__MessageMembers * members,
+  const std::string & field_path, size_t depth = 0)
+{
+  if (members == nullptr || field_path.empty() || depth > 16u) {
+    return false;
+  }
+  std::string head;
+  std::string tail;
+  if (!SplitFieldPath(field_path, &head, &tail)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    if (member.name_ == nullptr || head != member.name_) {
+      continue;
+    }
+    if (tail.empty()) {
+      return !member.is_array_ && IsNumericIntrospectionType(member.type_id_);
+    }
+    return HasNumericFieldC(NestedCMembers(member), tail, depth + 1u);
+  }
+  return false;
+}
+
+bool HasStringFieldCpp(
+  const rosidl_typesupport_introspection_cpp::MessageMembers * members,
+  const std::string & field_path, size_t depth = 0)
+{
+  if (members == nullptr || field_path.empty() || depth > 16u) {
+    return false;
+  }
+  std::string head;
+  std::string tail;
+  if (!SplitFieldPath(field_path, &head, &tail)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    if (member.name_ == nullptr || head != member.name_) {
+      continue;
+    }
+    if (tail.empty()) {
+      return !member.is_array_ &&
+             member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING;
+    }
+    return HasStringFieldCpp(NestedCppMembers(member), tail, depth + 1u);
+  }
+  return false;
+}
+
+bool HasStringFieldC(
+  const rosidl_typesupport_introspection_c__MessageMembers * members,
+  const std::string & field_path, size_t depth = 0)
+{
+  if (members == nullptr || field_path.empty() || depth > 16u) {
+    return false;
+  }
+  std::string head;
+  std::string tail;
+  if (!SplitFieldPath(field_path, &head, &tail)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    if (member.name_ == nullptr || head != member.name_) {
+      continue;
+    }
+    if (tail.empty()) {
+      return !member.is_array_ &&
+             member.type_id_ == rosidl_typesupport_introspection_c__ROS_TYPE_STRING;
+    }
+    return HasStringFieldC(NestedCMembers(member), tail, depth + 1u);
+  }
+  return false;
+}
+
+bool ReadNumericFieldCpp(
+  const rosidl_typesupport_introspection_cpp::MessageMembers * members, const uint8_t * base,
+  const std::string & field_path, double * out, size_t depth = 0)
+{
+  if (members == nullptr || base == nullptr || out == nullptr || field_path.empty() || depth > 16u) {
+    return false;
+  }
+  std::string head;
+  std::string tail;
+  if (!SplitFieldPath(field_path, &head, &tail)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    if (member.name_ == nullptr || head != member.name_) {
+      continue;
+    }
+    const uint8_t * field = base + member.offset_;
+    if (tail.empty()) {
+      return !member.is_array_ && ReadScalarAsDouble(field, member.type_id_, out);
+    }
+    return ReadNumericFieldCpp(NestedCppMembers(member), field, tail, out, depth + 1u);
+  }
+  return false;
+}
+
+bool ReadNumericFieldC(
+  const rosidl_typesupport_introspection_c__MessageMembers * members, const uint8_t * base,
+  const std::string & field_path, double * out, size_t depth = 0)
+{
+  if (members == nullptr || base == nullptr || out == nullptr || field_path.empty() || depth > 16u) {
+    return false;
+  }
+  std::string head;
+  std::string tail;
+  if (!SplitFieldPath(field_path, &head, &tail)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    if (member.name_ == nullptr || head != member.name_) {
+      continue;
+    }
+    const uint8_t * field = base + member.offset_;
+    if (tail.empty()) {
+      return !member.is_array_ && ReadScalarAsDouble(field, member.type_id_, out);
+    }
+    return ReadNumericFieldC(NestedCMembers(member), field, tail, out, depth + 1u);
+  }
+  return false;
+}
+
+bool ReadStringFieldCpp(
+  const rosidl_typesupport_introspection_cpp::MessageMembers * members, const uint8_t * base,
+  const std::string & field_path, std::string * out, size_t depth = 0)
+{
+  if (members == nullptr || base == nullptr || out == nullptr || field_path.empty() || depth > 16u) {
+    return false;
+  }
+  std::string head;
+  std::string tail;
+  if (!SplitFieldPath(field_path, &head, &tail)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    if (member.name_ == nullptr || head != member.name_) {
+      continue;
+    }
+    const uint8_t * field = base + member.offset_;
+    if (tail.empty()) {
+      if (
+        member.is_array_ ||
+        member.type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+        return false;
+      }
+      *out = *reinterpret_cast<const std::string *>(field);
+      return true;
+    }
+    return ReadStringFieldCpp(NestedCppMembers(member), field, tail, out, depth + 1u);
+  }
+  return false;
+}
+
+bool ReadStringFieldC(
+  const rosidl_typesupport_introspection_c__MessageMembers * members, const uint8_t * base,
+  const std::string & field_path, std::string * out, size_t depth = 0)
+{
+  if (members == nullptr || base == nullptr || out == nullptr || field_path.empty() || depth > 16u) {
+    return false;
+  }
+  std::string head;
+  std::string tail;
+  if (!SplitFieldPath(field_path, &head, &tail)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    const auto & member = members->members_[i];
+    if (member.name_ == nullptr || head != member.name_) {
+      continue;
+    }
+    const uint8_t * field = base + member.offset_;
+    if (tail.empty()) {
+      if (
+        member.is_array_ ||
+        member.type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_STRING) {
+        return false;
+      }
+      const auto * value = reinterpret_cast<const rosidl_runtime_c__String *>(field);
+      if (value->data == nullptr && value->size != 0u) {
+        return false;
+      }
+      out->assign(value->data == nullptr ? "" : value->data, value->size);
+      return true;
+    }
+    return ReadStringFieldC(NestedCMembers(member), field, tail, out, depth + 1u);
+  }
+  return false;
+}
 }  // namespace
 
 bool MessageAdapter::HasNumericField(const std::string & field_name) const
 {
   if (message_members_kind_ == MessageMembersKind::Cpp && cpp_members_ != nullptr) {
-    for (uint32_t i = 0; i < cpp_members_->member_count_; ++i) {
-      const auto & m = cpp_members_->members_[i];
-      if (m.name_ != nullptr && field_name == m.name_) {
-        return !m.is_array_ && IsNumericIntrospectionType(m.type_id_);
-      }
-    }
+    return HasNumericFieldCpp(cpp_members_, field_name);
   } else if (message_members_kind_ == MessageMembersKind::C && c_members_ != nullptr) {
-    for (uint32_t i = 0; i < c_members_->member_count_; ++i) {
-      const auto & m = c_members_->members_[i];
-      if (m.name_ != nullptr && field_name == m.name_) {
-        return !m.is_array_ && IsNumericIntrospectionType(m.type_id_);
-      }
-    }
+    return HasNumericFieldC(c_members_, field_name);
+  }
+  return false;
+}
+
+bool MessageAdapter::HasStringField(const std::string & field_name) const
+{
+  if (message_members_kind_ == MessageMembersKind::Cpp && cpp_members_ != nullptr) {
+    return HasStringFieldCpp(cpp_members_, field_name);
+  } else if (message_members_kind_ == MessageMembersKind::C && c_members_ != nullptr) {
+    return HasStringFieldC(c_members_, field_name);
   }
   return false;
 }
@@ -332,19 +750,24 @@ bool MessageAdapter::ReadNumericField(
   }
   const uint8_t * base = static_cast<const uint8_t *>(ros_message);
   if (message_members_kind_ == MessageMembersKind::Cpp && cpp_members_ != nullptr) {
-    for (uint32_t i = 0; i < cpp_members_->member_count_; ++i) {
-      const auto & m = cpp_members_->members_[i];
-      if (m.name_ != nullptr && field_name == m.name_ && !m.is_array_) {
-        return ReadScalarAsDouble(base + m.offset_, m.type_id_, out);
-      }
-    }
+    return ReadNumericFieldCpp(cpp_members_, base, field_name, out);
   } else if (message_members_kind_ == MessageMembersKind::C && c_members_ != nullptr) {
-    for (uint32_t i = 0; i < c_members_->member_count_; ++i) {
-      const auto & m = c_members_->members_[i];
-      if (m.name_ != nullptr && field_name == m.name_ && !m.is_array_) {
-        return ReadScalarAsDouble(base + m.offset_, m.type_id_, out);
-      }
-    }
+    return ReadNumericFieldC(c_members_, base, field_name, out);
+  }
+  return false;
+}
+
+bool MessageAdapter::ReadStringField(
+  const void * ros_message, const std::string & field_name, std::string * out) const
+{
+  if (ros_message == nullptr || out == nullptr) {
+    return false;
+  }
+  const uint8_t * base = static_cast<const uint8_t *>(ros_message);
+  if (message_members_kind_ == MessageMembersKind::Cpp && cpp_members_ != nullptr) {
+    return ReadStringFieldCpp(cpp_members_, base, field_name, out);
+  } else if (message_members_kind_ == MessageMembersKind::C && c_members_ != nullptr) {
+    return ReadStringFieldC(c_members_, base, field_name, out);
   }
   return false;
 }
@@ -395,7 +818,81 @@ void MessageAdapter::DestroyMessage(void * message) const
   DestroyTemporaryMessage(message);
 }
 
-void MessageAdapter::DestroyTemporaryMessage(void * message) const
+size_t MessageAdapter::MessageSize() const
+{
+  if (message_members_kind_ == MessageMembersKind::Cpp && cpp_members_ != nullptr) {
+    return cpp_members_->size_of_;
+  }
+  if (message_members_kind_ == MessageMembersKind::C && c_members_ != nullptr) {
+    return c_members_->size_of_;
+  }
+  return 0;
+}
+
+bool MessageAdapter::SupportsRawLoanedMessage() const
+{
+  if (message_members_kind_ == MessageMembersKind::Cpp) {
+    return SupportsFlatRawLoanedMessageCpp(cpp_members_);
+  }
+  if (message_members_kind_ == MessageMembersKind::C) {
+    return SupportsFlatRawLoanedMessageC(c_members_);
+  }
+  return false;
+}
+
+void * MessageAdapter::ConstructMessageInPlace(void * storage, size_t capacity) const
+{
+  if (storage == nullptr) {
+    return nullptr;
+  }
+  const auto address = reinterpret_cast<uintptr_t>(storage);
+  if (address % alignof(std::max_align_t) != 0) {
+    return nullptr;
+  }
+  if (message_members_kind_ == MessageMembersKind::Cpp) {
+    if (
+      cpp_members_ == nullptr || cpp_members_->size_of_ == 0 ||
+      cpp_members_->size_of_ > capacity || cpp_members_->init_function == nullptr ||
+      cpp_members_->fini_function == nullptr) {
+      return nullptr;
+    }
+    try {
+      cpp_members_->init_function(storage, rosidl_runtime_cpp::MessageInitialization::ALL);
+    } catch (...) {
+      return nullptr;
+    }
+    return storage;
+  }
+  if (message_members_kind_ == MessageMembersKind::C) {
+    if (
+      c_members_ == nullptr || c_members_->size_of_ == 0 || c_members_->size_of_ > capacity ||
+      c_members_->init_function == nullptr || c_members_->fini_function == nullptr) {
+      return nullptr;
+    }
+    c_members_->init_function(storage, ROSIDL_RUNTIME_C_MSG_INIT_ALL);
+    return storage;
+  }
+  return nullptr;
+}
+
+void * MessageAdapter::ConstructMessageInPlaceAtEnd(void * storage, size_t capacity) const
+{
+  const size_t message_size = MessageSize();
+  if (storage == nullptr || message_size == 0 || message_size > capacity) {
+    return nullptr;
+  }
+  const uintptr_t begin = reinterpret_cast<uintptr_t>(storage);
+  const uintptr_t end = begin + capacity;
+  constexpr uintptr_t alignment = alignof(std::max_align_t);
+  const uintptr_t aligned_start = (end - message_size) & ~(alignment - 1u);
+  if (aligned_start < begin) {
+    return nullptr;
+  }
+  return ConstructMessageInPlace(
+    reinterpret_cast<void *>(aligned_start), end - aligned_start);
+}
+
+void MessageAdapter::DestroyMessageInPlace(void * message) const
 {
   if (message == nullptr) {
     return;
@@ -407,6 +904,14 @@ void MessageAdapter::DestroyTemporaryMessage(void * message) const
     c_members_->fini_function != nullptr) {
     c_members_->fini_function(message);
   }
+}
+
+void MessageAdapter::DestroyTemporaryMessage(void * message) const
+{
+  if (message == nullptr) {
+    return;
+  }
+  DestroyMessageInPlace(message);
   ::operator delete(message);
 }
 

@@ -35,11 +35,15 @@ public:
   bool Init(const rosidl_message_type_support_t * type_support);
   bool IsValid() const;
   const std::string & TypeName() const;
+  const rosidl_type_hash_t & TypeHash() const;
   const std::string & WireTypeName() const;
   const std::string & MddsTypeName() const;
   bool Encode(const void * ros_message, std::vector<uint8_t> * payload) const;
   bool Decode(const uint8_t * data, size_t len, void * ros_message) const;
   bool EncodeMdds(const void * ros_message, std::vector<uint8_t> * payload) const;
+  bool EncodedMddsSize(const void * ros_message, size_t * payload_size) const;
+  bool EncodeMddsIntoBuffer(
+    const void * ros_message, void * buffer, size_t capacity, size_t * payload_size) const;
   bool DecodeMdds(const uint8_t * data, size_t len, void * ros_message) const;
   bool SerializedToMddsPayload(
     const uint8_t * data, size_t len, std::vector<uint8_t> * payload) const;
@@ -51,13 +55,20 @@ public:
   // returned buffer is owned by the caller until handed to DestroyMessage().
   void * AllocateMessage() const;
   void DestroyMessage(void * message) const;
+  size_t MessageSize() const;
+  bool SupportsRawLoanedMessage() const;
+  void * ConstructMessageInPlace(void * storage, size_t capacity) const;
+  void * ConstructMessageInPlaceAtEnd(void * storage, size_t capacity) const;
+  void DestroyMessageInPlace(void * message) const;
 
-  // Content-filter support for numeric fields (DDS-SQL `field OP number`). HasNumericField reports
-  // whether a top-level numeric scalar member with this name exists (filter validation, no message
-  // needed). ReadNumericField reads such a member from a decoded message into `out` as a double.
-  // Both consult the introspection members; they return false for absent / array / non-numeric fields.
+  // Content-filter support for scalar fields (DDS-SQL `field OP value`). Has*Field reports
+  // whether a scalar member exists at this field path (for example `data`, `layout.data_offset`, or
+  // `header.frame_id`). Read*Field reads such a member from a decoded message into `out`. These
+  // helpers consult introspection members and return false for absent / array / wrong-type fields.
   bool HasNumericField(const std::string & field_name) const;
   bool ReadNumericField(const void * ros_message, const std::string & field_name, double * out) const;
+  bool HasStringField(const std::string & field_name) const;
+  bool ReadStringField(const void * ros_message, const std::string & field_name, std::string * out) const;
 
 private:
   enum class StorageKind
@@ -78,6 +89,7 @@ private:
   void DestroyTemporaryMessage(void * message) const;
 
   std::string type_name_;
+  rosidl_type_hash_t type_hash_ = rosidl_get_zero_initialized_type_hash();
   std::string wire_type_name_;
   StorageKind storage_kind_ = StorageKind::None;
   MessageMembersKind message_members_kind_ = MessageMembersKind::None;

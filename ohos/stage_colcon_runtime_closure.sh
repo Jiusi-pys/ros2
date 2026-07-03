@@ -91,6 +91,10 @@ copy_optional_pydep /usr/lib/python3/dist-packages/pyparsing.py
 copy_optional_pydep /usr/lib/python3/dist-packages/pyparsing-2.4.6.egg-info
 copy_optional_pydep /usr/lib/python3/dist-packages/catkin_pkg
 copy_optional_pydep /usr/lib/python3/dist-packages/catkin_pkg-1.1.0.egg-info
+copy_optional_pydep /usr/lib/python3/dist-packages/rospkg
+copy_optional_pydep /usr/lib/python3/dist-packages/rosdistro
+copy_optional_pydep /usr/lib/python3/dist-packages/rosdistro-1.0.1.egg-info
+copy_optional_pydep /usr/lib/python3.8/distutils
 copy_optional_pydep /usr/lib/python3/dist-packages/em.py
 copy_optional_pydep /usr/lib/python3/dist-packages/empy-3.3.2.egg-info
 copy_optional_pydep /usr/lib/python3/dist-packages/argcomplete
@@ -107,6 +111,88 @@ fi
 if [[ -d "${ROOT_DIR}/build/ohos-ros2/pydeps/lark" || -L "${ROOT_DIR}/build/ohos-ros2/pydeps/lark" ]]; then
   copy_tree_clean "${ROOT_DIR}/build/ohos-ros2/pydeps/lark" "${OVERLAY_SITE}"
 fi
+
+repair_overlay_package_manifests() {
+  local index_dir="${OVERLAY_PREFIX}/share/ament_index/resource_index/packages"
+  local resource
+  local pkg
+  [[ -d "${index_dir}" ]] || return 0
+  for resource in "${index_dir}"/*; do
+    [[ -f "${resource}" ]] || continue
+    pkg="$(basename "${resource}")"
+    if [[ ! -f "${OVERLAY_PREFIX}/share/${pkg}/package.xml" && -f "${UNDERLAY_PREFIX}/share/${pkg}/package.xml" ]]; then
+      mkdir -p "${OVERLAY_PREFIX}/share/${pkg}"
+      rsync -a "${UNDERLAY_PREFIX}/share/${pkg}/package.xml" "${OVERLAY_PREFIX}/share/${pkg}/package.xml"
+    fi
+  done
+}
+
+stage_local_rosdistro_index() {
+  local rosdistro_dir="${OVERLAY_PREFIX}/share/rosdistro"
+  mkdir -p "${rosdistro_dir}/jazzy"
+  python3 - "${rosdistro_dir}" "${UNDERLAY_PREFIX}" "${OVERLAY_PREFIX}" <<'PY'
+import os
+import sys
+import xml.etree.ElementTree as ET
+
+rosdistro_dir = sys.argv[1]
+prefixes = sys.argv[2:]
+
+
+def quote(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+packages = {}
+for prefix in prefixes:
+    index_dir = os.path.join(prefix, 'share', 'ament_index', 'resource_index', 'packages')
+    if not os.path.isdir(index_dir):
+        continue
+    for pkg in sorted(os.listdir(index_dir)):
+        package_xml = os.path.join(prefix, 'share', pkg, 'package.xml')
+        if not os.path.isfile(package_xml):
+            continue
+        try:
+            root = ET.parse(package_xml).getroot()
+            version = (root.findtext('version') or '0.0.0').strip()
+        except ET.ParseError:
+            version = '0.0.0'
+        packages[pkg] = version or '0.0.0'
+
+index_path = os.path.join(rosdistro_dir, 'index-v4.yaml')
+distribution_path = os.path.join(rosdistro_dir, 'jazzy', 'distribution.yaml')
+
+with open(index_path, 'w', encoding='utf-8') as index_file:
+    index_file.write('type: index\n')
+    index_file.write('version: 4\n')
+    index_file.write('distributions:\n')
+    index_file.write('  jazzy:\n')
+    index_file.write('    distribution:\n')
+    index_file.write('    - jazzy/distribution.yaml\n')
+    index_file.write('    distribution_status: active\n')
+    index_file.write('    distribution_type: ros2\n')
+    index_file.write('    python_version: 3\n')
+
+with open(distribution_path, 'w', encoding='utf-8') as distribution_file:
+    distribution_file.write('type: distribution\n')
+    distribution_file.write('version: 2\n')
+    distribution_file.write('release_platforms:\n')
+    distribution_file.write('  ohos:\n')
+    distribution_file.write('  - rk3588a\n')
+    distribution_file.write('repositories:\n')
+    for pkg in sorted(packages):
+        distribution_file.write(f'  {pkg}:\n')
+        distribution_file.write('    release:\n')
+        distribution_file.write('      type: git\n')
+        distribution_file.write(f'      url: https://example.invalid/ros2/{pkg}.git\n')
+        distribution_file.write(f'      version: {quote(packages[pkg])}\n')
+        distribution_file.write('      tags:\n')
+        distribution_file.write("        release: release/{package}/{version}\n")
+PY
+}
+
+repair_overlay_package_manifests
+stage_local_rosdistro_index
 
 rsync -a "${ROOT_DIR}/ohos/python_stubs/psutil.py" "${OVERLAY_SITE}/psutil.py"
 # Prefer the real target numpy staged in the underlay (Alpine musl aarch64 build,

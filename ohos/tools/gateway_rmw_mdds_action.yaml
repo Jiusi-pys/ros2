@@ -1,0 +1,24 @@
+# MDDS<->DDS gateway config for the Fibonacci action feedback/status topics.
+# The 3 action services (send_goal/cancel_goal/get_result) are configured via the
+# MDDS_GATEWAY_SERVICES env (client-side bridges); the 2 action topics are here.
+# Both feedback and status flow server->client, i.e. DDS->MDDS (TO_MDDS).
+mappings:
+  - mddsTopicName: fibonacci/_action/feedback
+    ddsTopicName: /fibonacci/_action/feedback
+    rosTypeName: action_tutorials_interfaces/action/Fibonacci_FeedbackMessage
+    direction: TO_MDDS
+    qos:
+      reliability: RELIABLE
+      durability: VOLATILE
+      history: KEEP_LAST
+      depth: 10
+
+  - mddsTopicName: fibonacci/_action/status
+    ddsTopicName: /fibonacci/_action/status
+    rosTypeName: action_msgs/msg/GoalStatusArray
+    direction: TO_MDDS
+    qos:
+      reliability: RELIABLE
+      durability: TRANSIENT_LOCAL
+      history: KEEP_LAST
+      depth: 10

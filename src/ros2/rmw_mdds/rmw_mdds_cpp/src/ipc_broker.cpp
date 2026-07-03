@@ -14,11 +14,13 @@
 
 #include "ipc_broker.hpp"
 
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <random>
 #include <utility>
@@ -150,6 +152,10 @@ bool IpcBroker::Start(const std::string & socket_path, std::string * error)
           if (!running_.load()) {
             break;
           }
+          // Refresh local clients too. Bridge matched callbacks are the fast
+          // path, but a late or missed callback must not leave wait_for_service
+          // stuck behind a stale broker graph cache.
+          BroadcastGraphUpdate();
           PublishLocalGraph();
         }
       });
@@ -193,6 +199,9 @@ void IpcBroker::Stop()
     std::lock_guard<std::mutex> lock(mutex_);
     listener_.reset();
     for (auto & connection : connections_) {
+      if (connection->fd) {
+        shutdown(connection->fd.get(), SHUT_RDWR);
+      }
       connection->fd.reset();
       DestroyBridgeEndpoints(connection.get());
     }
@@ -347,6 +356,109 @@ bool ShouldPublishBridgePayload(const EndpointDescriptor & source, const SampleM
   }
   return sample.mdds_payload;
 }
+
+bool OffersTransientLocalDurability(const EndpointDescriptor & endpoint)
+{
+  return endpoint.kind == EndpointKind::kPublisher &&
+         endpoint.qos.durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+}
+
+bool RequestsTransientLocalDurability(const EndpointDescriptor & endpoint)
+{
+  return endpoint.kind == EndpointKind::kSubscription &&
+         endpoint.qos.durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+}
+
+size_t TransientLocalHistoryDepth(const rmw_qos_profile_t & qos)
+{
+  if (qos.history == RMW_QOS_POLICY_HISTORY_KEEP_ALL) {
+    return qos.depth == 0u ? std::numeric_limits<size_t>::max() : qos.depth;
+  }
+  return qos.depth == 0u ? 1u : qos.depth;
+}
+
+bool SameRetainedSource(
+  const RetainedSample & retained, const void * owner, uint64_t entity_id)
+{
+  return retained.owner == owner && retained.source.entity_id == entity_id;
+}
+
+void RemoveRetainedSamplesForEndpointLocked(
+  std::vector<RetainedSample> * retained_samples, const void * owner, uint64_t entity_id)
+{
+  if (retained_samples == nullptr) {
+    return;
+  }
+  retained_samples->erase(
+    std::remove_if(
+      retained_samples->begin(), retained_samples->end(),
+      [owner, entity_id](const RetainedSample & retained) {
+        return SameRetainedSource(retained, owner, entity_id);
+      }),
+    retained_samples->end());
+}
+
+void RemoveRetainedSamplesForConnectionLocked(
+  std::vector<RetainedSample> * retained_samples, const void * owner)
+{
+  if (retained_samples == nullptr) {
+    return;
+  }
+  retained_samples->erase(
+    std::remove_if(
+      retained_samples->begin(), retained_samples->end(),
+      [owner](const RetainedSample & retained) {
+        return retained.owner == owner;
+      }),
+    retained_samples->end());
+}
+
+size_t CountRetainedSamplesForSource(
+  const std::vector<RetainedSample> & retained_samples, const void * owner, uint64_t entity_id)
+{
+  return static_cast<size_t>(std::count_if(
+    retained_samples.begin(), retained_samples.end(),
+    [owner, entity_id](const RetainedSample & retained) {
+      return SameRetainedSource(retained, owner, entity_id);
+    }));
+}
+
+void StoreRetainedTransientLocalSampleLocked(
+  std::vector<RetainedSample> * retained_samples, void * owner,
+  const EndpointDescriptor & source, const SampleMessage & sample)
+{
+  if (retained_samples == nullptr || owner == nullptr || !OffersTransientLocalDurability(source)) {
+    return;
+  }
+  const size_t depth = TransientLocalHistoryDepth(source.qos);
+  while (CountRetainedSamplesForSource(*retained_samples, owner, source.entity_id) >= depth) {
+    auto it = std::find_if(
+      retained_samples->begin(), retained_samples->end(),
+      [owner, &source](const RetainedSample & retained) {
+        return SameRetainedSource(retained, owner, source.entity_id);
+      });
+    if (it == retained_samples->end()) {
+      break;
+    }
+    retained_samples->erase(it);
+  }
+  retained_samples->push_back(RetainedSample{owner, source, sample});
+}
+
+bool ShouldReplayRetainedSample(
+  const RetainedSample & retained, const EndpointDescriptor & subscription)
+{
+  if (!RequestsTransientLocalDurability(subscription)) {
+    return false;
+  }
+  if (
+    subscription.ignore_local_publications &&
+    subscription.local_context_id != 0u &&
+    subscription.local_context_id == retained.source.local_context_id) {
+    return false;
+  }
+  return IsMatchingDeliveryTarget(retained.source, subscription);
+}
 }  // namespace
 
 void IpcBroker::AcceptLoop()
@@ -403,6 +515,7 @@ void IpcBroker::ClientLoop(Connection * connection)
   {
     std::lock_guard<std::mutex> lock(mutex_);
     DestroyBridgeEndpoints(connection);
+    RemoveRetainedSamplesForConnectionLocked(&retained_samples_, connection);
     connection->endpoints.clear();
   }
   BroadcastGraphUpdate();
@@ -442,6 +555,7 @@ void IpcBroker::RegisterEndpoint(
   std::string error;
   void * client_match_publisher = nullptr;
   void * sub_match_subscription = nullptr;
+  std::vector<Frame> retained_deliveries;
   if (!DecodeEndpointDescriptor(frame.payload.data(), frame.payload.size(), &endpoint, &error)) {
     SendError(connection, frame.request_id, error);
     return;
@@ -463,6 +577,7 @@ void IpcBroker::RegisterEndpoint(
     } else {
       *it = endpoint;
     }
+    RemoveRetainedSamplesForEndpointLocked(&retained_samples_, connection, endpoint.entity_id);
     auto bridge_it = std::find_if(
       connection->bridge_endpoints.begin(), connection->bridge_endpoints.end(),
       [&endpoint](const Connection::BridgeEndpoint & current) {
@@ -509,6 +624,18 @@ void IpcBroker::RegisterEndpoint(
         connection->bridge_endpoints.push_back(std::move(bridge_endpoint));
       }
     }
+    if (RequestsTransientLocalDurability(endpoint)) {
+      for (const auto & retained : retained_samples_) {
+        if (!ShouldReplayRetainedSample(retained, endpoint)) {
+          continue;
+        }
+        Frame delivery;
+        delivery.kind = MessageKind::kDeliverSample;
+        delivery.request_id = 0u;
+        delivery.payload = EncodeSampleMessage(retained.sample);
+        retained_deliveries.push_back(std::move(delivery));
+      }
+    }
   }
   SendAck(connection, frame.request_id);
   BroadcastGraphUpdate();
@@ -527,6 +654,9 @@ void IpcBroker::RegisterEndpoint(
   if (sub_match_subscription != nullptr) {
     BridgeBackend::Instance().SubscriberSetOnMatched(
       sub_match_subscription, &IpcBroker::OnBridgePublisherMatched, this);
+  }
+  for (const auto & delivery : retained_deliveries) {
+    SendFrame(connection, delivery);
   }
 }
 
@@ -563,6 +693,7 @@ void IpcBroker::PublishSample(Connection * connection, const Frame & frame)
       source_found = true;
     }
     if (source_found) {
+      StoreRetainedTransientLocalSampleLocked(&retained_samples_, connection, source, sample);
       if (bridge_enabled_ && ShouldPublishBridgePayload(source, sample)) {
         auto bridge_it = std::find_if(
           connection->bridge_endpoints.begin(), connection->bridge_endpoints.end(),
@@ -580,6 +711,13 @@ void IpcBroker::PublishSample(Connection * connection, const Frame & frame)
         const bool matches = std::any_of(
           current_connection->endpoints.begin(), current_connection->endpoints.end(),
           [&source](const EndpointDescriptor & endpoint) {
+            if (
+              endpoint.ignore_local_publications &&
+              endpoint.local_context_id != 0u &&
+              endpoint.local_context_id == source.local_context_id &&
+              source.kind == EndpointKind::kPublisher && endpoint.kind == EndpointKind::kSubscription) {
+              return false;
+            }
             return IsMatchingDeliveryTarget(source, endpoint);
           });
         if (matches) {
@@ -670,9 +808,15 @@ void IpcBroker::BroadcastGraphUpdate()
       }
       for (const auto & bridge_endpoint : connection->bridge_endpoints) {
         const EndpointKind kind = bridge_endpoint.endpoint.kind;
-        if (kind == EndpointKind::kClient && bridge_endpoint.bridge_publisher != nullptr &&
-          BridgeBackend::Instance().PublisherSubCount(bridge_endpoint.bridge_publisher) != 0u)
-        {
+        const bool remote_service_request_matched =
+          bridge_endpoint.bridge_publisher != nullptr &&
+          BridgeBackend::Instance().PublisherSubCount(bridge_endpoint.bridge_publisher) != 0u;
+        const bool remote_service_response_matched =
+          bridge_endpoint.bridge_subscription != nullptr &&
+          BridgeBackend::Instance().SubscriberPubCount(bridge_endpoint.bridge_subscription) != 0u;
+        if (
+          kind == EndpointKind::kClient &&
+          (remote_service_request_matched || remote_service_response_matched)) {
           EndpointDescriptor service = bridge_endpoint.endpoint;
           service.kind = EndpointKind::kService;
           endpoints.push_back(std::move(service));

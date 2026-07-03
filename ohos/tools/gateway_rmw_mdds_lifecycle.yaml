@@ -1,0 +1,12 @@
+# Gateway config for the lifecycle lane. The lifecycle services are configured via
+# MDDS_GATEWAY_SERVICES; this bridges the transition_event topic for boot.
+mappings:
+  - mddsTopicName: lc_talker/transition_event
+    ddsTopicName: /lc_talker/transition_event
+    rosTypeName: lifecycle_msgs/msg/TransitionEvent
+    direction: TO_MDDS
+    qos:
+      reliability: RELIABLE
+      durability: VOLATILE
+      history: KEEP_LAST
+      depth: 10

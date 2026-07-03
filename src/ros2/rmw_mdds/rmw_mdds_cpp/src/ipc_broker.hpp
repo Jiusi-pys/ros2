@@ -35,6 +35,13 @@ struct BridgeSample;
 namespace ipc
 {
 
+struct RetainedSample
+{
+  void * owner = nullptr;
+  EndpointDescriptor source;
+  SampleMessage sample;
+};
+
 class IpcBroker
 {
 public:
@@ -87,6 +94,7 @@ private:
   UniqueFd listener_;
   std::thread accept_thread_;
   std::vector<std::unique_ptr<Connection>> connections_;
+  std::vector<RetainedSample> retained_samples_;
   bool bridge_enabled_ = false;
   void * node_sync_subscription_ = nullptr;
   std::vector<EndpointDescriptor> remote_node_endpoints_;

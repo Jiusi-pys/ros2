@@ -1,0 +1,45 @@
+# Unified MDDS<->DDS gateway config for the rmw_mdds<->rmw_fastrtps cross-board
+# pub/sub-class lane matrix. Each mapping bridges one MDDS (DSoftBus) topic with
+# one DDS (rmw_fastrtps) topic. mddsTopicName = rmw_mdds node ROS topic without
+# leading '/'(e.g. ROS '/rt/mx_chatter' -> MDDS 'rt/mx_chatter'); ddsTopicName =
+# stock rmw_fastrtps node ROS topic (rmw mangles '/mx_chatter' -> 'rt/mx_chatter').
+mappings:
+  - mddsTopicName: rt/mx_chatter
+    ddsTopicName: /mx_chatter
+    rosTypeName: std_msgs/msg/String
+    direction: BIDIRECTIONAL
+    qos:
+      reliability: RELIABLE
+      durability: VOLATILE
+      history: KEEP_LAST
+      depth: 10
+
+  - mddsTopicName: rt/mx_pose
+    ddsTopicName: /mx_pose
+    rosTypeName: geometry_msgs/msg/PoseStamped
+    direction: BIDIRECTIONAL
+    qos:
+      reliability: RELIABLE
+      durability: VOLATILE
+      history: KEEP_LAST
+      depth: 10
+
+  - mddsTopicName: rt/mx_be
+    ddsTopicName: /mx_be
+    rosTypeName: std_msgs/msg/String
+    direction: BIDIRECTIONAL
+    qos:
+      reliability: BEST_EFFORT
+      durability: VOLATILE
+      history: KEEP_LAST
+      depth: 10
+
+  - mddsTopicName: rt/mx_tf
+    ddsTopicName: /mx_tf
+    rosTypeName: tf2_msgs/msg/TFMessage
+    direction: BIDIRECTIONAL
+    qos:
+      reliability: RELIABLE
+      durability: VOLATILE
+      history: KEEP_LAST
+      depth: 10

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <limits>
 
@@ -60,6 +61,13 @@ bool SameTopicAndType(const PublisherData * publisher, const SubscriptionData * 
          publisher->adapter.TypeName() == subscription->adapter.TypeName();
 }
 
+bool SameTopicDifferentType(const PublisherData * publisher, const SubscriptionData * subscription)
+{
+  return publisher != nullptr && subscription != nullptr &&
+         publisher->topic_name == subscription->topic_name &&
+         publisher->adapter.TypeName() != subscription->adapter.TypeName();
+}
+
 // Identify the QoS policy on which a subscription's request is incompatible with a publisher's offer,
 // for the incompatible-QoS event's last_policy_kind. The rmw_dds_common check is authoritative on
 // WHETHER the pair is incompatible (a hard ERROR, not just a warning); the policy mapping below is a
@@ -99,12 +107,20 @@ rmw_qos_policy_kind_t IncompatibleQosPolicyKind(
   return RMW_QOS_POLICY_DEADLINE;  // remaining hard-incompatibility cause is the deadline period
 }
 
+bool SameTopicTypeAndCompatibleQos(
+  const PublisherData * publisher, const SubscriptionData * subscription)
+{
+  return SameTopicAndType(publisher, subscription) &&
+         IncompatibleQosPolicyKind(publisher->actual_qos, subscription->actual_qos) ==
+           RMW_QOS_POLICY_INVALID;
+}
+
 size_t CountMatchingSubscriptionsLocked(const PublisherData * publisher)
 {
   return static_cast<size_t>(std::count_if(
     g_subscriptions.begin(), g_subscriptions.end(),
     [publisher](const SubscriptionData * subscription) {
-      return SameTopicAndType(publisher, subscription);
+      return SameTopicTypeAndCompatibleQos(publisher, subscription);
     }));
 }
 
@@ -112,7 +128,7 @@ size_t CountMatchingPublishersLocked(const SubscriptionData * subscription)
 {
   return static_cast<size_t>(std::count_if(
     g_publishers.begin(), g_publishers.end(), [subscription](const PublisherData * publisher) {
-      return SameTopicAndType(publisher, subscription);
+      return SameTopicTypeAndCompatibleQos(publisher, subscription);
     }));
 }
 
@@ -205,6 +221,23 @@ void AccrueIncompatibleQosLocked(
     subscription->requested_qos_incompatible_callback_user_data, 1);
 }
 
+void AccrueIncompatibleTypeLocked(
+  PublisherData * publisher, SubscriptionData * subscription,
+  std::vector<CallbackInvocation> * callbacks)
+{
+  if (!SameTopicDifferentType(publisher, subscription)) {
+    return;
+  }
+  ++publisher->offered_incompatible_type_total;
+  ++subscription->requested_incompatible_type_total;
+  AddCallbackInvocation(
+    callbacks, publisher->offered_incompatible_type_callback,
+    publisher->offered_incompatible_type_callback_user_data, 1);
+  AddCallbackInvocation(
+    callbacks, subscription->requested_incompatible_type_callback,
+    subscription->requested_incompatible_type_callback_user_data, 1);
+}
+
 void FillMatchedStatus(
   size_t current_count, size_t total_count, size_t * last_total_count,
   size_t * last_current_count, rmw_matched_status_t * status)
@@ -288,6 +321,7 @@ TopicEndpointInfo MakePublisherEndpointInfo(const PublisherData * publisher)
   info.node_name = publisher->node_name;
   info.node_namespace = publisher->node_namespace;
   info.topic_type = publisher->adapter.TypeName();
+  info.topic_type_hash = publisher->adapter.TypeHash();
   info.endpoint_type = RMW_ENDPOINT_PUBLISHER;
   FillEndpointGid(publisher, publisher->topic_name, 0, &info.gid);
   info.qos_profile = publisher->actual_qos;
@@ -303,74 +337,11 @@ TopicEndpointInfo MakeSubscriptionEndpointInfo(const SubscriptionData * subscrip
   info.node_name = subscription->node_name;
   info.node_namespace = subscription->node_namespace;
   info.topic_type = subscription->adapter.TypeName();
+  info.topic_type_hash = subscription->adapter.TypeHash();
   info.endpoint_type = RMW_ENDPOINT_SUBSCRIPTION;
   FillEndpointGid(subscription, subscription->topic_name, 0x5a, &info.gid);
   info.qos_profile = subscription->actual_qos;
   return info;
-}
-
-std::string RemoveAsciiWhitespace(const char * expression)
-{
-  if (expression == nullptr) {
-    return {};
-  }
-  std::string compact;
-  for (const unsigned char ch : std::string(expression)) {
-    if (!std::isspace(ch)) {
-      compact.push_back(static_cast<char>(ch));
-    }
-  }
-  return compact;
-}
-
-bool IsSupportedStringContentFilter(
-  const SubscriptionData & subscription, const char * filter_expression,
-  const rcutils_string_array_t & expression_parameters)
-{
-  if (subscription.adapter.TypeName() != "std_msgs/msg/String") {
-    RMW_SET_ERROR_MSG("content filters are currently supported only for std_msgs/msg/String");
-    return false;
-  }
-  if (RemoveAsciiWhitespace(filter_expression) != "data=%0") {
-    RMW_SET_ERROR_MSG("content filter expression is not supported");
-    return false;
-  }
-  if (
-    expression_parameters.size != 1 || expression_parameters.data == nullptr ||
-    expression_parameters.data[0] == nullptr) {
-    RMW_SET_ERROR_MSG("content filter expression requires one parameter");
-    return false;
-  }
-  return true;
-}
-
-uint32_t ReadLeUint32(const uint8_t * data)
-{
-  return static_cast<uint32_t>(data[0]) |
-         (static_cast<uint32_t>(data[1]) << 8u) |
-         (static_cast<uint32_t>(data[2]) << 16u) |
-         (static_cast<uint32_t>(data[3]) << 24u);
-}
-
-bool DecodeCdrStringPayload(const std::vector<uint8_t> & payload, std::string * value)
-{
-  if (value == nullptr || payload.size() < 8u) {
-    return false;
-  }
-  const bool little_endian_plain_cdr =
-    payload[0] == 0u && payload[1] == 1u && payload[2] == 0u && payload[3] == 0u;
-  if (!little_endian_plain_cdr) {
-    return false;
-  }
-  const uint32_t encoded_size = ReadLeUint32(payload.data() + 4u);
-  if (encoded_size == 0u || payload.size() < 8u + encoded_size ||
-    payload[8u + encoded_size - 1u] != 0u) {
-    return false;
-  }
-  value->assign(
-    reinterpret_cast<const char *>(payload.data() + 8u),
-    static_cast<size_t>(encoded_size - 1u));
-  return true;
 }
 
 std::string TrimAsciiWhitespace(const std::string & value)
@@ -386,42 +357,681 @@ std::string TrimAsciiWhitespace(const std::string & value)
   return value.substr(begin, end - begin);
 }
 
-// Parse a numeric content-filter expression "<field> <op> <value>" (a DDS-SQL subset). `value` is a
-// numeric literal or a %N placeholder substituted from `parameters`. Recognized operators: < <= > >=
-// = == != <>. Returns false (with no side effects) for anything else.
-bool TryParseNumericFilter(
-  const std::string & expression, const std::vector<std::string> & parameters, std::string * field,
-  int * op, double * value)
+bool HasBalancedEnclosingParentheses(const std::string & expression)
 {
-  size_t i = 0;
-  while (i < expression.size() && expression[i] != '<' && expression[i] != '>' &&
-    expression[i] != '=' && expression[i] != '!')
-  {
-    ++i;
-  }
-  if (i == expression.size()) {
+  if (expression.size() < 2u || expression.front() != '(' || expression.back() != ')') {
     return false;
   }
-  const std::string two = expression.substr(i, 2);
-  int code = 0;
-  size_t op_len = 1;
-  if (two == "<=") { code = 2; op_len = 2; }
-  else if (two == ">=") { code = 4; op_len = 2; }
-  else if (two == "==") { code = 5; op_len = 2; }
-  else if (two == "!=") { code = 6; op_len = 2; }
-  else if (two == "<>") { code = 6; op_len = 2; }
-  else if (expression[i] == '<') { code = 1; }
-  else if (expression[i] == '>') { code = 3; }
-  else if (expression[i] == '=') { code = 5; }
-  else { return false; }  // a lone '!' is not a valid operator
+  int depth = 0;
+  bool inside_string_literal = false;
+  for (size_t i = 0; i < expression.size(); ++i) {
+    const char ch = expression[i];
+    if (ch == '\'') {
+      if (inside_string_literal && i + 1 < expression.size() && expression[i + 1] == '\'') {
+        ++i;
+        continue;
+      }
+      inside_string_literal = !inside_string_literal;
+      continue;
+    }
+    if (inside_string_literal) {
+      continue;
+    }
+    if (ch == '(') {
+      ++depth;
+      continue;
+    }
+    if (ch != ')') {
+      continue;
+    }
+    --depth;
+    if (depth < 0 || (depth == 0 && i + 1 < expression.size())) {
+      return false;
+    }
+  }
+  return depth == 0 && !inside_string_literal;
+}
 
-  std::string lhs = TrimAsciiWhitespace(expression.substr(0, i));
-  std::string rhs = TrimAsciiWhitespace(expression.substr(i + op_len));
+std::string TrimEnclosingParentheses(std::string expression)
+{
+  expression = TrimAsciiWhitespace(expression);
+  while (HasBalancedEnclosingParentheses(expression)) {
+    expression = TrimAsciiWhitespace(expression.substr(1u, expression.size() - 2u));
+  }
+  return expression;
+}
+
+bool ParseSingleQuotedStringLiteral(const std::string & value, std::string * parsed)
+{
+  if (parsed == nullptr || value.size() < 2u || value.front() != '\'' || value.back() != '\'') {
+    return false;
+  }
+  parsed->clear();
+  for (size_t i = 1; i + 1 < value.size(); ++i) {
+    if (value[i] != '\'') {
+      parsed->push_back(value[i]);
+      continue;
+    }
+    if (i + 2 < value.size() && value[i + 1] == '\'') {
+      parsed->push_back('\'');
+      ++i;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+bool ParseStringFilterValue(
+  const std::string & value, const rcutils_string_array_t & expression_parameters,
+  std::string * parsed_value)
+{
+  if (parsed_value == nullptr || value.empty()) {
+    return false;
+  }
+  if (value[0] == '%') {
+    size_t consumed = 0;
+    long parameter_index = -1;
+    try {
+      parameter_index = std::stol(value.substr(1), &consumed);
+    } catch (...) {
+      return false;
+    }
+    if (
+      consumed != value.size() - 1u || parameter_index < 0 ||
+      static_cast<size_t>(parameter_index) >= expression_parameters.size ||
+      expression_parameters.data == nullptr ||
+      expression_parameters.data[parameter_index] == nullptr) {
+      RMW_SET_ERROR_MSG("content filter expression parameter is invalid");
+      return false;
+    }
+    *parsed_value = expression_parameters.data[parameter_index];
+    return true;
+  }
+  if (ParseSingleQuotedStringLiteral(value, parsed_value)) {
+    return true;
+  }
+  return false;
+}
+
+bool FindTopLevelAsciiWordOperator(
+  const std::string & expression, const char * word, size_t * word_pos);
+
+bool ParseLikeEscapeClause(
+  const std::string & rhs, const rcutils_string_array_t & expression_parameters,
+  std::string * pattern_expression, char * escape_char)
+{
+  if (pattern_expression == nullptr || escape_char == nullptr) {
+    return false;
+  }
+  *pattern_expression = rhs;
+  *escape_char = '\\';
+
+  size_t escape_pos = std::string::npos;
+  if (!FindTopLevelAsciiWordOperator(rhs, "ESCAPE", &escape_pos)) {
+    return true;
+  }
+
+  const std::string pattern = TrimAsciiWhitespace(rhs.substr(0, escape_pos));
+  const std::string escape_expression =
+    TrimAsciiWhitespace(rhs.substr(escape_pos + std::strlen("ESCAPE")));
+  if (pattern.empty() || escape_expression.empty()) {
+    return false;
+  }
+
+  std::string parsed_escape;
+  if (!ParseStringFilterValue(escape_expression, expression_parameters, &parsed_escape)) {
+    return false;
+  }
+  if (parsed_escape.size() != 1u) {
+    RMW_SET_ERROR_MSG("LIKE ESCAPE clause must resolve to one character");
+    return false;
+  }
+
+  *pattern_expression = pattern;
+  *escape_char = parsed_escape[0];
+  return true;
+}
+
+bool IsAsciiWordOperatorAt(const std::string & expression, size_t pos, const char * word)
+{
+  const size_t len = std::strlen(word);
+  if (pos + len > expression.size()) {
+    return false;
+  }
+  if (pos > 0 && !std::isspace(static_cast<unsigned char>(expression[pos - 1]))) {
+    return false;
+  }
+  if (pos + len < expression.size() &&
+    !std::isspace(static_cast<unsigned char>(expression[pos + len])))
+  {
+    return false;
+  }
+  for (size_t i = 0; i < len; ++i) {
+    const auto actual = static_cast<unsigned char>(expression[pos + i]);
+    const auto expected = static_cast<unsigned char>(word[i]);
+    if (std::tolower(actual) != std::tolower(expected)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool TryStripUnaryNot(const std::string & expression, std::string * operand)
+{
+  if (operand == nullptr || !IsAsciiWordOperatorAt(expression, 0u, "NOT")) {
+    return false;
+  }
+  *operand = TrimEnclosingParentheses(expression.substr(std::strlen("NOT")));
+  return !operand->empty();
+}
+
+bool FindTopLevelAsciiWordOperator(
+  const std::string & expression, const char * word, size_t * word_pos)
+{
+  if (word == nullptr || word[0] == '\0' || word_pos == nullptr) {
+    return false;
+  }
+  bool inside_string_literal = false;
+  int parentheses_depth = 0;
+  for (size_t i = 0; i < expression.size(); ++i) {
+    if (expression[i] == '\'') {
+      if (inside_string_literal && i + 1 < expression.size() && expression[i + 1] == '\'') {
+        ++i;
+        continue;
+      }
+      inside_string_literal = !inside_string_literal;
+      continue;
+    }
+    if (inside_string_literal) {
+      continue;
+    }
+    if (expression[i] == '(') {
+      ++parentheses_depth;
+      continue;
+    }
+    if (expression[i] == ')') {
+      --parentheses_depth;
+      if (parentheses_depth < 0) {
+        return false;
+      }
+      continue;
+    }
+    if (parentheses_depth == 0 && IsAsciiWordOperatorAt(expression, i, word)) {
+      *word_pos = i;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool EndsWithAsciiWord(const std::string & expression, const char * word, size_t * word_pos)
+{
+  const size_t len = std::strlen(word);
+  if (expression.size() < len) {
+    return false;
+  }
+  const size_t pos = expression.size() - len;
+  if (pos > 0 && !std::isspace(static_cast<unsigned char>(expression[pos - 1]))) {
+    return false;
+  }
+  for (size_t i = 0; i < len; ++i) {
+    const auto actual = static_cast<unsigned char>(expression[pos + i]);
+    const auto expected = static_cast<unsigned char>(word[i]);
+    if (std::tolower(actual) != std::tolower(expected)) {
+      return false;
+    }
+  }
+  if (word_pos != nullptr) {
+    *word_pos = pos;
+  }
+  return true;
+}
+
+bool SplitStringFilterList(const std::string & expression, std::vector<std::string> * terms)
+{
+  if (terms == nullptr) {
+    return false;
+  }
+  terms->clear();
+  size_t term_begin = 0;
+  bool inside_string_literal = false;
+  int parentheses_depth = 0;
+  for (size_t i = 0; i < expression.size(); ++i) {
+    if (expression[i] == '\'') {
+      if (inside_string_literal && i + 1 < expression.size() && expression[i + 1] == '\'') {
+        ++i;
+        continue;
+      }
+      inside_string_literal = !inside_string_literal;
+      continue;
+    }
+    if (inside_string_literal) {
+      continue;
+    }
+    if (expression[i] == '(') {
+      ++parentheses_depth;
+      continue;
+    }
+    if (expression[i] == ')') {
+      --parentheses_depth;
+      if (parentheses_depth < 0) {
+        return false;
+      }
+      continue;
+    }
+    if (expression[i] != ',' || parentheses_depth != 0) {
+      continue;
+    }
+    const std::string term = TrimAsciiWhitespace(expression.substr(term_begin, i - term_begin));
+    if (term.empty()) {
+      return false;
+    }
+    terms->push_back(term);
+    term_begin = i + 1u;
+  }
+  if (parentheses_depth != 0 || inside_string_literal) {
+    return false;
+  }
+  const std::string last_term = TrimAsciiWhitespace(expression.substr(term_begin));
+  if (last_term.empty()) {
+    return false;
+  }
+  terms->push_back(last_term);
+  return true;
+}
+
+bool SplitStringFilterOperator(
+  const std::string & expression, const char * operator_word, std::vector<std::string> * terms)
+{
+  if (operator_word == nullptr || operator_word[0] == '\0' || terms == nullptr) {
+    return false;
+  }
+  terms->clear();
+  size_t term_begin = 0;
+  bool inside_string_literal = false;
+  int parentheses_depth = 0;
+  for (size_t i = 0; i < expression.size(); ++i) {
+    if (expression[i] == '\'') {
+      if (inside_string_literal && i + 1 < expression.size() && expression[i + 1] == '\'') {
+        ++i;
+        continue;
+      }
+      inside_string_literal = !inside_string_literal;
+      continue;
+    }
+    if (!inside_string_literal && IsAsciiWordOperatorAt(expression, i, operator_word)) {
+      if (parentheses_depth != 0) {
+        continue;
+      }
+      const std::string term = TrimAsciiWhitespace(expression.substr(term_begin, i - term_begin));
+      if (term.empty()) {
+        return false;
+      }
+      terms->push_back(term);
+      i += std::strlen(operator_word) - 1u;
+      term_begin = i + 1u;
+      continue;
+    }
+    if (inside_string_literal) {
+      continue;
+    }
+    if (expression[i] == '(') {
+      ++parentheses_depth;
+      continue;
+    }
+    if (expression[i] == ')') {
+      --parentheses_depth;
+      if (parentheses_depth < 0) {
+        return false;
+      }
+    }
+  }
+  if (parentheses_depth != 0 || inside_string_literal) {
+    return false;
+  }
+  const std::string last_term = TrimAsciiWhitespace(expression.substr(term_begin));
+  if (last_term.empty()) {
+    return false;
+  }
+  terms->push_back(last_term);
+  return true;
+}
+
+bool TryParseStringContentFilterInDnf(
+  const std::string & expression, const rcutils_string_array_t & expression_parameters,
+  std::vector<std::vector<StringContentFilterClause>> * disjunctions)
+{
+  if (disjunctions == nullptr) {
+    return false;
+  }
+  const std::string normalized_expression = TrimEnclosingParentheses(expression);
+  size_t in_pos = std::string::npos;
+  if (!FindTopLevelAsciiWordOperator(normalized_expression, "IN", &in_pos)) {
+    return false;
+  }
+  std::string lhs = TrimAsciiWhitespace(normalized_expression.substr(0, in_pos));
+  size_t not_pos = std::string::npos;
+  const bool negated = EndsWithAsciiWord(lhs, "NOT", &not_pos);
+  if (negated) {
+    lhs = TrimAsciiWhitespace(lhs.substr(0, not_pos));
+  }
+  const std::string rhs = TrimAsciiWhitespace(normalized_expression.substr(in_pos + 2u));
+  if (lhs.empty() || !HasBalancedEnclosingParentheses(rhs)) {
+    return false;
+  }
+  const std::string list_expression = rhs.substr(1u, rhs.size() - 2u);
+  std::vector<std::string> terms;
+  if (!SplitStringFilterList(list_expression, &terms)) {
+    return false;
+  }
+
+  std::vector<std::vector<StringContentFilterClause>> parsed_disjunctions;
+  std::vector<StringContentFilterClause> not_in_conjunction;
+  for (const auto & term : terms) {
+    std::string parsed_value;
+    if (!ParseStringFilterValue(
+        TrimEnclosingParentheses(term), expression_parameters, &parsed_value)) {
+      return false;
+    }
+    StringContentFilterClause clause;
+    clause.field = lhs;
+    clause.op = negated ? 6 : 1;
+    clause.value = std::move(parsed_value);
+    if (negated) {
+      not_in_conjunction.push_back(std::move(clause));
+    } else {
+      parsed_disjunctions.push_back({std::move(clause)});
+    }
+  }
+  if (negated) {
+    parsed_disjunctions.push_back(std::move(not_in_conjunction));
+  }
+  *disjunctions = std::move(parsed_disjunctions);
+  return !disjunctions->empty();
+}
+
+bool SplitStringFilterConjunction(const std::string & expression, std::vector<std::string> * terms)
+{
+  return SplitStringFilterOperator(expression, "AND", terms);
+}
+
+bool SplitStringFilterDisjunction(const std::string & expression, std::vector<std::string> * terms)
+{
+  return SplitStringFilterOperator(expression, "OR", terms);
+}
+
+bool TryParseStringContentFilterClause(
+  const std::string & expression, const rcutils_string_array_t & expression_parameters,
+  StringContentFilterClause * clause)
+{
+  if (clause == nullptr) {
+    return false;
+  }
+  const std::string normalized_expression = TrimEnclosingParentheses(expression);
+  size_t op_pos = std::string::npos;
+  int parsed_op = 0;
+  size_t op_len = 0;
+  for (size_t i = 0; i < normalized_expression.size(); ++i) {
+    const std::string two = normalized_expression.substr(i, 2);
+    if (two == "==") {
+      parsed_op = 1;
+      op_len = 2;
+    } else if (two == "!=" || two == "<>") {
+      parsed_op = 6;
+      op_len = 2;
+    } else if (IsAsciiWordOperatorAt(normalized_expression, i, "LIKE")) {
+      parsed_op = 7;
+      op_len = 4;
+    } else if (normalized_expression[i] == '=') {
+      parsed_op = 1;
+      op_len = 1;
+    } else {
+      continue;
+    }
+    op_pos = i;
+    break;
+  }
+  if (op_pos == std::string::npos) {
+    return false;
+  }
+  std::string lhs = TrimAsciiWhitespace(normalized_expression.substr(0, op_pos));
+  std::string rhs = TrimEnclosingParentheses(
+    normalized_expression.substr(op_pos + op_len));
+  char escape_char = '\\';
+  if (parsed_op == 7) {
+    size_t not_pos = std::string::npos;
+    if (EndsWithAsciiWord(lhs, "NOT", &not_pos)) {
+      lhs = TrimAsciiWhitespace(lhs.substr(0, not_pos));
+      parsed_op = 8;
+    }
+    std::string pattern_expression;
+    if (!ParseLikeEscapeClause(rhs, expression_parameters, &pattern_expression, &escape_char)) {
+      return false;
+    }
+    rhs = std::move(pattern_expression);
+  }
   if (lhs.empty() || rhs.empty()) {
     return false;
   }
-  if (rhs[0] == '%') {
-    const std::string index_text = rhs.substr(1);
+
+  std::string parsed_value;
+  if (!ParseStringFilterValue(rhs, expression_parameters, &parsed_value)) {
+    return false;
+  }
+
+  clause->field = lhs;
+  clause->op = parsed_op;
+  clause->value = std::move(parsed_value);
+  clause->escape_char = escape_char;
+  return true;
+}
+
+bool InvertStringContentFilterClause(StringContentFilterClause * clause)
+{
+  if (clause == nullptr) {
+    return false;
+  }
+  switch (clause->op) {
+    case 1: clause->op = 6; return true;
+    case 6: clause->op = 1; return true;
+    case 7: clause->op = 8; return true;
+    case 8: clause->op = 7; return true;
+    default: return false;
+  }
+}
+
+bool NegateStringContentFilterDnf(
+  const std::vector<std::vector<StringContentFilterClause>> & source_disjunctions,
+  std::vector<std::vector<StringContentFilterClause>> * negated_disjunctions)
+{
+  if (negated_disjunctions == nullptr || source_disjunctions.empty()) {
+    return false;
+  }
+  std::vector<std::vector<StringContentFilterClause>> combinations(1u);
+  for (const auto & disjunct : source_disjunctions) {
+    if (disjunct.empty()) {
+      return false;
+    }
+    std::vector<std::vector<StringContentFilterClause>> next_combinations;
+    for (const auto & clause : disjunct) {
+      StringContentFilterClause inverted_clause = clause;
+      if (!InvertStringContentFilterClause(&inverted_clause)) {
+        return false;
+      }
+      for (const auto & combination : combinations) {
+        auto merged = combination;
+        merged.push_back(inverted_clause);
+        next_combinations.push_back(std::move(merged));
+      }
+    }
+    combinations = std::move(next_combinations);
+  }
+  *negated_disjunctions = std::move(combinations);
+  return !negated_disjunctions->empty();
+}
+
+bool TryParseStringContentFilterDnf(
+  const std::string & expression, const rcutils_string_array_t & expression_parameters,
+  std::vector<std::vector<StringContentFilterClause>> * disjunctions)
+{
+  if (disjunctions == nullptr) {
+    return false;
+  }
+  const std::string normalized_expression = TrimEnclosingParentheses(expression);
+  if (normalized_expression.empty()) {
+    return false;
+  }
+
+  std::string negated_expression;
+  if (TryStripUnaryNot(normalized_expression, &negated_expression)) {
+    std::vector<std::vector<StringContentFilterClause>> nested_disjunctions;
+    if (!TryParseStringContentFilterDnf(
+        negated_expression, expression_parameters, &nested_disjunctions))
+    {
+      return false;
+    }
+    return NegateStringContentFilterDnf(nested_disjunctions, disjunctions);
+  }
+
+  std::vector<std::string> disjuncts;
+  if (!SplitStringFilterDisjunction(normalized_expression, &disjuncts)) {
+    RMW_SET_ERROR_MSG("unsupported string content filter disjunction");
+    return false;
+  }
+  if (disjuncts.size() > 1u) {
+    std::vector<std::vector<StringContentFilterClause>> parsed_disjunctions;
+    for (const auto & disjunct : disjuncts) {
+      std::vector<std::vector<StringContentFilterClause>> nested_disjunctions;
+      if (!TryParseStringContentFilterDnf(disjunct, expression_parameters, &nested_disjunctions)) {
+        return false;
+      }
+      parsed_disjunctions.insert(
+        parsed_disjunctions.end(), nested_disjunctions.begin(), nested_disjunctions.end());
+    }
+    *disjunctions = std::move(parsed_disjunctions);
+    return !disjunctions->empty();
+  }
+
+  std::vector<std::string> terms;
+  if (!SplitStringFilterConjunction(normalized_expression, &terms)) {
+    RMW_SET_ERROR_MSG("unsupported string content filter conjunction");
+    return false;
+  }
+  if (terms.size() > 1u) {
+    std::vector<std::vector<StringContentFilterClause>> combinations(1u);
+    for (const auto & term : terms) {
+      std::vector<std::vector<StringContentFilterClause>> term_disjunctions;
+      if (!TryParseStringContentFilterDnf(term, expression_parameters, &term_disjunctions)) {
+        return false;
+      }
+      std::vector<std::vector<StringContentFilterClause>> next_combinations;
+      for (const auto & combination : combinations) {
+        for (const auto & term_group : term_disjunctions) {
+          auto merged = combination;
+          merged.insert(merged.end(), term_group.begin(), term_group.end());
+          next_combinations.push_back(std::move(merged));
+        }
+      }
+      combinations = std::move(next_combinations);
+    }
+    *disjunctions = std::move(combinations);
+    return !disjunctions->empty();
+  }
+
+  std::vector<std::vector<StringContentFilterClause>> in_disjunctions;
+  if (TryParseStringContentFilterInDnf(
+      normalized_expression, expression_parameters, &in_disjunctions)) {
+    *disjunctions = std::move(in_disjunctions);
+    return !disjunctions->empty();
+  }
+
+  StringContentFilterClause clause;
+  if (!TryParseStringContentFilterClause(normalized_expression, expression_parameters, &clause)) {
+    if (rmw_get_error_string().str == nullptr || rmw_get_error_string().str[0] == '\0') {
+      RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
+        "unsupported string content filter clause: %s", normalized_expression.c_str());
+    }
+    return false;
+  }
+  *disjunctions = {{std::move(clause)}};
+  return true;
+}
+
+bool TryParseStringContentFilter(
+  const char * filter_expression, const rcutils_string_array_t & expression_parameters,
+  std::vector<StringContentFilterClause> * string_filter_clauses,
+  std::vector<std::vector<StringContentFilterClause>> * string_filter_disjunctions)
+{
+  if (
+    filter_expression == nullptr || string_filter_clauses == nullptr ||
+    string_filter_disjunctions == nullptr) {
+    return false;
+  }
+  std::vector<std::vector<StringContentFilterClause>> parsed_disjunctions;
+  if (!TryParseStringContentFilterDnf(
+      filter_expression, expression_parameters, &parsed_disjunctions) ||
+    parsed_disjunctions.empty())
+  {
+    return false;
+  }
+  *string_filter_clauses = parsed_disjunctions.front();
+  *string_filter_disjunctions = std::move(parsed_disjunctions);
+  return true;
+}
+
+bool StringContentFilterFieldsAreSupported(
+  const MessageAdapter & adapter,
+  const std::vector<std::vector<StringContentFilterClause>> & string_filter_disjunctions)
+{
+  if (string_filter_disjunctions.empty()) {
+    return false;
+  }
+  for (const auto & disjunct : string_filter_disjunctions) {
+    if (disjunct.empty()) {
+      return false;
+    }
+    for (const auto & clause : disjunct) {
+      if (!adapter.HasStringField(clause.field)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool IsSupportedStringContentFilter(
+  const SubscriptionData & subscription, const char * filter_expression,
+  const rcutils_string_array_t & expression_parameters,
+  std::vector<StringContentFilterClause> * string_filter_clauses,
+  std::vector<std::vector<StringContentFilterClause>> * string_filter_disjunctions)
+{
+  if (!TryParseStringContentFilter(
+      filter_expression, expression_parameters, string_filter_clauses, string_filter_disjunctions)) {
+    if (rmw_get_error_string().str == nullptr || rmw_get_error_string().str[0] == '\0') {
+      RMW_SET_ERROR_MSG("content filter expression is not supported");
+    }
+    return false;
+  }
+  if (!StringContentFilterFieldsAreSupported(subscription.adapter, *string_filter_disjunctions)) {
+    RMW_SET_ERROR_MSG("content filter string field is not supported");
+    return false;
+  }
+  return true;
+}
+
+bool ParseNumericFilterValue(
+  std::string value, const std::vector<std::string> & parameters, double * parsed_value)
+{
+  if (parsed_value == nullptr || value.empty()) {
+    return false;
+  }
+  value = TrimEnclosingParentheses(value);
+  if (value.empty()) {
+    return false;
+  }
+  if (value[0] == '%') {
+    const std::string index_text = value.substr(1);
     size_t consumed = 0;
     long index = -1;
     try {
@@ -434,52 +1044,483 @@ bool TryParseNumericFilter(
     {
       return false;
     }
-    rhs = TrimAsciiWhitespace(parameters[static_cast<size_t>(index)]);
+    value = TrimAsciiWhitespace(parameters[static_cast<size_t>(index)]);
+  }
+  if (IsAsciiWordOperatorAt(value, 0u, "TRUE")) {
+    *parsed_value = 1.0;
+    return true;
+  }
+  if (IsAsciiWordOperatorAt(value, 0u, "FALSE")) {
+    *parsed_value = 0.0;
+    return true;
   }
   try {
     size_t consumed = 0;
-    const double parsed = std::stod(rhs, &consumed);
-    if (consumed != rhs.size()) {
+    const double parsed = std::stod(value, &consumed);
+    if (consumed != value.size()) {
       return false;
     }
-    *value = parsed;
+    *parsed_value = parsed;
   } catch (...) {
     return false;
   }
-  *field = lhs;
-  *op = code;
+  return true;
+}
+
+// Parse a numeric content-filter clause "<field> <op> <value>" (a DDS-SQL subset). `value` is a
+// numeric literal or a %N placeholder substituted from `parameters`. Recognized operators: < <= > >=
+// = == != <>. Returns false (with no side effects) for anything else.
+bool TryParseNumericFilterClause(
+  const std::string & expression, const std::vector<std::string> & parameters,
+  NumericContentFilterClause * clause)
+{
+  if (clause == nullptr) {
+    return false;
+  }
+  const std::string normalized_expression = TrimEnclosingParentheses(expression);
+  size_t i = 0;
+  while (i < normalized_expression.size() && normalized_expression[i] != '<' &&
+    normalized_expression[i] != '>' && normalized_expression[i] != '=' &&
+    normalized_expression[i] != '!')
+  {
+    ++i;
+  }
+  if (i == normalized_expression.size()) {
+    return false;
+  }
+  const std::string two = normalized_expression.substr(i, 2);
+  int code = 0;
+  size_t op_len = 1;
+  if (two == "<=") { code = 2; op_len = 2; }
+  else if (two == ">=") { code = 4; op_len = 2; }
+  else if (two == "==") { code = 5; op_len = 2; }
+  else if (two == "!=") { code = 6; op_len = 2; }
+  else if (two == "<>") { code = 6; op_len = 2; }
+  else if (normalized_expression[i] == '<') { code = 1; }
+  else if (normalized_expression[i] == '>') { code = 3; }
+  else if (normalized_expression[i] == '=') { code = 5; }
+  else { return false; }  // a lone '!' is not a valid operator
+
+  std::string lhs = TrimAsciiWhitespace(normalized_expression.substr(0, i));
+  std::string rhs = TrimEnclosingParentheses(normalized_expression.substr(i + op_len));
+  if (lhs.empty() || rhs.empty()) {
+    return false;
+  }
+  double parsed_value = 0.0;
+  if (!ParseNumericFilterValue(rhs, parameters, &parsed_value)) {
+    return false;
+  }
+  clause->field = lhs;
+  clause->op = code;
+  clause->value = parsed_value;
+  return true;
+}
+
+bool TryParseNumericFilterInDnf(
+  const std::string & expression, const std::vector<std::string> & parameters,
+  std::vector<std::vector<NumericContentFilterClause>> * disjunctions)
+{
+  if (disjunctions == nullptr) {
+    return false;
+  }
+  const std::string normalized_expression = TrimEnclosingParentheses(expression);
+  size_t in_pos = std::string::npos;
+  if (!FindTopLevelAsciiWordOperator(normalized_expression, "IN", &in_pos)) {
+    return false;
+  }
+  std::string lhs = TrimAsciiWhitespace(normalized_expression.substr(0, in_pos));
+  size_t not_pos = std::string::npos;
+  const bool negated = EndsWithAsciiWord(lhs, "NOT", &not_pos);
+  if (negated) {
+    lhs = TrimAsciiWhitespace(lhs.substr(0, not_pos));
+  }
+  const std::string rhs = TrimAsciiWhitespace(normalized_expression.substr(in_pos + 2u));
+  if (lhs.empty() || !HasBalancedEnclosingParentheses(rhs)) {
+    return false;
+  }
+  const std::string list_expression = rhs.substr(1u, rhs.size() - 2u);
+  std::vector<std::string> terms;
+  if (!SplitStringFilterList(list_expression, &terms)) {
+    return false;
+  }
+
+  std::vector<std::vector<NumericContentFilterClause>> parsed_disjunctions;
+  std::vector<NumericContentFilterClause> not_in_conjunction;
+  for (const auto & term : terms) {
+    double parsed_value = 0.0;
+    if (!ParseNumericFilterValue(term, parameters, &parsed_value)) {
+      return false;
+    }
+    NumericContentFilterClause clause;
+    clause.field = lhs;
+    clause.op = negated ? 6 : 5;
+    clause.value = parsed_value;
+    if (negated) {
+      not_in_conjunction.push_back(std::move(clause));
+    } else {
+      parsed_disjunctions.push_back({std::move(clause)});
+    }
+  }
+  if (negated) {
+    parsed_disjunctions.push_back(std::move(not_in_conjunction));
+  }
+  *disjunctions = std::move(parsed_disjunctions);
+  return !disjunctions->empty();
+}
+
+bool TryParseNumericFilterBetweenDnf(
+  const std::string & expression, const std::vector<std::string> & parameters,
+  std::vector<std::vector<NumericContentFilterClause>> * disjunctions)
+{
+  if (disjunctions == nullptr) {
+    return false;
+  }
+  const std::string normalized_expression = TrimEnclosingParentheses(expression);
+  size_t between_pos = std::string::npos;
+  if (!FindTopLevelAsciiWordOperator(normalized_expression, "BETWEEN", &between_pos)) {
+    return false;
+  }
+  std::string lhs = TrimAsciiWhitespace(normalized_expression.substr(0, between_pos));
+  size_t not_pos = std::string::npos;
+  const bool negated = EndsWithAsciiWord(lhs, "NOT", &not_pos);
+  if (negated) {
+    lhs = TrimAsciiWhitespace(lhs.substr(0, not_pos));
+  }
+  const std::string rhs = TrimAsciiWhitespace(
+    normalized_expression.substr(between_pos + std::strlen("BETWEEN")));
+  std::vector<std::string> bounds;
+  if (lhs.empty() || !SplitStringFilterOperator(rhs, "AND", &bounds) || bounds.size() != 2u) {
+    return false;
+  }
+  double lower = 0.0;
+  double upper = 0.0;
+  if (!ParseNumericFilterValue(bounds[0], parameters, &lower) ||
+    !ParseNumericFilterValue(bounds[1], parameters, &upper))
+  {
+    return false;
+  }
+
+  NumericContentFilterClause lower_clause;
+  lower_clause.field = lhs;
+  lower_clause.op = negated ? 1 : 4;
+  lower_clause.value = lower;
+
+  NumericContentFilterClause upper_clause;
+  upper_clause.field = lhs;
+  upper_clause.op = negated ? 3 : 2;
+  upper_clause.value = upper;
+
+  if (negated) {
+    *disjunctions = {{std::move(lower_clause)}, {std::move(upper_clause)}};
+  } else {
+    *disjunctions = {{std::move(lower_clause), std::move(upper_clause)}};
+  }
+  return true;
+}
+
+bool InvertNumericContentFilterClause(NumericContentFilterClause * clause)
+{
+  if (clause == nullptr) {
+    return false;
+  }
+  switch (clause->op) {
+    case 1: clause->op = 4; return true;
+    case 2: clause->op = 3; return true;
+    case 3: clause->op = 2; return true;
+    case 4: clause->op = 1; return true;
+    case 5: clause->op = 6; return true;
+    case 6: clause->op = 5; return true;
+    default: return false;
+  }
+}
+
+bool NegateNumericContentFilterDnf(
+  const std::vector<std::vector<NumericContentFilterClause>> & source_disjunctions,
+  std::vector<std::vector<NumericContentFilterClause>> * negated_disjunctions)
+{
+  if (negated_disjunctions == nullptr || source_disjunctions.empty()) {
+    return false;
+  }
+  std::vector<std::vector<NumericContentFilterClause>> combinations(1u);
+  for (const auto & disjunct : source_disjunctions) {
+    if (disjunct.empty()) {
+      return false;
+    }
+    std::vector<std::vector<NumericContentFilterClause>> next_combinations;
+    for (const auto & clause : disjunct) {
+      NumericContentFilterClause inverted_clause = clause;
+      if (!InvertNumericContentFilterClause(&inverted_clause)) {
+        return false;
+      }
+      for (const auto & combination : combinations) {
+        auto merged = combination;
+        merged.push_back(inverted_clause);
+        next_combinations.push_back(std::move(merged));
+      }
+    }
+    combinations = std::move(next_combinations);
+  }
+  *negated_disjunctions = std::move(combinations);
+  return !negated_disjunctions->empty();
+}
+
+bool TryParseNumericFilterDnf(
+  const std::string & expression, const std::vector<std::string> & parameters,
+  std::vector<std::vector<NumericContentFilterClause>> * disjunctions)
+{
+  if (disjunctions == nullptr) {
+    return false;
+  }
+  const std::string normalized_expression = TrimEnclosingParentheses(expression);
+  if (normalized_expression.empty()) {
+    return false;
+  }
+
+  std::string negated_expression;
+  if (TryStripUnaryNot(normalized_expression, &negated_expression)) {
+    std::vector<std::vector<NumericContentFilterClause>> nested_disjunctions;
+    if (!TryParseNumericFilterDnf(negated_expression, parameters, &nested_disjunctions)) {
+      return false;
+    }
+    return NegateNumericContentFilterDnf(nested_disjunctions, disjunctions);
+  }
+
+  std::vector<std::string> disjuncts;
+  if (!SplitStringFilterDisjunction(normalized_expression, &disjuncts)) {
+    return false;
+  }
+  if (disjuncts.size() > 1u) {
+    std::vector<std::vector<NumericContentFilterClause>> parsed_disjunctions;
+    for (const auto & disjunct : disjuncts) {
+      std::vector<std::vector<NumericContentFilterClause>> nested_disjunctions;
+      if (!TryParseNumericFilterDnf(disjunct, parameters, &nested_disjunctions)) {
+        return false;
+      }
+      parsed_disjunctions.insert(
+        parsed_disjunctions.end(), nested_disjunctions.begin(), nested_disjunctions.end());
+    }
+    *disjunctions = std::move(parsed_disjunctions);
+    return !disjunctions->empty();
+  }
+
+  std::vector<std::vector<NumericContentFilterClause>> between_disjunctions;
+  if (TryParseNumericFilterBetweenDnf(
+      normalized_expression, parameters, &between_disjunctions)) {
+    *disjunctions = std::move(between_disjunctions);
+    return !disjunctions->empty();
+  }
+
+  std::vector<std::string> terms;
+  if (!SplitStringFilterConjunction(normalized_expression, &terms)) {
+    return false;
+  }
+  if (terms.size() > 1u) {
+    std::vector<std::vector<NumericContentFilterClause>> combinations(1u);
+    for (const auto & term : terms) {
+      std::vector<std::vector<NumericContentFilterClause>> term_disjunctions;
+      if (!TryParseNumericFilterDnf(term, parameters, &term_disjunctions)) {
+        return false;
+      }
+      std::vector<std::vector<NumericContentFilterClause>> next_combinations;
+      for (const auto & combination : combinations) {
+        for (const auto & term_group : term_disjunctions) {
+          auto merged = combination;
+          merged.insert(merged.end(), term_group.begin(), term_group.end());
+          next_combinations.push_back(std::move(merged));
+        }
+      }
+      combinations = std::move(next_combinations);
+    }
+    *disjunctions = std::move(combinations);
+    return !disjunctions->empty();
+  }
+
+  std::vector<std::vector<NumericContentFilterClause>> in_disjunctions;
+  if (TryParseNumericFilterInDnf(normalized_expression, parameters, &in_disjunctions)) {
+    *disjunctions = std::move(in_disjunctions);
+    return !disjunctions->empty();
+  }
+
+  NumericContentFilterClause clause;
+  if (!TryParseNumericFilterClause(normalized_expression, parameters, &clause)) {
+    return false;
+  }
+  *disjunctions = {{std::move(clause)}};
+  return true;
+}
+
+bool TryParseNumericFilter(
+  const std::string & expression, const std::vector<std::string> & parameters, std::string * field,
+  int * op, double * value,
+  std::vector<std::vector<NumericContentFilterClause>> * numeric_filter_disjunctions)
+{
+  if (field == nullptr || op == nullptr || value == nullptr || numeric_filter_disjunctions == nullptr) {
+    return false;
+  }
+  std::vector<std::vector<NumericContentFilterClause>> parsed_disjunctions;
+  if (!TryParseNumericFilterDnf(expression, parameters, &parsed_disjunctions)) {
+    return false;
+  }
+  if (parsed_disjunctions.empty() || parsed_disjunctions.front().empty()) {
+    return false;
+  }
+
+  const auto & first_clause = parsed_disjunctions.front().front();
+  *field = first_clause.field;
+  *op = first_clause.op;
+  *value = first_clause.value;
+  *numeric_filter_disjunctions = std::move(parsed_disjunctions);
+  return true;
+}
+
+bool NumericContentFilterFieldsAreSupported(
+  const MessageAdapter & adapter,
+  const std::vector<std::vector<NumericContentFilterClause>> & numeric_filter_disjunctions)
+{
+  if (numeric_filter_disjunctions.empty()) {
+    return false;
+  }
+  for (const auto & disjunct : numeric_filter_disjunctions) {
+    if (disjunct.empty()) {
+      return false;
+    }
+    for (const auto & clause : disjunct) {
+      if (!adapter.HasNumericField(clause.field)) {
+        return false;
+      }
+    }
+  }
   return true;
 }
 
 bool CompareNumeric(double lhs, int op, double rhs)
 {
+  constexpr double kNumericEqualityEpsilon = 1e-6;
+  const bool equal = std::fabs(lhs - rhs) <= kNumericEqualityEpsilon;
   switch (op) {
     case 1: return lhs < rhs;
-    case 2: return lhs <= rhs;
+    case 2: return lhs < rhs || equal;
     case 3: return lhs > rhs;
-    case 4: return lhs >= rhs;
-    case 5: return lhs == rhs;
-    case 6: return lhs != rhs;
+    case 4: return lhs > rhs || equal;
+    case 5: return equal;
+    case 6: return !equal;
     default: return true;
   }
 }
 
-bool PayloadMatchesContentFilter(const SubscriptionData & subscription, const std::vector<uint8_t> & payload)
+bool StringLikeMatches(const std::string & value, const std::string & pattern, char escape_char)
+{
+  constexpr size_t npos = std::string::npos;
+  size_t value_pos = 0;
+  size_t pattern_pos = 0;
+  size_t wildcard_pos = npos;
+  size_t wildcard_value_pos = 0;
+
+  auto read_escaped_literal = [escape_char](const std::string & text, size_t pos,
+                                            char * literal, size_t * width) {
+    if (pos + 1u >= text.size() || text[pos] != escape_char) {
+      return false;
+    }
+    const char next = text[pos + 1u];
+    if (next != '%' && next != '_' && next != escape_char) {
+      return false;
+    }
+    *literal = next;
+    *width = 2u;
+    return true;
+  };
+
+  while (value_pos < value.size()) {
+    if (pattern_pos < pattern.size() && pattern[pattern_pos] == '%') {
+      wildcard_pos = pattern_pos++;
+      wildcard_value_pos = value_pos;
+      continue;
+    }
+    char literal = '\0';
+    size_t literal_width = 1u;
+    if (pattern_pos < pattern.size() &&
+      read_escaped_literal(pattern, pattern_pos, &literal, &literal_width) &&
+      literal == value[value_pos])
+    {
+      pattern_pos += literal_width;
+      ++value_pos;
+      continue;
+    }
+    if (pattern_pos < pattern.size() &&
+      (pattern[pattern_pos] == '_' || pattern[pattern_pos] == value[value_pos]))
+    {
+      ++pattern_pos;
+      ++value_pos;
+      continue;
+    }
+    if (wildcard_pos != npos) {
+      pattern_pos = wildcard_pos + 1u;
+      value_pos = ++wildcard_value_pos;
+      continue;
+    }
+    return false;
+  }
+  while (pattern_pos < pattern.size() && pattern[pattern_pos] == '%') {
+    ++pattern_pos;
+  }
+  return pattern_pos == pattern.size();
+}
+
+bool StringContentFilterClauseMatches(
+  const std::string & decoded, const StringContentFilterClause & clause)
+{
+  if (clause.op == 7 || clause.op == 8) {
+    const bool like = StringLikeMatches(decoded, clause.value, clause.escape_char);
+    return clause.op == 8 ? !like : like;
+  }
+  const bool equals = decoded == clause.value;
+  return clause.op == 6 ? !equals : equals;
+}
+
+}  // namespace
+
+bool PayloadMatchesContentFilter(
+  const SubscriptionData & subscription, const std::vector<uint8_t> & payload, bool payload_is_mdds)
 {
   if (subscription.numeric_filter_enabled) {
-    // Decode the sample and evaluate `field OP value` against the introspected field. If the sample
-    // cannot be decoded / the field read fails, keep it (a filter must not silently drop valid data).
+    // Decode the sample and evaluate grouped numeric clauses against introspected fields. If the
+    // sample cannot be decoded / a field read fails, keep it (a filter must not silently drop data).
     void * message = subscription.adapter.AllocateMessage();
     if (message == nullptr) {
       return true;
     }
     bool keep = true;
-    double field_value = 0.0;
-    if (subscription.adapter.Decode(payload.data(), payload.size(), message) &&
-      subscription.adapter.ReadNumericField(message, subscription.numeric_filter_field, &field_value))
-    {
-      keep = CompareNumeric(
-        field_value, subscription.numeric_filter_op, subscription.numeric_filter_value);
+    const bool decoded = payload_is_mdds ?
+      subscription.adapter.DecodeMdds(payload.data(), payload.size(), message) :
+      subscription.adapter.Decode(payload.data(), payload.size(), message);
+    if (decoded) {
+      if (!subscription.numeric_filter_disjunctions.empty()) {
+        keep = false;
+        for (const auto & disjunct : subscription.numeric_filter_disjunctions) {
+          bool disjunct_matches = true;
+          for (const auto & clause : disjunct) {
+            double field_value = 0.0;
+            if (!subscription.adapter.ReadNumericField(message, clause.field, &field_value)) {
+              subscription.adapter.DestroyMessage(message);
+              return true;
+            }
+            if (!CompareNumeric(field_value, clause.op, clause.value)) {
+              disjunct_matches = false;
+              break;
+            }
+          }
+          if (disjunct_matches) {
+            keep = true;
+            break;
+          }
+        }
+      } else {
+        double field_value = 0.0;
+        if (subscription.adapter.ReadNumericField(message, subscription.numeric_filter_field, &field_value)) {
+          keep = CompareNumeric(
+            field_value, subscription.numeric_filter_op, subscription.numeric_filter_value);
+        }
+      }
     }
     subscription.adapter.DestroyMessage(message);
     return keep;
@@ -487,18 +1528,119 @@ bool PayloadMatchesContentFilter(const SubscriptionData & subscription, const st
   if (!subscription.content_filter_enabled) {
     return true;
   }
-  if (subscription.content_filter_parameters.empty()) {
+  void * message = subscription.adapter.AllocateMessage();
+  if (message == nullptr) {
+    return true;
+  }
+  const bool decoded = payload_is_mdds ?
+    subscription.adapter.DecodeMdds(payload.data(), payload.size(), message) :
+    subscription.adapter.Decode(payload.data(), payload.size(), message);
+  if (!decoded) {
+    subscription.adapter.DestroyMessage(message);
+    return true;
+  }
+
+  if (!subscription.string_filter_disjunctions.empty()) {
+    for (const auto & disjunct : subscription.string_filter_disjunctions) {
+      bool disjunct_matches = true;
+      for (const auto & clause : disjunct) {
+        std::string field_value;
+        if (!subscription.adapter.ReadStringField(message, clause.field, &field_value)) {
+          subscription.adapter.DestroyMessage(message);
+          return true;
+        }
+        if (!StringContentFilterClauseMatches(field_value, clause)) {
+          disjunct_matches = false;
+          break;
+        }
+      }
+      if (disjunct_matches) {
+        subscription.adapter.DestroyMessage(message);
+        return true;
+      }
+    }
+    subscription.adapter.DestroyMessage(message);
     return false;
   }
-  const std::string & expected = subscription.content_filter_parameters[0];
-  std::string decoded;
-  if (DecodeCdrStringPayload(payload, &decoded)) {
-    return decoded == expected;
+
+  if (!subscription.string_filter_clauses.empty()) {
+    for (const auto & clause : subscription.string_filter_clauses) {
+      std::string field_value;
+      if (!subscription.adapter.ReadStringField(message, clause.field, &field_value)) {
+        subscription.adapter.DestroyMessage(message);
+        return true;
+      }
+      if (!StringContentFilterClauseMatches(field_value, clause)) {
+        subscription.adapter.DestroyMessage(message);
+        return false;
+      }
+    }
+    subscription.adapter.DestroyMessage(message);
+    return true;
   }
-  return payload.size() == expected.size() &&
-         std::equal(payload.begin(), payload.end(), expected.begin());
+
+  StringContentFilterClause clause;
+  clause.field = "data";
+  clause.op = subscription.string_filter_op;
+  clause.value = subscription.string_filter_value;
+  std::string field_value;
+  if (!subscription.adapter.ReadStringField(message, clause.field, &field_value)) {
+    subscription.adapter.DestroyMessage(message);
+    return true;
+  }
+  const bool keep = StringContentFilterClauseMatches(field_value, clause);
+  subscription.adapter.DestroyMessage(message);
+  return keep;
 }
-}  // namespace
+
+bool OffersTransientLocalDurability(const PublisherData * publisher)
+{
+  return publisher != nullptr &&
+         publisher->actual_qos.durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+}
+
+bool RequestsTransientLocalDurability(const SubscriptionData * subscription)
+{
+  return subscription != nullptr &&
+         subscription->actual_qos.durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL;
+}
+
+size_t TransientLocalHistoryDepth(const rmw_qos_profile_t & qos)
+{
+  if (qos.history == RMW_QOS_POLICY_HISTORY_KEEP_ALL) {
+    return qos.depth == 0u ? std::numeric_limits<size_t>::max() : qos.depth;
+  }
+  return qos.depth == 0u ? 1u : qos.depth;
+}
+
+void StoreTransientLocalSample(PublisherData * publisher, const QueuedSample & sample)
+{
+  if (!OffersTransientLocalDurability(publisher)) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(publisher->mutex);
+  publisher->transient_local_history.push_back(sample);
+  const size_t depth = TransientLocalHistoryDepth(publisher->actual_qos);
+  while (publisher->transient_local_history.size() > depth) {
+    publisher->transient_local_history.pop_front();
+  }
+}
+
+std::vector<QueuedSample> RetainedTransientLocalSamplesFor(
+  PublisherData * publisher, const SubscriptionData * subscription)
+{
+  if (!OffersTransientLocalDurability(publisher) || !RequestsTransientLocalDurability(subscription)) {
+    return {};
+  }
+  if (
+    subscription->ignore_local_publications &&
+    subscription->context == publisher->context) {
+    return {};
+  }
+  std::lock_guard<std::mutex> lock(publisher->mutex);
+  return std::vector<QueuedSample>(
+    publisher->transient_local_history.begin(), publisher->transient_local_history.end());
+}
 
 void RegisterPublisher(PublisherData * publisher)
 {
@@ -510,10 +1652,15 @@ void RegisterPublisher(PublisherData * publisher)
     std::lock_guard<std::mutex> lock(g_broker_mutex);
     for (auto * subscription : g_subscriptions) {
       if (SameTopicAndType(publisher, subscription)) {
-        ++publisher->matched_total_count;
-        ++subscription->matched_total_count;
-        AddSubscriptionCallbackInvocation(&callbacks, subscription, 1);
-        AccrueIncompatibleQosLocked(publisher, subscription, &callbacks);
+        if (SameTopicTypeAndCompatibleQos(publisher, subscription)) {
+          ++publisher->matched_total_count;
+          ++subscription->matched_total_count;
+          AddSubscriptionCallbackInvocation(&callbacks, subscription, 1);
+        } else {
+          AccrueIncompatibleQosLocked(publisher, subscription, &callbacks);
+        }
+      } else {
+        AccrueIncompatibleTypeLocked(publisher, subscription, &callbacks);
       }
     }
     g_publishers.push_back(publisher);
@@ -527,7 +1674,7 @@ void UnregisterPublisher(PublisherData * publisher)
   {
     std::lock_guard<std::mutex> lock(g_broker_mutex);
     for (auto * subscription : g_subscriptions) {
-      if (SameTopicAndType(publisher, subscription)) {
+      if (SameTopicTypeAndCompatibleQos(publisher, subscription)) {
         AddSubscriptionCallbackInvocation(&callbacks, subscription, 1);
       }
     }
@@ -543,19 +1690,32 @@ void RegisterSubscription(SubscriptionData * subscription)
     return;
   }
   std::vector<CallbackInvocation> callbacks;
+  std::vector<QueuedSample> retained_samples;
   {
     std::lock_guard<std::mutex> lock(g_broker_mutex);
     for (auto * publisher : g_publishers) {
       if (SameTopicAndType(publisher, subscription)) {
-        ++publisher->matched_total_count;
-        ++subscription->matched_total_count;
-        AddPublisherCallbackInvocation(&callbacks, publisher, 1);
-        AccrueIncompatibleQosLocked(publisher, subscription, &callbacks);
+        if (SameTopicTypeAndCompatibleQos(publisher, subscription)) {
+          ++publisher->matched_total_count;
+          ++subscription->matched_total_count;
+          AddPublisherCallbackInvocation(&callbacks, publisher, 1);
+          const auto publisher_samples =
+            RetainedTransientLocalSamplesFor(publisher, subscription);
+          retained_samples.insert(
+            retained_samples.end(), publisher_samples.begin(), publisher_samples.end());
+        } else {
+          AccrueIncompatibleQosLocked(publisher, subscription, &callbacks);
+        }
+      } else {
+        AccrueIncompatibleTypeLocked(publisher, subscription, &callbacks);
       }
     }
     g_subscriptions.push_back(subscription);
   }
   InvokeCallbacks(callbacks);
+  for (const auto & sample : retained_samples) {
+    EnqueueSample(subscription, sample);
+  }
 }
 
 void UnregisterSubscription(SubscriptionData * subscription)
@@ -564,7 +1724,7 @@ void UnregisterSubscription(SubscriptionData * subscription)
   {
     std::lock_guard<std::mutex> lock(g_broker_mutex);
     for (auto * publisher : g_publishers) {
-      if (SameTopicAndType(publisher, subscription)) {
+      if (SameTopicTypeAndCompatibleQos(publisher, subscription)) {
         AddPublisherCallbackInvocation(&callbacks, publisher, 1);
       }
     }
@@ -600,7 +1760,12 @@ void PublishToSubscriptions(
   {
     std::lock_guard<std::mutex> lock(g_broker_mutex);
     for (auto * subscription : g_subscriptions) {
-      if (SameTopicAndType(publisher, subscription)) {
+      if (
+        subscription->ignore_local_publications &&
+        subscription->context == publisher->context) {
+        continue;
+      }
+      if (SameTopicTypeAndCompatibleQos(publisher, subscription)) {
         matches.push_back(subscription);
       }
     }
@@ -613,6 +1778,7 @@ void PublishToSubscriptions(
   sample.info.source_timestamp = NowNanoseconds();
   sample.info.publication_sequence_number = publication_sequence_number;
   sample.info.from_intra_process = false;
+  StoreTransientLocalSample(publisher, sample);
   for (auto * subscription : matches) {
     EnqueueSample(subscription, sample);
   }
@@ -627,7 +1793,7 @@ void EnqueueSample(SubscriptionData * subscription, const QueuedSample & sample)
   CallbackInvocation message_lost_callback;
   {
     std::lock_guard<std::mutex> lock(subscription->mutex);
-    if (!PayloadMatchesContentFilter(*subscription, sample.payload)) {
+    if (!PayloadMatchesContentFilter(*subscription, sample.payload, sample.from_bridge)) {
       return;
     }
     // Message-lost detection: a forward gap in this writer's publication sequence numbers means samples
@@ -771,12 +1937,19 @@ rmw_ret_t SetSubscriptionContentFilter(
 
   const bool clear_filter = options->filter_expression[0] == '\0';
   bool numeric = false;
+  std::vector<StringContentFilterClause> string_filter_clauses;
+  std::vector<std::vector<StringContentFilterClause>> string_filter_disjunctions;
   std::string numeric_field;
   int numeric_op = 0;
   double numeric_value = 0.0;
+  std::vector<std::vector<NumericContentFilterClause>> numeric_filter_disjunctions;
   if (!clear_filter &&
       !IsSupportedStringContentFilter(
-        *subscription, options->filter_expression, options->expression_parameters)) {
+        *subscription, options->filter_expression, options->expression_parameters,
+        &string_filter_clauses, &string_filter_disjunctions)) {
+    if (subscription->adapter.TypeName() == "std_msgs/msg/String") {
+      return RMW_RET_UNSUPPORTED;
+    }
     // Not the supported std_msgs/String filter — try a numeric field filter for other message types.
     rmw_reset_error();  // discard the string-filter rejection; a numeric filter may still be accepted
     std::vector<std::string> params;
@@ -785,8 +1958,10 @@ rmw_ret_t SetSubscriptionContentFilter(
         options->expression_parameters.data[i] != nullptr ? options->expression_parameters.data[i] : "");
     }
     if (!TryParseNumericFilter(
-          options->filter_expression, params, &numeric_field, &numeric_op, &numeric_value) ||
-        !subscription->adapter.HasNumericField(numeric_field)) {
+          options->filter_expression, params, &numeric_field, &numeric_op, &numeric_value,
+          &numeric_filter_disjunctions) ||
+        !NumericContentFilterFieldsAreSupported(
+          subscription->adapter, numeric_filter_disjunctions)) {
       RMW_SET_ERROR_MSG("content filter is not a supported string or numeric field expression");
       return RMW_RET_UNSUPPORTED;
     }
@@ -797,6 +1972,11 @@ rmw_ret_t SetSubscriptionContentFilter(
   if (clear_filter) {
     subscription->content_filter_enabled = false;
     subscription->numeric_filter_enabled = false;
+    subscription->string_filter_op = 1;
+    subscription->string_filter_value.clear();
+    subscription->string_filter_clauses.clear();
+    subscription->string_filter_disjunctions.clear();
+    subscription->numeric_filter_disjunctions.clear();
     subscription->content_filter_expression.clear();
     subscription->content_filter_parameters.clear();
     return RMW_RET_OK;
@@ -815,10 +1995,19 @@ rmw_ret_t SetSubscriptionContentFilter(
     subscription->numeric_filter_field = numeric_field;
     subscription->numeric_filter_op = numeric_op;
     subscription->numeric_filter_value = numeric_value;
+    subscription->numeric_filter_disjunctions = std::move(numeric_filter_disjunctions);
+    subscription->string_filter_value.clear();
+    subscription->string_filter_clauses.clear();
+    subscription->string_filter_disjunctions.clear();
     return RMW_RET_OK;
   }
   subscription->content_filter_enabled = true;
   subscription->numeric_filter_enabled = false;
+  subscription->numeric_filter_disjunctions.clear();
+  subscription->string_filter_op = string_filter_clauses.front().op;
+  subscription->string_filter_value = string_filter_clauses.front().value;
+  subscription->string_filter_clauses = std::move(string_filter_clauses);
+  subscription->string_filter_disjunctions = std::move(string_filter_disjunctions);
   return RMW_RET_OK;
 }
 
@@ -835,7 +2024,7 @@ rmw_ret_t GetSubscriptionContentFilter(
   std::vector<std::string> parameters;
   {
     std::lock_guard<std::mutex> lock(subscription->mutex);
-    if (!subscription->content_filter_enabled) {
+    if (!subscription->content_filter_enabled && !subscription->numeric_filter_enabled) {
       RMW_SET_ERROR_MSG("subscription does not have an active content filter");
       return RMW_RET_ERROR;
     }
@@ -1037,6 +2226,88 @@ size_t SetSubscriptionQosIncompatibleCallback(
          subscription->requested_qos_incompatible_last;
 }
 
+// --- Offered / requested incompatible-type events (accrued under g_broker_mutex at registration) ---
+
+bool TakePublisherIncompatibleTypeStatus(
+  PublisherData * publisher, rmw_incompatible_type_status_t * status)
+{
+  if (publisher == nullptr || status == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_broker_mutex);
+  status->total_count = static_cast<int32_t>(publisher->offered_incompatible_type_total);
+  status->total_count_change = static_cast<int32_t>(
+    publisher->offered_incompatible_type_total - publisher->offered_incompatible_type_last);
+  publisher->offered_incompatible_type_last = publisher->offered_incompatible_type_total;
+  return true;
+}
+
+bool TakeSubscriptionIncompatibleTypeStatus(
+  SubscriptionData * subscription, rmw_incompatible_type_status_t * status)
+{
+  if (subscription == nullptr || status == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_broker_mutex);
+  status->total_count = static_cast<int32_t>(subscription->requested_incompatible_type_total);
+  status->total_count_change = static_cast<int32_t>(
+    subscription->requested_incompatible_type_total -
+    subscription->requested_incompatible_type_last);
+  subscription->requested_incompatible_type_last =
+    subscription->requested_incompatible_type_total;
+  return true;
+}
+
+bool HasUnreadPublisherIncompatibleTypeStatus(PublisherData * publisher)
+{
+  if (publisher == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_broker_mutex);
+  return publisher->offered_incompatible_type_total != publisher->offered_incompatible_type_last;
+}
+
+bool HasUnreadSubscriptionIncompatibleTypeStatus(SubscriptionData * subscription)
+{
+  if (subscription == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_broker_mutex);
+  return subscription->requested_incompatible_type_total !=
+         subscription->requested_incompatible_type_last;
+}
+
+size_t SetPublisherIncompatibleTypeCallback(
+  PublisherData * publisher, rmw_event_callback_t callback, const void * user_data)
+{
+  if (publisher == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(g_broker_mutex);
+  publisher->offered_incompatible_type_callback = callback;
+  publisher->offered_incompatible_type_callback_user_data = user_data;
+  if (callback == nullptr) {
+    return 0;
+  }
+  return publisher->offered_incompatible_type_total - publisher->offered_incompatible_type_last;
+}
+
+size_t SetSubscriptionIncompatibleTypeCallback(
+  SubscriptionData * subscription, rmw_event_callback_t callback, const void * user_data)
+{
+  if (subscription == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(g_broker_mutex);
+  subscription->requested_incompatible_type_callback = callback;
+  subscription->requested_incompatible_type_callback_user_data = user_data;
+  if (callback == nullptr) {
+    return 0;
+  }
+  return subscription->requested_incompatible_type_total -
+         subscription->requested_incompatible_type_last;
+}
+
 // --- Message-lost event (accrued under subscription->mutex on each enqueue) ---
 
 bool TakeSubscriptionMessageLostStatus(
@@ -1095,6 +2366,18 @@ int64_t DeadlineNanos(const rmw_qos_profile_t & qos)
   return static_cast<int64_t>(d.sec) * 1000000000LL + static_cast<int64_t>(d.nsec);
 }
 
+int64_t LivelinessLeaseNanos(const rmw_qos_profile_t & qos)
+{
+  if (qos.liveliness != RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC) {
+    return 0;
+  }
+  const rmw_time_t lease = qos.liveliness_lease_duration;
+  if ((lease.sec == 0 && lease.nsec == 0) || lease.sec >= kDeadlineInfiniteSec) {
+    return 0;
+  }
+  return static_cast<int64_t>(lease.sec) * 1000000000LL + static_cast<int64_t>(lease.nsec);
+}
+
 // Advance *last_active over whole deadline periods elapsed before now_ns, counting one
 // miss per elapsed period. Lazily initializes the reference on first observation.
 size_t AccrueDeadlineMisses(int64_t * last_active, int64_t now_ns, int64_t deadline_ns)
@@ -1112,6 +2395,26 @@ size_t AccrueDeadlineMisses(int64_t * last_active, int64_t now_ns, int64_t deadl
   const int64_t periods = elapsed / deadline_ns;
   *last_active += periods * deadline_ns;
   return static_cast<size_t>(periods);
+}
+
+size_t AccrueLivelinessLostLocked(PublisherData * publisher, int64_t now_ns)
+{
+  const int64_t lease_ns = LivelinessLeaseNanos(publisher->actual_qos);
+  if (lease_ns == 0) {
+    return 0;
+  }
+  if (publisher->offered_liveliness_last_assert_ns == 0) {
+    publisher->offered_liveliness_last_assert_ns = now_ns;
+    publisher->offered_liveliness_alive = true;
+    return 0;
+  }
+  if (!publisher->offered_liveliness_alive ||
+    now_ns - publisher->offered_liveliness_last_assert_ns <= lease_ns) {
+    return 0;
+  }
+  publisher->offered_liveliness_alive = false;
+  ++publisher->offered_liveliness_lost_total;
+  return 1;
 }
 }  // namespace
 
@@ -1179,6 +2482,81 @@ void NotePublisherPublication(PublisherData * publisher, int64_t now_ns)
   }
   std::lock_guard<std::mutex> lock(publisher->mutex);
   publisher->offered_deadline_last_active_ns = now_ns;
+}
+
+void NotePublisherLivelinessAsserted(PublisherData * publisher, int64_t now_ns)
+{
+  if (publisher == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(publisher->mutex);
+  publisher->offered_liveliness_last_assert_ns = now_ns;
+  publisher->offered_liveliness_alive = true;
+}
+
+void NoteNodePublishersLivelinessAsserted(
+  const char * node_name, const char * node_namespace, int64_t now_ns)
+{
+  if (node_name == nullptr || node_namespace == nullptr) {
+    return;
+  }
+  std::vector<PublisherData *> publishers;
+  {
+    std::lock_guard<std::mutex> lock(g_broker_mutex);
+    for (auto * publisher : g_publishers) {
+      if (
+        publisher != nullptr &&
+        BelongsToNode(publisher->node_name, publisher->node_namespace, node_name, node_namespace))
+      {
+        publishers.push_back(publisher);
+      }
+    }
+  }
+  for (auto * publisher : publishers) {
+    NotePublisherLivelinessAsserted(publisher, now_ns);
+  }
+}
+
+bool HasUnreadPublisherLivelinessLostStatus(PublisherData * publisher, int64_t now_ns)
+{
+  if (publisher == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(publisher->mutex);
+  (void)AccrueLivelinessLostLocked(publisher, now_ns);
+  return publisher->offered_liveliness_lost_total != publisher->offered_liveliness_lost_last;
+}
+
+bool TakePublisherLivelinessLostStatus(
+  PublisherData * publisher, int64_t now_ns, rmw_liveliness_lost_status_t * status)
+{
+  if (publisher == nullptr || status == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(publisher->mutex);
+  (void)AccrueLivelinessLostLocked(publisher, now_ns);
+  status->total_count = static_cast<int32_t>(publisher->offered_liveliness_lost_total);
+  status->total_count_change = static_cast<int32_t>(
+    publisher->offered_liveliness_lost_total - publisher->offered_liveliness_lost_last);
+  publisher->offered_liveliness_lost_last = publisher->offered_liveliness_lost_total;
+  return true;
+}
+
+size_t SetPublisherLivelinessLostCallback(
+  PublisherData * publisher, int64_t now_ns, rmw_event_callback_t callback,
+  const void * user_data)
+{
+  if (publisher == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(publisher->mutex);
+  publisher->offered_liveliness_lost_callback = callback;
+  publisher->offered_liveliness_lost_callback_user_data = user_data;
+  if (callback == nullptr) {
+    return 0;
+  }
+  (void)AccrueLivelinessLostLocked(publisher, now_ns);
+  return publisher->offered_liveliness_lost_total - publisher->offered_liveliness_lost_last;
 }
 
 bool HasUnreadSubscriptionDeadlineStatus(

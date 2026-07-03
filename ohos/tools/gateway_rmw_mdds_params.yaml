@@ -1,0 +1,13 @@
+# Gateway config for the parameter lane. The 6 parameter services are configured
+# via MDDS_GATEWAY_SERVICES; this file bridges /parameter_events so the gateway
+# boots with at least one mapping.
+mappings:
+  - mddsTopicName: parameter_events
+    ddsTopicName: /parameter_events
+    rosTypeName: rcl_interfaces/msg/ParameterEvent
+    direction: BIDIRECTIONAL
+    qos:
+      reliability: RELIABLE
+      durability: VOLATILE
+      history: KEEP_LAST
+      depth: 10

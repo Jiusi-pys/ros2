@@ -12,19 +12,27 @@ Audit artifact: `parity-matrix.md`.
 - [x] 2.1 Add failing contracts for generalized loaned-message shapes that are intended to become supported beyond the current fixed-size raw loan path.
 - [x] 2.2 Add failing contracts for any security behavior intended beyond current local SROS2 policy enforcement, including signed artifacts or transport protection if required.
 - [x] 2.3 Add failing contracts for any remaining ROS 2 RMW API surface that the parity matrix marks incomplete but intended to become supported.
-- [ ] 2.4 Preserve explicit unsupported tests for rows that are accepted as out of scope.
+- [x] 2.4 Preserve explicit unsupported tests for rows that are accepted as out of scope.
 
 Initial RED contract evidence: `ohos/test_rmw_mdds_full_parity_red_contracts.sh` exited nonzero by design on 2026-07-03 and emitted:
 `RESULT|rmw_mdds_full_parity_loaned_shapes|RED|status=1`,
 `RESULT|rmw_mdds_full_parity_signed_security|RED|status=1`, and
 `RESULT|rmw_mdds_full_parity_broker_network_flow|RED|status=1`.
 
+Unsupported-boundary evidence on 2026-07-03: no unsupported row is accepted as out of scope for final
+completion yet. The current unsupported behavior is nevertheless explicit and reproducible:
+`test_bridge_loaned_rmw` passes
+`RmwMddsBridgeLoanedRmw.PublisherDoesNotAdvertiseLoaningForUnboundedString` and
+`RmwMddsBridgeLoanedRmw.PublisherDoesNotAdvertiseLoaningWithoutBridge`, while
+`ohos/test_rmw_mdds_full_parity_red_contracts.sh` still keeps generalized loaned shapes RED until they are
+implemented or explicitly accepted out of scope.
+
 ## 3. Implementation For Missing Supported Rows
 
 - [ ] 3.1 Implement the smallest behavior change needed to turn the generalized loaned-message RED gates green.
 - [x] 3.2 Implement the smallest behavior change needed to turn the security-parity RED gates green, or document the external MDDS/DSoftBus dependency blocking implementation.
 - [x] 3.3 Implement any remaining supported RMW API rows identified by the parity matrix.
-- [ ] 3.4 Re-run focused unit tests after each behavior change and keep unsupported rows explicit.
+- [x] 3.4 Re-run focused unit tests after each behavior change and keep unsupported rows explicit.
 
 Security GREEN evidence: after the local XML/protected-governance split, `test_pubsub_inproc` passes
 `RmwMddsPubSub.DISABLED_FullParitySros2RejectsTamperedUnsignedPermissions`, `ohos/test_rmw_mdds_sros2_policy_contracts.sh` still emits
@@ -47,8 +55,10 @@ string/sequence storage is not backed by the MDDS bridge loan.
 Focused verification evidence on 2026-07-03: `ohos/test_rmw_mdds_full_parity_red_contracts.sh` still exits
 nonzero by design with `RESULT|rmw_mdds_full_parity_loaned_shapes|RED|status=1`, while
 `RESULT|rmw_mdds_full_parity_signed_security|PASS` and
-`RESULT|rmw_mdds_full_parity_broker_network_flow|PASS` remain green. Keep 3.4 open until every future
-behavior change in this acceptance track has matching focused verification.
+`RESULT|rmw_mdds_full_parity_broker_network_flow|PASS` remain green. The focused unsupported-loaned tests
+listed in section 2 also pass, and `ohos/test_rmw_mdds_sros2_policy_contracts.sh` emits
+`RESULT|rmw_mdds_sros2_policy_contracts|PASS`. Any future behavior change in this acceptance track must add
+or rerun matching focused verification before it is counted.
 
 ## 4. Runtime And Delivery Evidence
 

@@ -9,10 +9,15 @@ Audit artifact: `parity-matrix.md`.
 
 ## 2. RED Gates For Intended Support
 
-- [ ] 2.1 Add failing contracts for generalized loaned-message shapes that are intended to become supported beyond the current fixed-size raw loan path.
-- [ ] 2.2 Add failing contracts for any security behavior intended beyond current local SROS2 policy enforcement, including signed artifacts or transport protection if required.
-- [ ] 2.3 Add failing contracts for any remaining ROS 2 RMW API surface that the parity matrix marks incomplete but intended to become supported.
+- [x] 2.1 Add failing contracts for generalized loaned-message shapes that are intended to become supported beyond the current fixed-size raw loan path.
+- [x] 2.2 Add failing contracts for any security behavior intended beyond current local SROS2 policy enforcement, including signed artifacts or transport protection if required.
+- [x] 2.3 Add failing contracts for any remaining ROS 2 RMW API surface that the parity matrix marks incomplete but intended to become supported.
 - [ ] 2.4 Preserve explicit unsupported tests for rows that are accepted as out of scope.
+
+RED contract evidence: `ohos/test_rmw_mdds_full_parity_red_contracts.sh` exits nonzero by design on 2026-07-03 and emits:
+`RESULT|rmw_mdds_full_parity_loaned_shapes|RED|status=1`,
+`RESULT|rmw_mdds_full_parity_signed_security|RED|status=1`, and
+`RESULT|rmw_mdds_full_parity_broker_network_flow|RED|status=1`.
 
 ## 3. Implementation For Missing Supported Rows
 

@@ -192,6 +192,38 @@ std::string CreateSros2PolicyContractRoot(const char * label)
   return root.string();
 }
 
+std::string CreateTamperedSros2PolicyContractRoot()
+{
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("rmw_mdds_sros2_tampered_policy_" + std::to_string(stamp));
+  std::filesystem::create_directories(root);
+
+  {
+    std::ofstream governance(root / "governance.xml");
+    governance <<
+      "<dds><domain_access_rules><domain_rule>"
+      "<domains><id>0</id></domains>"
+      "<rtps_protection_kind>ENCRYPT</rtps_protection_kind>"
+      "</domain_rule></domain_access_rules></dds>";
+  }
+  {
+    std::ofstream permissions(root / "permissions.xml");
+    permissions <<
+      "<dds><permissions><grant name=\"tampered_unsigned_grant\">"
+      "<subject_name>CN=rmw_mdds_sros2_tampered</subject_name>"
+      "<validity><not_before>2026-01-01T00:00:00</not_before>"
+      "<not_after>2036-01-01T00:00:00</not_after></validity>"
+      "<allow_rule><domains><id>0</id></domains>"
+      "<publish><topics><topic>rt/mdds_sros2_forbidden</topic></topics></publish>"
+      "<subscribe><topics><topic>rt/mdds_sros2_forbidden</topic></topics></subscribe>"
+      "</allow_rule><default>DENY</default>"
+      "</grant></permissions></dds>";
+  }
+  return root.string();
+}
+
 void SetSecurityRoot(rmw_init_options_t * options, const std::string & security_root)
 {
   ASSERT_NE(nullptr, options);
@@ -361,6 +393,31 @@ TEST(RmwMddsPubSub, DISABLED_Sros2PolicyRejectsUnauthorizedPublisher)
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
   EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
   EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  std::filesystem::remove_all(security_root);
+}
+
+TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsTamperedUnsignedPermissions)
+{
+  const std::string security_root = CreateTamperedSros2PolicyContractRoot();
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_sros2_tampered");
+  SetSecurityRoot(&options, security_root);
+  options.security_options.enforce_security = RMW_SECURITY_ENFORCEMENT_ENFORCE;
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  const rmw_ret_t init_ret = rmw_init(&options, &context);
+  EXPECT_NE(RMW_RET_OK, init_ret)
+    << "full SROS2 parity must reject unsigned or tampered permissions/governance artifacts";
+  if (init_ret == RMW_RET_OK) {
+    EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+    EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  } else {
+    rmw_reset_error();
+  }
+
   EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
   std::filesystem::remove_all(security_root);
 }

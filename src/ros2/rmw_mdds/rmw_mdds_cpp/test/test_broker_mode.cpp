@@ -28,8 +28,10 @@
 #include "rmw/error_handling.h"
 #include "rmw/event.h"
 #include "rmw/events_statuses/matched.h"
+#include "rmw/get_network_flow_endpoints.h"
 #include "rmw/init.h"
 #include "rmw/init_options.h"
+#include "rmw/network_flow_endpoint_array.h"
 #include "rmw/publisher_options.h"
 #include "rmw/qos_profiles.h"
 #include "rmw/rmw.h"
@@ -175,6 +177,79 @@ TEST(RmwMddsBrokerMode, PubSubUsesBrokerWhenEnabled)
   EXPECT_EQ("hello broker mode", received.data);
 
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_wait_set(wait_set));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_subscription(node, subscription));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+}
+
+TEST(RmwMddsBrokerMode, DISABLED_FullParityBrokerModeNetworkFlowEndpointsReportMddsTransport)
+{
+  EnvVarGuard broker_guard("RMW_MDDS_BROKER");
+  EnvVarGuard socket_guard("RMW_MDDS_BROKER_SOCKET");
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER", "1", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_SOCKET", socket_path.path().c_str(), 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", "/no/such/libmdds_bridge_shared.z.so", 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_broker_network_flow_test");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
+  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_network_flow_node", "/mdds");
+  ASSERT_NE(nullptr, node);
+
+  const rosidl_message_type_support_t * type_support =
+    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
+  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
+
+  rmw_publisher_t * publisher = rmw_create_publisher(
+    node, type_support, "/mdds_broker_network_flow", &rmw_qos_profile_default,
+    &publisher_options);
+  ASSERT_NE(nullptr, publisher) << rmw_get_error_string().str;
+
+  rmw_subscription_t * subscription = rmw_create_subscription(
+    node, type_support, "/mdds_broker_network_flow", &rmw_qos_profile_default,
+    &subscription_options);
+  ASSERT_NE(nullptr, subscription) << rmw_get_error_string().str;
+
+  rmw_network_flow_endpoint_array_t publisher_endpoints =
+    rmw_get_zero_initialized_network_flow_endpoint_array();
+  EXPECT_EQ(
+    RMW_RET_OK,
+    rmw_publisher_get_network_flow_endpoints(publisher, &allocator, &publisher_endpoints));
+  EXPECT_GT(publisher_endpoints.size, 0u)
+    << "broker/MDDS mode must expose real transport or broker network-flow metadata";
+
+  rmw_network_flow_endpoint_array_t subscription_endpoints =
+    rmw_get_zero_initialized_network_flow_endpoint_array();
+  EXPECT_EQ(
+    RMW_RET_OK,
+    rmw_subscription_get_network_flow_endpoints(
+      subscription, &allocator, &subscription_endpoints));
+  EXPECT_GT(subscription_endpoints.size, 0u)
+    << "broker/MDDS mode must expose real transport or broker network-flow metadata";
+
+  if (subscription_endpoints.size > 0u) {
+    EXPECT_EQ(RMW_RET_OK, rmw_network_flow_endpoint_array_fini(&subscription_endpoints));
+  }
+  if (publisher_endpoints.size > 0u) {
+    EXPECT_EQ(RMW_RET_OK, rmw_network_flow_endpoint_array_fini(&publisher_endpoints));
+  }
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_subscription(node, subscription));
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));

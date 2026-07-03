@@ -1,21 +1,35 @@
 ## 1. OpenSpec Baseline
 
 - [x] 1.1 Create and validate the proposal, design, and spec for the approved generator/typesupport, MDDS memory-model, signed SROS2, and authenticated transport scope.
-- [ ] 1.2 Re-run `openspec validate implement-rmw-mdds-perfect-parity --strict` and `openspec validate --changes --strict` after each task status update.
+- [x] 1.2 Re-run `openspec validate implement-rmw-mdds-perfect-parity --strict` and `openspec validate --changes --strict` for the current RED-contract task status.
 
 ## 2. RED Contracts For Dynamic Loaned Messages
 
-- [ ] 2.1 Add a failing host unit test for unbounded string loan publish that requires string bytes to be MDDS bridge-loan backed.
-- [ ] 2.2 Add a failing host unit test for dynamic sequence loan publish that requires sequence element storage to be MDDS bridge-loan backed.
-- [ ] 2.3 Add a failing host unit test for nested dynamic loan storage and lifetime.
-- [ ] 2.4 Add or update a script contract that runs the dynamic loan tests and emits explicit RED/GREEN markers for generalized loaned-message shapes.
+- [x] 2.1 Add a failing host unit test for unbounded string loan publish that requires string bytes to be MDDS bridge-loan backed.
+- [x] 2.2 Add a failing host unit test for dynamic sequence loan publish that requires sequence element storage to be MDDS bridge-loan backed.
+- [x] 2.3 Add a failing host unit test for nested dynamic loan storage and lifetime.
+- [x] 2.4 Add or update a script contract that runs the dynamic loan tests and emits explicit RED/GREEN markers for generalized loaned-message shapes.
+
+RED evidence on 2026-07-03: `bash ohos/test_rmw_mdds_full_parity_red_contracts.sh` runs
+`RmwMddsBridgeLoanedRmw.DISABLED_FullParityLoaned*` and emits
+`RESULT|rmw_mdds_full_parity_loaned_shapes|RED|status=1`. The RED set now covers unbounded string,
+dynamic sequence, and nested dynamic storage; all fail because the publisher does not advertise loan support
+and `rmw_borrow_loaned_message()` returns `RMW_RET_UNSUPPORTED`.
 
 ## 3. RED Contracts For Signed And Protected SROS2
 
-- [ ] 3.1 Add a failing host test that accepts valid signed protected governance and permissions artifacts only after signature and identity validation.
-- [ ] 3.2 Add failing host tests that reject unsigned protected governance, tampered signed permissions, and identity/certificate mismatch before endpoint creation.
-- [ ] 3.3 Add a failing protected-transport contract that rejects signed protected policy when authenticated/encrypted MDDS/DSoftBus transport cannot be established.
+- [x] 3.1 Add a failing host test that accepts valid signed protected governance and permissions artifacts only after signature and identity validation.
+- [x] 3.2 Add failing host tests that reject unsigned protected governance, tampered signed permissions, and identity/certificate mismatch before endpoint creation.
+- [x] 3.3 Add a failing protected-transport contract that rejects signed protected policy when authenticated/encrypted MDDS/DSoftBus transport cannot be established.
 - [ ] 3.4 Add or update a board harness that emits signed-policy, authorized protected traffic, denied protected traffic, and authenticated/encrypted transport markers.
+
+RED evidence on 2026-07-03: `bash ohos/test_rmw_mdds_full_parity_red_contracts.sh` runs
+`RmwMddsPubSub.DISABLED_FullParitySros2*` and emits
+`RESULT|rmw_mdds_full_parity_signed_security|RED|status=1`. The RED set now includes valid signed
+protected-policy acceptance with authenticated/encrypted transport, unsigned protected governance rejection,
+tampered signed permissions rejection, signed identity mismatch rejection, and missing authenticated transport
+diagnostics. Current implementation still fails at the old protected-governance unsupported diagnostic before
+signature, identity, or authenticated-transport semantics are implemented.
 
 ## 4. Generator/Typesupport And MDDS Memory Model
 

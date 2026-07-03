@@ -39,7 +39,7 @@ run_gate \
 run_gate \
   "rmw_mdds_full_parity_signed_security" \
   "${ROOT_DIR}/build/rmw_mdds_cpp/test_pubsub_inproc" \
-  "RmwMddsPubSub.DISABLED_FullParitySros2RejectsTamperedUnsignedPermissions"
+  "RmwMddsPubSub.DISABLED_FullParitySros2*"
 
 run_gate \
   "rmw_mdds_full_parity_broker_network_flow" \

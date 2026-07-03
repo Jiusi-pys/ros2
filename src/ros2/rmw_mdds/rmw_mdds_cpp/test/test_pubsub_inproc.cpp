@@ -223,6 +223,70 @@ std::string CreateTamperedSros2PolicyContractRoot()
   return root.string();
 }
 
+std::string CreateSignedProtectedSros2PolicyContractRoot(const char * label)
+{
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    (std::string("rmw_mdds_sros2_signed_protected_") + label + "_" + std::to_string(stamp));
+  std::filesystem::create_directories(root);
+
+  {
+    std::ofstream governance(root / "governance.xml");
+    governance <<
+      "<dds><domain_access_rules><domain_rule>"
+      "<domains><id>0</id></domains>"
+      "<allow_unauthenticated_participants>false</allow_unauthenticated_participants>"
+      "<enable_join_access_control>true</enable_join_access_control>"
+      "<discovery_protection_kind>SIGN</discovery_protection_kind>"
+      "<liveliness_protection_kind>SIGN</liveliness_protection_kind>"
+      "<rtps_protection_kind>ENCRYPT</rtps_protection_kind>"
+      "<topic_access_rules><topic_rule>"
+      "<topic_expression>rt/mdds_sros2_allowed</topic_expression>"
+      "<enable_discovery_protection>true</enable_discovery_protection>"
+      "<enable_read_access_control>true</enable_read_access_control>"
+      "<enable_write_access_control>true</enable_write_access_control>"
+      "<metadata_protection_kind>SIGN</metadata_protection_kind>"
+      "<data_protection_kind>ENCRYPT</data_protection_kind>"
+      "</topic_rule></topic_access_rules>"
+      "</domain_rule></domain_access_rules></dds>";
+  }
+  {
+    std::ofstream permissions(root / "permissions.xml");
+    permissions <<
+      "<dds><permissions><grant name=\"rmw_mdds_sros2_signed_authorized\">"
+      "<subject_name>CN=rmw_mdds_sros2_signed_authorized</subject_name>"
+      "<validity><not_before>2026-01-01T00:00:00</not_before>"
+      "<not_after>2036-01-01T00:00:00</not_after></validity>"
+      "<allow_rule><domains><id>0</id></domains>"
+      "<publish><topics><topic>rt/mdds_sros2_allowed</topic></topics></publish>"
+      "<subscribe><topics><topic>rt/mdds_sros2_allowed</topic></topics></subscribe>"
+      "</allow_rule><default>DENY</default>"
+      "</grant></permissions></dds>";
+  }
+  {
+    std::ofstream governance_signature(root / "governance.xml.p7s");
+    governance_signature << "fake-pkcs7-signature-for-governance";
+  }
+  {
+    std::ofstream permissions_signature(root / "permissions.xml.p7s");
+    permissions_signature << "fake-pkcs7-signature-for-permissions";
+  }
+  {
+    std::ofstream identity(root / "identity.pem");
+    identity << "CN=rmw_mdds_sros2_signed_authorized\n";
+  }
+  {
+    std::ofstream identity_ca(root / "identity_ca.cert.pem");
+    identity_ca << "CN=rmw_mdds_test_identity_ca\n";
+  }
+  {
+    std::ofstream permissions_ca(root / "permissions_ca.cert.pem");
+    permissions_ca << "CN=rmw_mdds_test_permissions_ca\n";
+  }
+  return root.string();
+}
+
 void SetSecurityRoot(rmw_init_options_t * options, const std::string & security_root)
 {
   ASSERT_NE(nullptr, options);
@@ -416,6 +480,161 @@ TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsTamperedUnsignedPermissions)
   } else {
     rmw_reset_error();
   }
+
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  std::filesystem::remove_all(security_root);
+}
+
+TEST(RmwMddsPubSub, DISABLED_FullParitySros2AcceptsSignedProtectedPolicyWithAuthenticatedTransport)
+{
+  const std::string security_root = CreateSignedProtectedSros2PolicyContractRoot("authorized");
+  ASSERT_EQ(0, setenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED", "1", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED", "1", 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_sros2_signed_authorized");
+  SetSecurityRoot(&options, security_root);
+  options.security_options.enforce_security = RMW_SECURITY_ENFORCEMENT_ENFORCE;
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  const rmw_ret_t init_ret = rmw_init(&options, &context);
+  EXPECT_EQ(RMW_RET_OK, init_ret)
+    << "signed protected policy must load when authenticated/encrypted transport is available: "
+    << rmw_get_error_string().str;
+  if (init_ret != RMW_RET_OK) {
+    rmw_reset_error();
+    EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+    unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
+    unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
+    std::filesystem::remove_all(security_root);
+    return;
+  }
+
+  rmw_node_t * node =
+    rmw_create_node(&context, "mdds_sros2_signed_authorized_node", "/mdds");
+  ASSERT_NE(nullptr, node);
+  const rosidl_message_type_support_t * type_support =
+    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
+  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
+
+  rmw_publisher_t * publisher = rmw_create_publisher(
+    node, type_support, "/mdds_sros2_allowed", &rmw_qos_profile_default, &publisher_options);
+  EXPECT_NE(nullptr, publisher) << rmw_get_error_string().str;
+  rmw_reset_error();
+  rmw_subscription_t * subscription = rmw_create_subscription(
+    node, type_support, "/mdds_sros2_allowed", &rmw_qos_profile_default, &subscription_options);
+  EXPECT_NE(nullptr, subscription) << rmw_get_error_string().str;
+  rmw_reset_error();
+
+  if (subscription != nullptr) {
+    EXPECT_EQ(RMW_RET_OK, rmw_destroy_subscription(node, subscription));
+  }
+  if (publisher != nullptr) {
+    EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));
+  }
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
+  std::filesystem::remove_all(security_root);
+}
+
+TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsTamperedSignedPermissions)
+{
+  const std::string security_root = CreateSignedProtectedSros2PolicyContractRoot("tampered");
+  {
+    std::ofstream permissions(
+      std::filesystem::path(security_root) / "permissions.xml", std::ios::app);
+    permissions << "<!-- tampered after signing -->";
+  }
+  ASSERT_EQ(0, setenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED", "1", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED", "1", 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_sros2_signed_tampered");
+  SetSecurityRoot(&options, security_root);
+  options.security_options.enforce_security = RMW_SECURITY_ENFORCEMENT_ENFORCE;
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  const rmw_ret_t init_ret = rmw_init(&options, &context);
+  EXPECT_NE(RMW_RET_OK, init_ret)
+    << "tampered signed permissions must be rejected before endpoint creation";
+  const char * error = rmw_get_error_string().str;
+  ASSERT_NE(nullptr, error);
+  EXPECT_NE(nullptr, std::strstr(error, "signature"))
+    << "tampered signed policy rejection must identify signature validation";
+  rmw_reset_error();
+
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
+  std::filesystem::remove_all(security_root);
+}
+
+TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsSignedIdentityMismatch)
+{
+  const std::string security_root = CreateSignedProtectedSros2PolicyContractRoot("identity_mismatch");
+  {
+    std::ofstream identity(std::filesystem::path(security_root) / "identity.pem");
+    identity << "CN=rmw_mdds_sros2_wrong_identity\n";
+  }
+  ASSERT_EQ(0, setenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED", "1", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED", "1", 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_sros2_signed_identity_mismatch");
+  SetSecurityRoot(&options, security_root);
+  options.security_options.enforce_security = RMW_SECURITY_ENFORCEMENT_ENFORCE;
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  const rmw_ret_t init_ret = rmw_init(&options, &context);
+  EXPECT_NE(RMW_RET_OK, init_ret)
+    << "signed permissions must be rejected when identity material does not match the grant";
+  const char * error = rmw_get_error_string().str;
+  ASSERT_NE(nullptr, error);
+  EXPECT_NE(nullptr, std::strstr(error, "identity"))
+    << "identity mismatch rejection must identify the mismatched identity material";
+  rmw_reset_error();
+
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
+  std::filesystem::remove_all(security_root);
+}
+
+TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsSignedPolicyWithoutAuthenticatedTransport)
+{
+  const std::string security_root = CreateSignedProtectedSros2PolicyContractRoot("no_transport");
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_sros2_signed_no_transport");
+  SetSecurityRoot(&options, security_root);
+  options.security_options.enforce_security = RMW_SECURITY_ENFORCEMENT_ENFORCE;
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  const rmw_ret_t init_ret = rmw_init(&options, &context);
+  EXPECT_NE(RMW_RET_OK, init_ret)
+    << "signed protected policy must fail closed when authenticated/encrypted transport is absent";
+  const char * error = rmw_get_error_string().str;
+  ASSERT_NE(nullptr, error);
+  EXPECT_NE(nullptr, std::strstr(error, "authenticated"))
+    << "protected policy rejection must identify missing authenticated transport";
+  EXPECT_NE(nullptr, std::strstr(error, "transport"))
+    << "protected policy rejection must identify missing authenticated transport";
+  rmw_reset_error();
 
   EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
   std::filesystem::remove_all(security_root);

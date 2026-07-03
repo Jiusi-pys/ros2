@@ -452,6 +452,77 @@ TEST(RmwMddsBridgeLoanedRmw, DISABLED_FullParityLoanedSequencePublishesWithoutCo
   unsetenv("RMW_IMPLEMENTATION");
 }
 
+TEST(RmwMddsBridgeLoanedRmw, DISABLED_FullParityLoanedNestedDynamicPublishesWithoutCopyFallback) {
+  FakeMddsBridgeReset();
+  ASSERT_EQ(0, setenv("RMW_IMPLEMENTATION", "rmw_mdds_cpp", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_full_parity_loaned_nested_dynamic_test");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_full_parity_loaned_nested_dynamic_node", "/mdds");
+  ASSERT_NE(nullptr, node);
+
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::Int32MultiArray>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, "/mdds_full_parity_loaned_nested_dynamic",
+                           &rmw_qos_profile_default, &publisher_options);
+  ASSERT_NE(nullptr, publisher);
+  EXPECT_TRUE(publisher->can_loan_messages)
+      << "full parity requires nested dynamic message members to become loanable";
+
+  void *loaned_message = nullptr;
+  EXPECT_EQ(RMW_RET_OK,
+            rmw_borrow_loaned_message(publisher, type_support, &loaned_message));
+  EXPECT_NE(nullptr, loaned_message);
+  if (loaned_message != nullptr) {
+    auto *msg = static_cast<std_msgs::msg::Int32MultiArray *>(loaned_message);
+    msg->layout.dim.resize(1);
+    msg->layout.dim[0].label.assign(2048u, 'n');
+    msg->layout.dim[0].size = 16;
+    msg->layout.dim[0].stride = 16;
+    msg->data.assign(1024u, 42);
+
+    auto *bridge_begin = static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
+    ASSERT_NE(nullptr, bridge_begin);
+    const uint32_t bridge_size = FakeMddsBridgeLastBorrowedSize();
+    auto *label_begin =
+        reinterpret_cast<const uint8_t *>(msg->layout.dim[0].label.data());
+    auto *data_begin = reinterpret_cast<const uint8_t *>(msg->data.data());
+    const size_t data_bytes = msg->data.size() * sizeof(msg->data[0]);
+
+    EXPECT_GE(label_begin, bridge_begin)
+        << "nested string storage must come from the bridge loan";
+    EXPECT_LE(label_begin + msg->layout.dim[0].label.size(),
+              bridge_begin + bridge_size)
+        << "nested string storage must come from the bridge loan";
+    EXPECT_GE(data_begin, bridge_begin)
+        << "nested sequence storage must come from the bridge loan";
+    EXPECT_LE(data_begin + data_bytes, bridge_begin + bridge_size)
+        << "nested sequence storage must come from the bridge loan";
+    EXPECT_EQ(RMW_RET_OK,
+              rmw_publish_loaned_message(publisher, loaned_message, nullptr));
+    EXPECT_EQ(1, FakeMddsBridgePublishLoanedCount());
+  }
+
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  unsetenv("RMW_MDDS_BRIDGE_LIBRARY");
+  unsetenv("RMW_IMPLEMENTATION");
+}
+
 TEST(RmwMddsBridgeLoanedRmw, ReturnLoanedMessageReturnsBorrowedBridgeLoan) {
   FakeMddsBridgeReset();
   ASSERT_EQ(0, setenv("RMW_IMPLEMENTATION", "rmw_mdds_cpp", 1));

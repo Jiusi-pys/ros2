@@ -36,6 +36,7 @@
 #include "rmw/qos_profiles.h"
 #include "rmw/types.h"
 #include "rosidl_runtime_c/type_hash.h"
+#include "loan_arena.hpp"
 #include "message_adapter.hpp"
 #include "rtps_protocol.hpp"
 
@@ -49,6 +50,7 @@ struct BridgePublisherLoanRecord
   uint32_t capacity = 0;
   bool message_in_loan = false;
   bool raw_message_in_loan = false;
+  MddsLoanArena arena;
 };
 
 struct QueuedSample

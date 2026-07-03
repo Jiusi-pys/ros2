@@ -38,6 +38,7 @@ add_library(rmw_mdds_cpp
   src/ipc_protocol.cpp
   src/ipc_transport.cpp
   src/identifier.cpp
+  src/loan_arena.cpp
   src/message_adapter.cpp
   src/rmw_features.cpp
   src/rmw_guard_condition.cpp
@@ -654,6 +655,11 @@ if(BUILD_TESTING)
     fake_mdds_bridge
     rmw::rmw
   )
+
+  ament_add_gtest(test_loan_arena test/test_loan_arena.cpp)
+  target_sources(test_loan_arena PRIVATE src/loan_arena.cpp)
+  target_include_directories(test_loan_arena PRIVATE src)
+  target_link_libraries(test_loan_arena rmw_mdds_cpp)
 
   ament_add_gtest(test_bridge_loaned_rmw test/test_bridge_loaned_rmw.cpp)
   target_sources(test_bridge_loaned_rmw PRIVATE src/string_adapter.cpp)

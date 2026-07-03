@@ -348,8 +348,12 @@ bool BorrowPublisherBridgeLoan(
     (void)backend.ReturnLoanedSample(data->bridge_publisher, bridge_loan);
     return false;
   }
-  *loan = rmw_mdds_cpp::BridgePublisherLoanRecord{
-    bridge_loan, bridge_data, kDefaultBridgeLoanedPayloadCapacity, false, false};
+  loan->loan = bridge_loan;
+  loan->data = bridge_data;
+  loan->capacity = kDefaultBridgeLoanedPayloadCapacity;
+  loan->message_in_loan = false;
+  loan->raw_message_in_loan = false;
+  loan->arena.Reset(bridge_data, kDefaultBridgeLoanedPayloadCapacity);
   return true;
 }
 

@@ -23,13 +23,18 @@ Initial RED contract evidence: `ohos/test_rmw_mdds_full_parity_red_contracts.sh`
 
 - [ ] 3.1 Implement the smallest behavior change needed to turn the generalized loaned-message RED gates green.
 - [x] 3.2 Implement the smallest behavior change needed to turn the security-parity RED gates green, or document the external MDDS/DSoftBus dependency blocking implementation.
-- [ ] 3.3 Implement any remaining supported RMW API rows identified by the parity matrix.
+- [x] 3.3 Implement any remaining supported RMW API rows identified by the parity matrix.
 - [ ] 3.4 Re-run focused unit tests after each behavior change and keep unsupported rows explicit.
 
 Security GREEN evidence: after the local XML/protected-governance split, `test_pubsub_inproc` passes
 `RmwMddsPubSub.DISABLED_FullParitySros2RejectsTamperedUnsignedPermissions`, `ohos/test_rmw_mdds_sros2_policy_contracts.sh` still emits
 `RESULT|rmw_mdds_sros2_policy_contracts|PASS`, and `ohos/test_rmw_mdds_full_parity_red_contracts.sh` now emits
 `RESULT|rmw_mdds_full_parity_signed_security|PASS` while remaining nonzero for the two still-open implementation rows.
+
+Broker network-flow GREEN evidence: `test_broker_mode` passes
+`RmwMddsBrokerMode.DISABLED_FullParityBrokerModeNetworkFlowEndpointsReportMddsTransport`, and
+`ohos/test_rmw_mdds_full_parity_red_contracts.sh` now emits
+`RESULT|rmw_mdds_full_parity_broker_network_flow|PASS` while remaining nonzero for the still-open loaned-shape row.
 
 ## 4. Runtime And Delivery Evidence
 
@@ -38,6 +43,13 @@ Security GREEN evidence: after the local XML/protected-governance split, `test_p
 - [ ] 4.3 Deploy the refreshed runtime delta to both RK3588/KaihongOS boards.
 - [ ] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and security board lanes with explicit PASS markers.
 - [ ] 4.5 Decide and execute the delivery endpoint: local handoff only, OpenSpec archive, push, PR, or Gerrit submission.
+
+Interim host delivery evidence: after the security and broker network-flow behavior changes,
+`ohos/test_rmw_mdds_delivery_contracts.sh` emits `rmw_mdds_delivery_contracts_ok`, including package
+CTest `22/22`, upstream `test_rmw_implementation` `16/16`, SROS2 local policy, zero-copy, type
+description, and host CLI pub/sub/service/action/params/lifecycle/graph/QoS/transient-local/message-info
+PASS markers. Keep 4.1 open until the remaining loaned-shape implementation decision is complete and the
+contract is rerun as final evidence.
 
 ## 5. Final Completion Decision
 

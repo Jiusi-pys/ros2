@@ -1591,10 +1591,31 @@ rmw_ret_t InitRtpsUserDataNetworkFlowEndpoints(
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  if (
-    context == nullptr || context->impl == nullptr ||
-    context->impl->rtps_participant == nullptr) {
+  if (context == nullptr || context->impl == nullptr) {
     return RMW_RET_OK;
+  }
+  if (context->impl->rtps_participant == nullptr) {
+    if (!rmw_mdds_cpp::BrokerModeEnabled()) {
+      return RMW_RET_OK;
+    }
+    ret = rmw_network_flow_endpoint_array_init(network_flow_endpoint_array, 1u, allocator);
+    if (ret != RMW_RET_OK) {
+      return ret;
+    }
+    rmw_network_flow_endpoint_t & endpoint =
+      network_flow_endpoint_array->network_flow_endpoint[0];
+    endpoint.transport_protocol = RMW_TRANSPORT_PROTOCOL_UNKNOWN;
+    endpoint.internet_protocol = RMW_INTERNET_PROTOCOL_UNKNOWN;
+    endpoint.transport_port = 0u;
+    constexpr char kBrokerEndpoint[] = "rmw_mdds_broker";
+    ret = rmw_network_flow_endpoint_set_internet_address(
+      &endpoint, kBrokerEndpoint, std::strlen(kBrokerEndpoint));
+    if (ret != RMW_RET_OK) {
+      const rmw_ret_t fini_ret =
+        rmw_network_flow_endpoint_array_fini(network_flow_endpoint_array);
+      (void)fini_ret;
+    }
+    return ret;
   }
 
   const uint16_t user_data_port = context->impl->rtps_participant->local_user_unicast_port();

@@ -232,8 +232,17 @@ TEST(RmwMddsBrokerMode, DISABLED_FullParityBrokerModeNetworkFlowEndpointsReportM
   EXPECT_EQ(
     RMW_RET_OK,
     rmw_publisher_get_network_flow_endpoints(publisher, &allocator, &publisher_endpoints));
-  EXPECT_GT(publisher_endpoints.size, 0u)
+  ASSERT_EQ(1u, publisher_endpoints.size)
     << "broker/MDDS mode must expose real transport or broker network-flow metadata";
+  ASSERT_NE(nullptr, publisher_endpoints.network_flow_endpoint);
+  EXPECT_EQ(
+    RMW_TRANSPORT_PROTOCOL_UNKNOWN,
+    publisher_endpoints.network_flow_endpoint[0].transport_protocol);
+  EXPECT_EQ(
+    RMW_INTERNET_PROTOCOL_UNKNOWN,
+    publisher_endpoints.network_flow_endpoint[0].internet_protocol);
+  EXPECT_EQ(0u, publisher_endpoints.network_flow_endpoint[0].transport_port);
+  EXPECT_STREQ("rmw_mdds_broker", publisher_endpoints.network_flow_endpoint[0].internet_address);
 
   rmw_network_flow_endpoint_array_t subscription_endpoints =
     rmw_get_zero_initialized_network_flow_endpoint_array();
@@ -241,8 +250,18 @@ TEST(RmwMddsBrokerMode, DISABLED_FullParityBrokerModeNetworkFlowEndpointsReportM
     RMW_RET_OK,
     rmw_subscription_get_network_flow_endpoints(
       subscription, &allocator, &subscription_endpoints));
-  EXPECT_GT(subscription_endpoints.size, 0u)
+  ASSERT_EQ(1u, subscription_endpoints.size)
     << "broker/MDDS mode must expose real transport or broker network-flow metadata";
+  ASSERT_NE(nullptr, subscription_endpoints.network_flow_endpoint);
+  EXPECT_EQ(
+    RMW_TRANSPORT_PROTOCOL_UNKNOWN,
+    subscription_endpoints.network_flow_endpoint[0].transport_protocol);
+  EXPECT_EQ(
+    RMW_INTERNET_PROTOCOL_UNKNOWN,
+    subscription_endpoints.network_flow_endpoint[0].internet_protocol);
+  EXPECT_EQ(0u, subscription_endpoints.network_flow_endpoint[0].transport_port);
+  EXPECT_STREQ(
+    "rmw_mdds_broker", subscription_endpoints.network_flow_endpoint[0].internet_address);
 
   if (subscription_endpoints.size > 0u) {
     EXPECT_EQ(RMW_RET_OK, rmw_network_flow_endpoint_array_fini(&subscription_endpoints));

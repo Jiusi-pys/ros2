@@ -1,9 +1,11 @@
 ## 1. Full Parity Audit
 
-- [ ] 1.1 Build a current `rmw_mdds_cpp` parity matrix covering init, context, nodes, wait sets, guard conditions, graph, pub/sub, services, clients, actions, serialized APIs, dynamic APIs, loaned messages, QoS compatibility, QoS events, content filters, type identity, security, network-flow metadata, logging, host delivery, board delivery, and upstream handoff.
-- [ ] 1.2 For every matrix row, record the current evidence source: code path, unit test, contract script, upstream conformance test, board harness, OpenSpec task, or missing evidence.
-- [ ] 1.3 Classify every row as proven, accepted unsupported, or incomplete; rows cannot remain ambiguous.
-- [ ] 1.4 Identify the minimum RED test or executable contract needed for every incomplete row.
+- [x] 1.1 Build a current `rmw_mdds_cpp` parity matrix covering init, context, nodes, wait sets, guard conditions, graph, pub/sub, services, clients, actions, serialized APIs, dynamic APIs, loaned messages, QoS compatibility, QoS events, content filters, type identity, security, network-flow metadata, logging, host delivery, board delivery, and upstream handoff.
+- [x] 1.2 For every matrix row, record the current evidence source: code path, unit test, contract script, upstream conformance test, board harness, OpenSpec task, or missing evidence.
+- [x] 1.3 Classify every row as proven, accepted unsupported, or incomplete; rows cannot remain ambiguous.
+- [x] 1.4 Identify the minimum RED test or executable contract needed for every incomplete row.
+
+Audit artifact: `parity-matrix.md`.
 
 ## 2. RED Gates For Intended Support
 

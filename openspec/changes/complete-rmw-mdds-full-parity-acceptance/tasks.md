@@ -34,10 +34,13 @@ implemented or explicitly accepted out of scope.
 - [x] 3.3 Implement any remaining supported RMW API rows identified by the parity matrix.
 - [x] 3.4 Re-run focused unit tests after each behavior change and keep unsupported rows explicit.
 
-Security GREEN evidence: after the local XML/protected-governance split, `test_pubsub_inproc` passes
-`RmwMddsPubSub.DISABLED_FullParitySros2RejectsTamperedUnsignedPermissions`, `ohos/test_rmw_mdds_sros2_policy_contracts.sh` still emits
-`RESULT|rmw_mdds_sros2_policy_contracts|PASS`, and `ohos/test_rmw_mdds_full_parity_red_contracts.sh` now emits
-`RESULT|rmw_mdds_full_parity_signed_security|PASS` while remaining nonzero for the two still-open implementation rows.
+Security GREEN evidence: after the local XML/protected-governance split and the later signed protected
+policy implementation, `test_pubsub_inproc` passes the full `RmwMddsPubSub.DISABLED_FullParitySros2*`
+set. `ohos/test_rmw_mdds_sros2_policy_contracts.sh` still emits
+`RESULT|rmw_mdds_sros2_policy_contracts|PASS`, and `ohos/test_rmw_mdds_full_parity_red_contracts.sh` now
+emits `RESULT|rmw_mdds_full_parity_signed_security|PASS` while remaining nonzero for the still-open
+loaned-shape row. This is host signed-artifact and fail-closed protected-policy evidence; board-visible
+MDDS/DSoftBus authenticated/encrypted transport remains tracked separately.
 
 Broker network-flow GREEN evidence: `test_broker_mode` passes
 `RmwMddsBrokerMode.DISABLED_FullParityBrokerModeNetworkFlowEndpointsReportMddsTransport`, and
@@ -89,11 +92,24 @@ current-tree rerun, the params/lifecycle probes exposed daemon/discovery timing 
 daemon-free discovery and state polling for those probes, and the final full delivery rerun passed. Re-run
 this contract again if the remaining loaned-shape implementation decision lands as another behavior change.
 
+Signed-security host refresh on 2026-07-03: after OpenSSL-backed signed protected SROS2 artifact validation
+landed, the full `rmw_mdds_cpp` build succeeded with the workspace Python path exported,
+`ctest --test-dir build/rmw_mdds_cpp --output-on-failure` passed 22/22 with
+`LD_LIBRARY_PATH=/home/kaihong/ros2/build/rmw_mdds_cpp:/home/kaihong/ros2/install/lib`, and
+`ohos/test_rmw_mdds_delivery_contracts.sh` again emitted `rmw_mdds_delivery_contracts_ok`. The refreshed
+full-parity host contract emits `RESULT|rmw_mdds_full_parity_signed_security|PASS` and remains nonzero only
+because `RESULT|rmw_mdds_full_parity_loaned_shapes|RED|status=1` is still open.
+
 OHOS overlay rebuild evidence on 2026-07-03: `./ohos/colcon_rk3588a.sh rmw_mdds_cpp` rebuilt and installed
 the target package into `install/ohos-colcon-rk3588a`, and `ohos/test_rmw_mdds_artifact_contracts.sh`
 emitted `rmw_mdds_artifact_contracts_ok`. Rebuilt artifact checksums:
 `librmw_mdds_cpp.so` sha `45b901717a47ce9b7d6124131df3f6a10f952b86581160a5f5e7375de1b9bdbb`;
 `rmw_mdds_broker` sha `85f5c7afc3c51f4bd98cad1c2e8f1edd3df968e6124b3c6e2435feac3680670f`.
+
+Host install refresh on 2026-07-03: `cmake --install build/rmw_mdds_cpp` refreshed
+`install/lib/librmw_mdds_cpp.so`, `ohos/test_rmw_mdds_artifact_contracts.sh` emitted
+`rmw_mdds_artifact_contracts_ok`, and the installed host `librmw_mdds_cpp.so` sha is
+`f2c8f6708594bed141aa6d185f4f07c7723d2d4093e1cca5e5af426acadae287`.
 
 Board deploy evidence on 2026-07-03: `ohos/tools/deploy_rmw_mdds_delta.sh
 3e01ff55454d202020104033bf453b00 3e01ff55454d202020104433991c3b00` emitted
@@ -121,8 +137,10 @@ XML topic-policy scope (`NONE` protection kinds). It first failed against the ol
 3e01ff55454d202020104433991c3b00 3e01ff55454d202020104033bf453b00` emitted
 `RESULT|board_sros2_authorized_pubsub|PASS|topic=/mdds_sros2_allowed|received=20`,
 `RESULT|board_sros2_unauthorized_publish|PASS|topic=/mdds_sros2_forbidden|denied`, and
-`cross_board_rmw_mdds_sros2_policy_ok`. Protected signed/transport SROS2 behavior remains a separate
-incomplete full-parity security row unless accepted out of scope.
+`cross_board_rmw_mdds_sros2_policy_ok`. Host signed/protected SROS2 policy behavior is now covered by the
+full-parity host contract, but protected signed transport remains incomplete until a board harness proves
+authenticated/encrypted MDDS/DSoftBus transport activation or the user accepts that transport boundary as out
+of scope.
 
 Delivery endpoint decision on 2026-07-03: no push, PR, Gerrit submission, or archive was requested, so the
 executed endpoint is a local handoff on branch `jazzy-ubuntu-20.04`. The pre-blocker-evidence handoff
@@ -141,9 +159,10 @@ completion.
 - [ ] 5.5 Mark the persistent goal complete only if every required row is proven or explicitly accepted out of scope and no required delivery work remains.
 
 Final audit snapshot on 2026-07-03: tracked status has been kept clean at each local handoff checkpoint, and
-`openspec validate --changes --strict` reports all three changes valid:
-`complete-rmw-mdds-feature-closure`, `complete-rmw-mdds-full-parity-acceptance`, and
-`complete-rmw-mdds-zero-copy-security`. Current unsupported/incomplete rows are not accepted as satisfying
-the "perfect/all ROS 2 middleware features" objective: generalized dynamic loaned-message storage remains
-RED, and signed SROS2 artifact validation plus encrypted/authenticated MDDS/DSoftBus transport remain
-incomplete or external-dependency work. Therefore the persistent goal must remain open.
+`openspec validate --changes --strict` reports all four changes valid:
+`complete-rmw-mdds-feature-closure`, `complete-rmw-mdds-full-parity-acceptance`,
+`complete-rmw-mdds-zero-copy-security`, and `implement-rmw-mdds-perfect-parity`. Current
+unsupported/incomplete rows are not accepted as satisfying the "perfect/all ROS 2 middleware features"
+objective: generalized dynamic loaned-message storage remains RED, board-visible authenticated/encrypted
+MDDS/DSoftBus protected transport remains incomplete or external-dependency work, and local-only delivery has
+not been accepted as the final endpoint. Therefore the persistent goal must remain open.

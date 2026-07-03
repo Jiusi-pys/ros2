@@ -31,6 +31,13 @@ tampered signed permissions rejection, signed identity mismatch rejection, and m
 diagnostics. Current implementation still fails at the old protected-governance unsupported diagnostic before
 signature, identity, or authenticated-transport semantics are implemented.
 
+Host GREEN evidence on 2026-07-03: after adding OpenSSL-backed RSA/SHA-256 detached signature validation,
+certificate trust-anchor checks, identity certificate binding, and an explicit authenticated/encrypted
+protected-transport gate, `bash
+ohos/test_rmw_mdds_full_parity_red_contracts.sh` emits
+`RESULT|rmw_mdds_full_parity_signed_security|PASS`. This proves host signed-artifact semantics and
+fail-closed protected-policy handling, but not RK3588/KaihongOS MDDS/DSoftBus protected transport activation.
+
 ## 4. Generator/Typesupport And MDDS Memory Model
 
 - [ ] 4.1 Identify the exact generated-message or type-support extension point that can construct ABI-safe loan-aware dynamic message storage.
@@ -41,10 +48,18 @@ signature, identity, or authenticated-transport semantics are implemented.
 
 ## 5. Signed SROS2 And Authenticated Transport Implementation
 
-- [ ] 5.1 Implement signed governance and permissions artifact loading, signature validation, certificate-chain validation, and identity binding.
-- [ ] 5.2 Preserve the existing unprotected local XML policy path for `NONE` protection kinds.
-- [ ] 5.3 Implement fail-closed protected-policy behavior for unsigned, tampered, mismatched, or unreadable artifacts.
+- [x] 5.1 Implement signed governance and permissions artifact loading, signature validation, certificate-chain validation, and identity binding.
+- [x] 5.2 Preserve the existing unprotected local XML policy path for `NONE` protection kinds.
+- [x] 5.3 Implement fail-closed protected-policy behavior for unsigned, tampered, mismatched, or unreadable artifacts.
 - [ ] 5.4 Activate authenticated/encrypted MDDS/DSoftBus transport for valid protected governance and fail closed if the protected lane cannot be established.
+
+Implementation evidence on 2026-07-03: `LoadSecurityPolicy()` now accepts protected governance only after
+`governance.xml.sig` and `permissions.xml.sig` verify against a trusted `permissions_ca.cert.pem`,
+`identity.pem` validates against `identity_ca.cert.pem`, the identity certificate common name matches the
+permissions `subject_name`, and the protected transport gate reports authenticated plus encrypted transport.
+The `NONE` protection local XML policy path remains green through
+`ohos/test_rmw_mdds_sros2_policy_contracts.sh`. Task 5.4 remains open because the current host gate does not
+yet activate or prove board-side MDDS/DSoftBus authenticated/encrypted transport.
 
 ## 6. Verification And Final Acceptance Sync
 
@@ -53,3 +68,15 @@ signature, identity, or authenticated-transport semantics are implemented.
 - [ ] 6.3 Rebuild the OHOS overlay, deploy to RK3588/KaihongOS boards, and run affected native, gateway, and protected SROS2 board lanes.
 - [ ] 6.4 Update `complete-rmw-mdds-full-parity-acceptance/parity-matrix.md` and tasks with exact command evidence.
 - [ ] 6.5 Resolve the delivery endpoint with the user or execute the requested local/archive/push/PR/Gerrit path before marking the persistent goal complete.
+
+Current host verification evidence on 2026-07-03: with
+`PYTHONPATH=/home/kaihong/ros2/install/lib/python3.12/site-packages` set for ament's Python wrappers and
+`LD_LIBRARY_PATH=/home/kaihong/ros2/build/rmw_mdds_cpp:/home/kaihong/ros2/install/lib`, the full
+`rmw_mdds_cpp` build succeeds, `ctest --test-dir build/rmw_mdds_cpp --output-on-failure` passes 22/22, and
+`ohos/test_rmw_mdds_delivery_contracts.sh` emits `rmw_mdds_delivery_contracts_ok`. The affected full-parity
+contract still exits nonzero by design with `RESULT|rmw_mdds_full_parity_loaned_shapes|RED|status=1`, while
+`RESULT|rmw_mdds_full_parity_signed_security|PASS` and
+`RESULT|rmw_mdds_full_parity_broker_network_flow|PASS` are green. `cmake --install build/rmw_mdds_cpp`
+refreshed `install/lib/librmw_mdds_cpp.so`, and `ohos/test_rmw_mdds_artifact_contracts.sh` emits
+`rmw_mdds_artifact_contracts_ok`; installed `librmw_mdds_cpp.so` sha is
+`f2c8f6708594bed141aa6d185f4f07c7723d2d4093e1cca5e5af426acadae287`.

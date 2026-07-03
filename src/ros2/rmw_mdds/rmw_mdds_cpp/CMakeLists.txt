@@ -24,6 +24,7 @@ find_package(rosidl_typesupport_fastrtps_c REQUIRED)
 find_package(rosidl_typesupport_fastrtps_cpp REQUIRED)
 find_package(rosidl_typesupport_introspection_c REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
+find_package(OpenSSL QUIET)
 find_package(Threads REQUIRED)
 
 include_directories(include)
@@ -73,6 +74,10 @@ target_link_libraries(rmw_mdds_cpp PRIVATE
   rosidl_typesupport_introspection_c::rosidl_typesupport_introspection_c
   rosidl_typesupport_introspection_cpp::rosidl_typesupport_introspection_cpp
 )
+if(OpenSSL_FOUND)
+  target_compile_definitions(rmw_mdds_cpp PRIVATE RMW_MDDS_HAS_OPENSSL=1)
+  target_link_libraries(rmw_mdds_cpp PRIVATE OpenSSL::Crypto)
+endif()
 
 configure_rmw_library(rmw_mdds_cpp)
 

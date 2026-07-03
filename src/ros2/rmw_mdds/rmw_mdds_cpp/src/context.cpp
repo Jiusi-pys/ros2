@@ -21,12 +21,22 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <iterator>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef RMW_MDDS_HAS_OPENSSL
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
+#endif
 
 #include "broker.hpp"
 #include "rmw/error_handling.h"
@@ -71,6 +81,17 @@ std::string ReadTextFile(const std::string & path, std::string * error)
   std::ostringstream buffer;
   buffer << input.rdbuf();
   return buffer.str();
+}
+
+std::vector<unsigned char> ReadBinaryFile(const std::string & path, std::string * error)
+{
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    SetError(error, "cannot open " + path);
+    return {};
+  }
+  return std::vector<unsigned char>(
+    std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 }
 
 std::vector<std::string> ExtractTagValues(const std::string & text, const std::string & tag)
@@ -132,6 +153,216 @@ bool GovernanceRequestsProtectedTransport(const std::string & governance)
   }
   return false;
 }
+
+bool EnvFlagEnabled(const char * name)
+{
+  const char * value = std::getenv(name);
+  if (value == nullptr) {
+    return false;
+  }
+  const std::string normalized = NormalizeXmlValue(value);
+  return normalized == "1" || normalized == "TRUE" || normalized == "ON" ||
+         normalized == "YES";
+}
+
+bool ProtectedTransportAvailable(std::string * error)
+{
+  if (
+    EnvFlagEnabled("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED") &&
+    EnvFlagEnabled("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED")) {
+    return true;
+  }
+  SetError(
+    error,
+    "authenticated encrypted MDDS/DSoftBus transport is required for protected SROS2 "
+    "governance but is not active");
+  return false;
+}
+
+#ifdef RMW_MDDS_HAS_OPENSSL
+std::string OpenSslError()
+{
+  const unsigned long err = ERR_get_error();
+  if (err == 0u) {
+    return "unknown OpenSSL error";
+  }
+  char buffer[256];
+  ERR_error_string_n(err, buffer, sizeof(buffer));
+  return buffer;
+}
+
+using BioPtr = std::unique_ptr<BIO, decltype(&BIO_free)>;
+using X509Ptr = std::unique_ptr<X509, decltype(&X509_free)>;
+using PkeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+using MdCtxPtr = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
+using X509StorePtr = std::unique_ptr<X509_STORE, decltype(&X509_STORE_free)>;
+using X509StoreCtxPtr = std::unique_ptr<X509_STORE_CTX, decltype(&X509_STORE_CTX_free)>;
+
+X509Ptr LoadCertificate(const std::string & certificate_path, std::string * error)
+{
+  BioPtr cert_bio(BIO_new_file(certificate_path.c_str(), "r"), BIO_free);
+  if (!cert_bio) {
+    SetError(error, "cannot open signed SROS2 certificate " + certificate_path);
+    return X509Ptr(nullptr, X509_free);
+  }
+  X509Ptr cert(PEM_read_bio_X509(cert_bio.get(), nullptr, nullptr, nullptr), X509_free);
+  if (!cert) {
+    SetError(error, "cannot parse signed SROS2 certificate " + certificate_path);
+  }
+  return cert;
+}
+
+bool ValidateCertificateTrust(
+  const std::string & certificate_path, const std::string & trust_anchor_path,
+  const char * certificate_label, std::string * error)
+{
+  X509Ptr cert = LoadCertificate(certificate_path, error);
+  if (!cert) {
+    return false;
+  }
+  X509Ptr trust_anchor = LoadCertificate(trust_anchor_path, error);
+  if (!trust_anchor) {
+    return false;
+  }
+  X509StorePtr store(X509_STORE_new(), X509_STORE_free);
+  X509StoreCtxPtr store_ctx(X509_STORE_CTX_new(), X509_STORE_CTX_free);
+  if (!store || !store_ctx) {
+    SetError(error, "cannot allocate signed SROS2 certificate verification context");
+    return false;
+  }
+  if (X509_STORE_add_cert(store.get(), trust_anchor.get()) != 1) {
+    SetError(error, "cannot load signed SROS2 trust anchor: " + OpenSslError());
+    return false;
+  }
+  if (X509_STORE_CTX_init(store_ctx.get(), store.get(), cert.get(), nullptr) != 1) {
+    SetError(error, "cannot initialize signed SROS2 certificate verification");
+    return false;
+  }
+  if (X509_verify_cert(store_ctx.get()) != 1) {
+    SetError(
+      error,
+      std::string("signed SROS2 ") + certificate_label +
+        " certificate chain validation failed: " + OpenSslError());
+    return false;
+  }
+  return true;
+}
+
+std::string CertificateCommonName(const std::string & certificate_path, std::string * error)
+{
+  X509Ptr cert = LoadCertificate(certificate_path, error);
+  if (!cert) {
+    return {};
+  }
+  X509_NAME * subject = X509_get_subject_name(cert.get());
+  if (subject == nullptr) {
+    SetError(error, "signed SROS2 identity certificate has no subject");
+    return {};
+  }
+  char common_name[256] = {};
+  const int len = X509_NAME_get_text_by_NID(
+    subject, NID_commonName, common_name, static_cast<int>(sizeof(common_name)));
+  if (len <= 0) {
+    SetError(error, "signed SROS2 identity certificate has no common name");
+    return {};
+  }
+  return std::string(common_name, static_cast<size_t>(len));
+}
+
+bool VerifyDetachedSha256Signature(
+  const std::string & artifact_path, const std::string & signature_path,
+  const std::string & certificate_path, const char * artifact_label, std::string * error)
+{
+  const auto artifact = ReadBinaryFile(artifact_path, error);
+  if (artifact.empty()) {
+    return false;
+  }
+  const auto signature = ReadBinaryFile(signature_path, error);
+  if (signature.empty()) {
+    return false;
+  }
+
+  X509Ptr cert = LoadCertificate(certificate_path, error);
+  if (!cert) {
+    return false;
+  }
+  PkeyPtr public_key(X509_get_pubkey(cert.get()), EVP_PKEY_free);
+  if (!public_key) {
+    SetError(error, "cannot extract signed SROS2 certificate public key");
+    return false;
+  }
+  MdCtxPtr ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+  if (!ctx) {
+    SetError(error, "cannot allocate OpenSSL digest verification context");
+    return false;
+  }
+  if (EVP_DigestVerifyInit(ctx.get(), nullptr, EVP_sha256(), nullptr, public_key.get()) != 1) {
+    SetError(error, "cannot initialize signed SROS2 signature verification: " + OpenSslError());
+    return false;
+  }
+  if (EVP_DigestVerifyUpdate(ctx.get(), artifact.data(), artifact.size()) != 1) {
+    SetError(error, "cannot update signed SROS2 signature verification: " + OpenSslError());
+    return false;
+  }
+  const int verify_ret = EVP_DigestVerifyFinal(ctx.get(), signature.data(), signature.size());
+  if (verify_ret != 1) {
+    SetError(
+      error,
+      std::string("signed SROS2 ") + artifact_label +
+        " signature validation failed: " + OpenSslError());
+    return false;
+  }
+  return true;
+}
+
+bool ValidateSignedSecurityArtifacts(
+  const std::string & root, const std::string & permissions, std::string * error)
+{
+  const std::string certificate_path = root + "/permissions_ca.cert.pem";
+  if (!ValidateCertificateTrust(
+      certificate_path, certificate_path, "permissions CA", error)) {
+    return false;
+  }
+  if (!VerifyDetachedSha256Signature(
+      root + "/governance.xml", root + "/governance.xml.sig", certificate_path,
+      "governance", error)) {
+    return false;
+  }
+  if (!VerifyDetachedSha256Signature(
+      root + "/permissions.xml", root + "/permissions.xml.sig", certificate_path,
+      "permissions", error)) {
+    return false;
+  }
+  const auto subjects = ExtractTagValues(permissions, "subject_name");
+  if (subjects.empty() || NormalizeXmlValue(subjects.front()).empty()) {
+    SetError(error, "signed SROS2 permissions artifact has no subject_name grant");
+    return false;
+  }
+  if (!ValidateCertificateTrust(
+      root + "/identity.pem", root + "/identity_ca.cert.pem", "identity", error)) {
+    return false;
+  }
+  const std::string identity_common_name = CertificateCommonName(root + "/identity.pem", error);
+  if (identity_common_name.empty()) {
+    return false;
+  }
+  const std::string identity_subject = "CN=" + identity_common_name;
+  if (NormalizeXmlValue(subjects.front()) != NormalizeXmlValue(identity_subject)) {
+    SetError(
+      error,
+      "signed SROS2 identity mismatch: permissions subject is not present in identity.pem");
+    return false;
+  }
+  return true;
+}
+#else
+bool ValidateSignedSecurityArtifacts(
+  const std::string &, const std::string &, std::string * error)
+{
+  SetError(error, "signed SROS2 artifact validation requires OpenSSL support");
+  return false;
+}
+#endif
 
 std::vector<std::string> ExtractPermissionTopics(
   const std::string & permissions, const std::string & section_tag)
@@ -293,16 +524,18 @@ bool LoadSecurityPolicy(
   if (governance.empty()) {
     return false;
   }
-  if (GovernanceRequestsProtectedTransport(governance)) {
-    SetError(
-      error,
-      "protected SROS2 governance requires signed DDS Security artifacts and transport "
-      "protection, but rmw_mdds_cpp currently supports only local XML topic policy");
-    return false;
-  }
+  const bool protected_transport_required = GovernanceRequestsProtectedTransport(governance);
   const std::string permissions = ReadTextFile(permissions_path, error);
   if (permissions.empty()) {
     return false;
+  }
+  if (protected_transport_required) {
+    if (!ValidateSignedSecurityArtifacts(root, permissions, error)) {
+      return false;
+    }
+    if (!ProtectedTransportAvailable(error)) {
+      return false;
+    }
   }
 
   impl->security_policy.publish_topics = ExtractPermissionTopics(permissions, "publish");

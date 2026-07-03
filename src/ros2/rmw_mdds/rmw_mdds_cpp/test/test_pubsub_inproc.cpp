@@ -223,6 +223,66 @@ std::string CreateTamperedSros2PolicyContractRoot()
   return root.string();
 }
 
+std::string ShellQuote(const std::filesystem::path & path)
+{
+  std::string quoted = "'";
+  for (const char ch : path.string()) {
+    if (ch == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted += ch;
+    }
+  }
+  quoted += "'";
+  return quoted;
+}
+
+bool RunOpenSslFixtureCommand(const std::string & command)
+{
+  const int status = std::system((command + " >/dev/null 2>&1").c_str());
+  if (status != 0) {
+    ADD_FAILURE() << "OpenSSL fixture command failed: " << command;
+    return false;
+  }
+  return true;
+}
+
+bool CreateSelfSignedCertificate(
+  const std::filesystem::path & key, const std::filesystem::path & cert,
+  const char * common_name)
+{
+  bool ok = true;
+  ok &= RunOpenSslFixtureCommand(
+    "openssl genrsa -out " + ShellQuote(key) + " 2048");
+  ok &= RunOpenSslFixtureCommand(
+    "openssl req -new -x509 -key " + ShellQuote(key) + " -out " +
+    ShellQuote(cert) + " -days 3650 -subj '/CN=" + common_name + "'");
+  return ok;
+}
+
+void CreateDetachedSignatureFixture(const std::filesystem::path & root)
+{
+  const std::filesystem::path key = root / "permissions_ca.key.pem";
+  const std::filesystem::path cert = root / "permissions_ca.cert.pem";
+  const std::filesystem::path identity_key = root / "identity.key.pem";
+  const std::filesystem::path identity_cert = root / "identity.pem";
+  bool ok = true;
+  ok &= CreateSelfSignedCertificate(key, cert, "rmw_mdds_test_permissions_ca");
+  ok &= CreateSelfSignedCertificate(
+    identity_key, identity_cert, "rmw_mdds_sros2_signed_authorized");
+  ok &= RunOpenSslFixtureCommand(
+    "openssl dgst -sha256 -sign " + ShellQuote(key) + " -out " +
+    ShellQuote(root / "governance.xml.sig") + " " + ShellQuote(root / "governance.xml"));
+  ok &= RunOpenSslFixtureCommand(
+    "openssl dgst -sha256 -sign " + ShellQuote(key) + " -out " +
+    ShellQuote(root / "permissions.xml.sig") + " " + ShellQuote(root / "permissions.xml"));
+  if (ok) {
+    std::filesystem::copy_file(
+      identity_cert, root / "identity_ca.cert.pem",
+      std::filesystem::copy_options::overwrite_existing);
+  }
+}
+
 std::string CreateSignedProtectedSros2PolicyContractRoot(const char * label)
 {
   const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -264,26 +324,7 @@ std::string CreateSignedProtectedSros2PolicyContractRoot(const char * label)
       "</allow_rule><default>DENY</default>"
       "</grant></permissions></dds>";
   }
-  {
-    std::ofstream governance_signature(root / "governance.xml.p7s");
-    governance_signature << "fake-pkcs7-signature-for-governance";
-  }
-  {
-    std::ofstream permissions_signature(root / "permissions.xml.p7s");
-    permissions_signature << "fake-pkcs7-signature-for-permissions";
-  }
-  {
-    std::ofstream identity(root / "identity.pem");
-    identity << "CN=rmw_mdds_sros2_signed_authorized\n";
-  }
-  {
-    std::ofstream identity_ca(root / "identity_ca.cert.pem");
-    identity_ca << "CN=rmw_mdds_test_identity_ca\n";
-  }
-  {
-    std::ofstream permissions_ca(root / "permissions_ca.cert.pem");
-    permissions_ca << "CN=rmw_mdds_test_permissions_ca\n";
-  }
+  CreateDetachedSignatureFixture(root);
   return root.string();
 }
 
@@ -581,10 +622,13 @@ TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsTamperedSignedPermissions)
 TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsSignedIdentityMismatch)
 {
   const std::string security_root = CreateSignedProtectedSros2PolicyContractRoot("identity_mismatch");
-  {
-    std::ofstream identity(std::filesystem::path(security_root) / "identity.pem");
-    identity << "CN=rmw_mdds_sros2_wrong_identity\n";
-  }
+  const std::filesystem::path root_path(security_root);
+  ASSERT_TRUE(CreateSelfSignedCertificate(
+    root_path / "identity.key.pem", root_path / "identity.pem",
+    "rmw_mdds_sros2_wrong_identity"));
+  std::filesystem::copy_file(
+    root_path / "identity.pem", root_path / "identity_ca.cert.pem",
+    std::filesystem::copy_options::overwrite_existing);
   ASSERT_EQ(0, setenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED", "1", 1));
   ASSERT_EQ(0, setenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED", "1", 1));
 

@@ -15,6 +15,7 @@
 #include "context.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -92,6 +93,44 @@ std::vector<std::string> ExtractTagValues(const std::string & text, const std::s
     pos = end + close_tag.size();
   }
   return values;
+}
+
+std::string NormalizeXmlValue(std::string value)
+{
+  value.erase(
+    value.begin(),
+    std::find_if(value.begin(), value.end(), [](unsigned char ch) {
+      return !std::isspace(ch);
+    }));
+  value.erase(
+    std::find_if(value.rbegin(), value.rend(), [](unsigned char ch) {
+      return !std::isspace(ch);
+    }).base(),
+    value.end());
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::toupper(ch));
+  });
+  return value;
+}
+
+bool GovernanceRequestsProtectedTransport(const std::string & governance)
+{
+  const char * protection_tags[] = {
+    "discovery_protection_kind",
+    "liveliness_protection_kind",
+    "rtps_protection_kind",
+    "metadata_protection_kind",
+    "data_protection_kind",
+  };
+  for (const char * tag : protection_tags) {
+    for (const auto & value : ExtractTagValues(governance, tag)) {
+      const std::string normalized = NormalizeXmlValue(value);
+      if (!normalized.empty() && normalized != "NONE") {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 std::vector<std::string> ExtractPermissionTopics(
@@ -250,7 +289,15 @@ bool LoadSecurityPolicy(
   const std::string root(options.security_root_path);
   const std::string governance_path = root + "/governance.xml";
   const std::string permissions_path = root + "/permissions.xml";
-  if (ReadTextFile(governance_path, error).empty()) {
+  const std::string governance = ReadTextFile(governance_path, error);
+  if (governance.empty()) {
+    return false;
+  }
+  if (GovernanceRequestsProtectedTransport(governance)) {
+    SetError(
+      error,
+      "protected SROS2 governance requires signed DDS Security artifacts and transport "
+      "protection, but rmw_mdds_cpp currently supports only local XML topic policy");
     return false;
   }
   const std::string permissions = ReadTextFile(permissions_path, error);

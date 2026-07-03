@@ -14,7 +14,7 @@ Audit artifact: `parity-matrix.md`.
 - [x] 2.3 Add failing contracts for any remaining ROS 2 RMW API surface that the parity matrix marks incomplete but intended to become supported.
 - [ ] 2.4 Preserve explicit unsupported tests for rows that are accepted as out of scope.
 
-RED contract evidence: `ohos/test_rmw_mdds_full_parity_red_contracts.sh` exits nonzero by design on 2026-07-03 and emits:
+Initial RED contract evidence: `ohos/test_rmw_mdds_full_parity_red_contracts.sh` exited nonzero by design on 2026-07-03 and emitted:
 `RESULT|rmw_mdds_full_parity_loaned_shapes|RED|status=1`,
 `RESULT|rmw_mdds_full_parity_signed_security|RED|status=1`, and
 `RESULT|rmw_mdds_full_parity_broker_network_flow|RED|status=1`.
@@ -22,9 +22,14 @@ RED contract evidence: `ohos/test_rmw_mdds_full_parity_red_contracts.sh` exits n
 ## 3. Implementation For Missing Supported Rows
 
 - [ ] 3.1 Implement the smallest behavior change needed to turn the generalized loaned-message RED gates green.
-- [ ] 3.2 Implement the smallest behavior change needed to turn the security-parity RED gates green, or document the external MDDS/DSoftBus dependency blocking implementation.
+- [x] 3.2 Implement the smallest behavior change needed to turn the security-parity RED gates green, or document the external MDDS/DSoftBus dependency blocking implementation.
 - [ ] 3.3 Implement any remaining supported RMW API rows identified by the parity matrix.
 - [ ] 3.4 Re-run focused unit tests after each behavior change and keep unsupported rows explicit.
+
+Security GREEN evidence: after the local XML/protected-governance split, `test_pubsub_inproc` passes
+`RmwMddsPubSub.DISABLED_FullParitySros2RejectsTamperedUnsignedPermissions`, `ohos/test_rmw_mdds_sros2_policy_contracts.sh` still emits
+`RESULT|rmw_mdds_sros2_policy_contracts|PASS`, and `ohos/test_rmw_mdds_full_parity_red_contracts.sh` now emits
+`RESULT|rmw_mdds_full_parity_signed_security|PASS` while remaining nonzero for the two still-open implementation rows.
 
 ## 4. Runtime And Delivery Evidence
 

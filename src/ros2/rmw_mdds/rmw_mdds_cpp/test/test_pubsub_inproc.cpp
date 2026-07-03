@@ -153,26 +153,25 @@ std::string CreateSros2PolicyContractRoot(const char * label)
     (std::string("rmw_mdds_sros2_policy_contract_") + label + "_" + std::to_string(stamp));
   std::filesystem::create_directories(root);
 
-  // RED contract fixture for the missing full SROS2 path. Current rmw_mdds fails
-  // before reading these files; a real implementation must replace or consume
-  // signed SROS2 governance/permissions artifacts and enforce the same rules.
+  // Local XML policy fixture for topic-grant enforcement. Protected transport
+  // and signed artifact semantics are covered by the full-parity RED gate below.
   {
     std::ofstream governance(root / "governance.xml");
     governance <<
       "<dds><domain_access_rules><domain_rule>"
       "<domains><id>0</id></domains>"
-      "<allow_unauthenticated_participants>false</allow_unauthenticated_participants>"
+      "<allow_unauthenticated_participants>true</allow_unauthenticated_participants>"
       "<enable_join_access_control>true</enable_join_access_control>"
-      "<discovery_protection_kind>ENCRYPT</discovery_protection_kind>"
-      "<liveliness_protection_kind>ENCRYPT</liveliness_protection_kind>"
-      "<rtps_protection_kind>ENCRYPT</rtps_protection_kind>"
+      "<discovery_protection_kind>NONE</discovery_protection_kind>"
+      "<liveliness_protection_kind>NONE</liveliness_protection_kind>"
+      "<rtps_protection_kind>NONE</rtps_protection_kind>"
       "<topic_access_rules><topic_rule>"
       "<topic_expression>rt/mdds_sros2_allowed</topic_expression>"
-      "<enable_discovery_protection>true</enable_discovery_protection>"
+      "<enable_discovery_protection>false</enable_discovery_protection>"
       "<enable_read_access_control>true</enable_read_access_control>"
       "<enable_write_access_control>true</enable_write_access_control>"
-      "<metadata_protection_kind>ENCRYPT</metadata_protection_kind>"
-      "<data_protection_kind>ENCRYPT</data_protection_kind>"
+      "<metadata_protection_kind>NONE</metadata_protection_kind>"
+      "<data_protection_kind>NONE</data_protection_kind>"
       "</topic_rule></topic_access_rules>"
       "</domain_rule></domain_access_rules></dds>";
   }

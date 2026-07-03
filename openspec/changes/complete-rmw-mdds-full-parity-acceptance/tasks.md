@@ -56,7 +56,7 @@ behavior change in this acceptance track has matching focused verification.
 - [x] 4.2 Rebuild the OHOS `rmw_mdds_cpp` overlay after parity changes.
 - [x] 4.3 Deploy the refreshed runtime delta to both RK3588/KaihongOS boards.
 - [x] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and security board lanes with explicit PASS markers.
-- [ ] 4.5 Decide and execute the delivery endpoint: local handoff only, OpenSpec archive, push, PR, or Gerrit submission.
+- [x] 4.5 Decide and execute the delivery endpoint: local handoff only, OpenSpec archive, push, PR, or Gerrit submission.
 
 Fresh host delivery evidence on 2026-07-03: after the security, broker network-flow, explicit
 dynamic-loaned-message diagnostic, and host CLI harness robustness changes, `ohos/test_rmw_mdds_delivery_contracts.sh`
@@ -102,10 +102,29 @@ XML topic-policy scope (`NONE` protection kinds). It first failed against the ol
 `cross_board_rmw_mdds_sros2_policy_ok`. Protected signed/transport SROS2 behavior remains a separate
 incomplete full-parity security row unless accepted out of scope.
 
+Delivery endpoint decision on 2026-07-03: no push, PR, Gerrit submission, or archive was requested, so the
+executed endpoint is a local handoff on branch `jazzy-ubuntu-20.04`. The branch is clean and ahead of
+`origin/jazzy-ubuntu-20.04` by 18 commits, from upstream base `991c434` to local head `366b6b0`. The latest
+acceptance commits are `366b6b0 test(rmw_mdds): refresh board and delivery parity gates`,
+`f8a0735 docs(rmw_mdds): record OHOS overlay rebuild evidence`,
+`c0821f2 docs(rmw_mdds): record fresh host parity evidence`, and
+`6b602d8 fix(rmw_mdds): clarify dynamic loaned message rejection`. This local handoff is explicit, but it
+does not by itself satisfy the broader "perfect/all ROS 2 middleware features" objective because local-only
+delivery still requires user acceptance before final completion.
+
 ## 5. Final Completion Decision
 
-- [ ] 5.1 Update the parity matrix with all final command evidence and board markers.
-- [ ] 5.2 Verify tracked status is clean and generated/scratch artifacts are ignored or intentionally tracked.
-- [ ] 5.3 Validate all active OpenSpec changes with `openspec validate --strict`.
-- [ ] 5.4 Decide whether accepted unsupported rows still satisfy the user's "perfect/all ROS 2 middleware features" objective.
+- [x] 5.1 Update the parity matrix with all final command evidence and board markers.
+- [x] 5.2 Verify tracked status is clean and generated/scratch artifacts are ignored or intentionally tracked.
+- [x] 5.3 Validate all active OpenSpec changes with `openspec validate --strict`.
+- [x] 5.4 Decide whether accepted unsupported rows still satisfy the user's "perfect/all ROS 2 middleware features" objective.
 - [ ] 5.5 Mark the persistent goal complete only if every required row is proven or explicitly accepted out of scope and no required delivery work remains.
+
+Final audit snapshot on 2026-07-03: `git status --short --branch` reports
+`## jazzy-ubuntu-20.04...origin/jazzy-ubuntu-20.04 [ahead 18]` with no tracked or untracked file entries, and
+`openspec validate --changes --strict` reports all three changes valid:
+`complete-rmw-mdds-feature-closure`, `complete-rmw-mdds-full-parity-acceptance`, and
+`complete-rmw-mdds-zero-copy-security`. Current unsupported/incomplete rows are not accepted as satisfying
+the "perfect/all ROS 2 middleware features" objective: generalized dynamic loaned-message storage remains
+RED, and signed SROS2 artifact validation plus encrypted/authenticated MDDS/DSoftBus transport remain
+incomplete or external-dependency work. Therefore the persistent goal must remain open.

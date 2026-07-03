@@ -60,6 +60,18 @@ listed in section 2 also pass, and `ohos/test_rmw_mdds_sros2_policy_contracts.sh
 `RESULT|rmw_mdds_sros2_policy_contracts|PASS`. Any future behavior change in this acceptance track must add
 or rerun matching focused verification before it is counted.
 
+Implementation audit evidence on 2026-07-03: the remaining loaned-shape RED gates are not a small
+predicate-only fix. Publisher and subscription loan advertisement depends on
+`MessageAdapter::SupportsRawLoanedMessage()`, which delegates to flat raw C/C++ member checks that reject
+arrays and any non-scalar introspection member. `rmw_borrow_loaned_message()` also rejects those shapes before
+borrowing an MDDS bridge loan. If that guard were relaxed, `MessageAdapter::ConstructMessageInPlace()` would
+still invoke the generated ROS message `init_function`, so C++ `std::string` and `std::vector` members would
+allocate dynamic storage from the default allocator outside the bridge loan. The current
+`BridgePublisherLoanRecord` tracks one transport loan pointer, one raw data pointer, and a capacity; it has no
+allocator or segment API that can back generated dynamic members. Therefore task 3.1 needs an approved
+allocator-aware generated-message or MDDS memory-model design before production behavior changes, or explicit
+user acceptance that generalized dynamic loaned messages remain out of scope.
+
 ## 4. Runtime And Delivery Evidence
 
 - [x] 4.1 Run `ohos/test_rmw_mdds_delivery_contracts.sh` and confirm markers cover all affected host surfaces.
@@ -113,14 +125,12 @@ XML topic-policy scope (`NONE` protection kinds). It first failed against the ol
 incomplete full-parity security row unless accepted out of scope.
 
 Delivery endpoint decision on 2026-07-03: no push, PR, Gerrit submission, or archive was requested, so the
-executed endpoint is a local handoff on branch `jazzy-ubuntu-20.04`. The branch is clean and ahead of
-`origin/jazzy-ubuntu-20.04` by 18 commits, from upstream base `991c434` to local head `366b6b0`. The latest
-acceptance commits are `366b6b0 test(rmw_mdds): refresh board and delivery parity gates`,
-`f8a0735 docs(rmw_mdds): record OHOS overlay rebuild evidence`,
-`c0821f2 docs(rmw_mdds): record fresh host parity evidence`, and
-`6b602d8 fix(rmw_mdds): clarify dynamic loaned message rejection`. This local handoff is explicit, but it
-does not by itself satisfy the broader "perfect/all ROS 2 middleware features" objective because local-only
-delivery still requires user acceptance before final completion.
+executed endpoint is a local handoff on branch `jazzy-ubuntu-20.04`. The pre-blocker-evidence handoff
+snapshot was clean and ahead of `origin/jazzy-ubuntu-20.04` by 20 commits, from upstream base `991c434` to
+local head `e0b5b53`; later documentation-only evidence commits keep the same local-only endpoint
+classification. This local handoff is explicit, but it does not by itself satisfy the broader "perfect/all ROS
+2 middleware features" objective because local-only delivery still requires user acceptance before final
+completion.
 
 ## 5. Final Completion Decision
 
@@ -130,8 +140,7 @@ delivery still requires user acceptance before final completion.
 - [x] 5.4 Decide whether accepted unsupported rows still satisfy the user's "perfect/all ROS 2 middleware features" objective.
 - [ ] 5.5 Mark the persistent goal complete only if every required row is proven or explicitly accepted out of scope and no required delivery work remains.
 
-Final audit snapshot on 2026-07-03: `git status --short --branch` reports
-`## jazzy-ubuntu-20.04...origin/jazzy-ubuntu-20.04 [ahead 18]` with no tracked or untracked file entries, and
+Final audit snapshot on 2026-07-03: tracked status has been kept clean at each local handoff checkpoint, and
 `openspec validate --changes --strict` reports all three changes valid:
 `complete-rmw-mdds-feature-closure`, `complete-rmw-mdds-full-parity-acceptance`, and
 `complete-rmw-mdds-zero-copy-security`. Current unsupported/incomplete rows are not accepted as satisfying

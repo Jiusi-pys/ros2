@@ -40,7 +40,9 @@ Loaned-shape blocker evidence: `test_bridge_loaned_rmw` still keeps
 `RmwMddsBridgeLoanedRmw.DISABLED_FullParityLoaned*` RED, and those gates now require unbounded string and
 sequence dynamic member storage to come from the bridge loan before publish. Do not turn these gates GREEN by
 serializing a default-allocator `std::string` or `std::vector` into a bridge loan; that would keep dynamic
-storage outside MDDS and would not satisfy true zero-copy.
+storage outside MDDS and would not satisfy true zero-copy. Unsupported dynamic loan attempts now return a
+specific error explaining that only flat fixed-size scalar types are bridge-loan backed and that dynamic
+string/sequence storage is not backed by the MDDS bridge loan.
 
 ## 4. Runtime And Delivery Evidence
 

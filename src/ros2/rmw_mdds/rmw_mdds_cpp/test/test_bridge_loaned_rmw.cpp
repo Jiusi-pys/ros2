@@ -27,6 +27,7 @@
 
 #include "rcutils/allocator.h"
 #include "rcutils/strdup.h"
+#include "rmw/error_handling.h"
 #include "rmw/init.h"
 #include "rmw/init_options.h"
 #include "rmw/publisher_options.h"
@@ -320,6 +321,10 @@ TEST(RmwMddsBridgeLoanedRmw, PublisherDoesNotAdvertiseLoaningForUnboundedString)
             rmw_borrow_loaned_message(publisher, type_support,
                                       &loaned_message));
   EXPECT_EQ(nullptr, loaned_message);
+  const char *error = rmw_get_error_string().str;
+  ASSERT_NE(nullptr, error);
+  EXPECT_NE(nullptr, std::strstr(error, "flat fixed-size scalar"));
+  EXPECT_NE(nullptr, std::strstr(error, "dynamic string/sequence storage"));
   EXPECT_EQ(0, FakeMddsBridgeBorrowLoanedCount());
   rcutils_reset_error();
 

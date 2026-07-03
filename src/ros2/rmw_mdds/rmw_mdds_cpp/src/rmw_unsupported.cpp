@@ -1938,7 +1938,7 @@ rmw_ret_t rmw_borrow_loaned_message(
     return RMW_RET_INVALID_ARGUMENT;
   }
   auto * data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
-  if (data == nullptr || !data->adapter.IsValid() || !publisher->can_loan_messages) {
+  if (data == nullptr || !data->adapter.IsValid()) {
     RMW_SET_ERROR_MSG("publisher does not support loaned messages");
     return RMW_RET_UNSUPPORTED;
   }
@@ -1952,7 +1952,13 @@ rmw_ret_t rmw_borrow_loaned_message(
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!data->adapter.SupportsRawLoanedMessage()) {
-    RMW_SET_ERROR_MSG("loaned messages require a flat fixed-size scalar type");
+    RMW_SET_ERROR_MSG(
+      "loaned messages require a flat fixed-size scalar type; "
+      "dynamic string/sequence storage is not backed by the MDDS bridge loan");
+    return RMW_RET_UNSUPPORTED;
+  }
+  if (!publisher->can_loan_messages) {
+    RMW_SET_ERROR_MSG("publisher does not support loaned messages");
     return RMW_RET_UNSUPPORTED;
   }
   rmw_mdds_cpp::BridgePublisherLoanRecord bridge_loan;

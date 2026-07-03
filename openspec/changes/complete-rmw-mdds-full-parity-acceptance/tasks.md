@@ -1,0 +1,36 @@
+## 1. Full Parity Audit
+
+- [ ] 1.1 Build a current `rmw_mdds_cpp` parity matrix covering init, context, nodes, wait sets, guard conditions, graph, pub/sub, services, clients, actions, serialized APIs, dynamic APIs, loaned messages, QoS compatibility, QoS events, content filters, type identity, security, network-flow metadata, logging, host delivery, board delivery, and upstream handoff.
+- [ ] 1.2 For every matrix row, record the current evidence source: code path, unit test, contract script, upstream conformance test, board harness, OpenSpec task, or missing evidence.
+- [ ] 1.3 Classify every row as proven, accepted unsupported, or incomplete; rows cannot remain ambiguous.
+- [ ] 1.4 Identify the minimum RED test or executable contract needed for every incomplete row.
+
+## 2. RED Gates For Intended Support
+
+- [ ] 2.1 Add failing contracts for generalized loaned-message shapes that are intended to become supported beyond the current fixed-size raw loan path.
+- [ ] 2.2 Add failing contracts for any security behavior intended beyond current local SROS2 policy enforcement, including signed artifacts or transport protection if required.
+- [ ] 2.3 Add failing contracts for any remaining ROS 2 RMW API surface that the parity matrix marks incomplete but intended to become supported.
+- [ ] 2.4 Preserve explicit unsupported tests for rows that are accepted as out of scope.
+
+## 3. Implementation For Missing Supported Rows
+
+- [ ] 3.1 Implement the smallest behavior change needed to turn the generalized loaned-message RED gates green.
+- [ ] 3.2 Implement the smallest behavior change needed to turn the security-parity RED gates green, or document the external MDDS/DSoftBus dependency blocking implementation.
+- [ ] 3.3 Implement any remaining supported RMW API rows identified by the parity matrix.
+- [ ] 3.4 Re-run focused unit tests after each behavior change and keep unsupported rows explicit.
+
+## 4. Runtime And Delivery Evidence
+
+- [ ] 4.1 Run `ohos/test_rmw_mdds_delivery_contracts.sh` and confirm markers cover all affected host surfaces.
+- [ ] 4.2 Rebuild the OHOS `rmw_mdds_cpp` overlay after parity changes.
+- [ ] 4.3 Deploy the refreshed runtime delta to both RK3588/KaihongOS boards.
+- [ ] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and security board lanes with explicit PASS markers.
+- [ ] 4.5 Decide and execute the delivery endpoint: local handoff only, OpenSpec archive, push, PR, or Gerrit submission.
+
+## 5. Final Completion Decision
+
+- [ ] 5.1 Update the parity matrix with all final command evidence and board markers.
+- [ ] 5.2 Verify tracked status is clean and generated/scratch artifacts are ignored or intentionally tracked.
+- [ ] 5.3 Validate all active OpenSpec changes with `openspec validate --strict`.
+- [ ] 5.4 Decide whether accepted unsupported rows still satisfy the user's "perfect/all ROS 2 middleware features" objective.
+- [ ] 5.5 Mark the persistent goal complete only if every required row is proven or explicitly accepted out of scope and no required delivery work remains.

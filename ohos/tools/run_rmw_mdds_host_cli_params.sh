@@ -73,7 +73,8 @@ trap cleanup EXIT
 
 node_ready=0
 for _ in $(seq 1 100); do
-  if ros2 service list 2>/dev/null | grep -qx "${NODE_NAME}/set_parameters"; then
+  if ros2 service list --no-daemon --spin-time 1 2>/dev/null |
+      grep -qx "${NODE_NAME}/set_parameters"; then
     node_ready=1
     break
   fi
@@ -86,7 +87,7 @@ if [[ "${node_ready}" != "1" ]]; then
   exit 1
 fi
 
-if ! timeout 20s ros2 param set --timeout 10 \
+if ! timeout 20s ros2 param set --no-daemon --spin-time 2 --timeout 10 \
     "${NODE_NAME}" "${PARAM_NAME}" "${PARAM_VALUE}" >"${SET_LOG}" 2>&1; then
   echo "ros2 param set failed" >&2
   dump_logs
@@ -99,7 +100,7 @@ if ! grep -q "Set parameter successful" "${SET_LOG}"; then
   exit 1
 fi
 
-if ! timeout 20s ros2 param get --timeout 10 \
+if ! timeout 20s ros2 param get --no-daemon --spin-time 2 --timeout 10 \
     "${NODE_NAME}" "${PARAM_NAME}" >"${GET_LOG}" 2>&1; then
   echo "ros2 param get failed" >&2
   dump_logs

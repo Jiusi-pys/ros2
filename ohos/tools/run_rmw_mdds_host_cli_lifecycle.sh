@@ -78,9 +78,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+wait_lifecycle_state() {
+  local expected_state="$1"
+  local output_log="$2"
+  local failure_message="$3"
+  local deadline=$((SECONDS + 30))
+
+  while (( SECONDS < deadline )); do
+    if timeout 20s ros2 lifecycle get --no-daemon --spin-time 2 \
+        "${NODE_NAME}" >"${output_log}" 2>&1 &&
+        grep -Eq "^${expected_state}([[:space:]]|\\[)" "${output_log}"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "${failure_message}" >&2
+  dump_logs
+  exit 1
+}
+
 node_ready=0
 for _ in $(seq 1 100); do
-  if ros2 lifecycle nodes 2>/dev/null | grep -qx "${NODE_NAME}"; then
+  if ros2 lifecycle nodes --no-daemon --spin-time 1 2>/dev/null |
+      grep -qx "${NODE_NAME}"; then
     node_ready=1
     break
   fi
@@ -93,19 +114,11 @@ if [[ "${node_ready}" != "1" ]]; then
   exit 1
 fi
 
-if ! timeout 20s ros2 lifecycle get "${NODE_NAME}" >"${GET_INITIAL_LOG}" 2>&1; then
-  echo "ros2 lifecycle get initial state failed" >&2
-  dump_logs
-  exit 1
-fi
+wait_lifecycle_state "unconfigured" "${GET_INITIAL_LOG}" \
+  "initial lifecycle state was not unconfigured"
 
-if ! grep -Eq '^unconfigured([[:space:]]|\[)' "${GET_INITIAL_LOG}"; then
-  echo "initial lifecycle state was not unconfigured" >&2
-  dump_logs
-  exit 1
-fi
-
-if ! timeout 20s ros2 lifecycle set "${NODE_NAME}" configure >"${CONFIGURE_LOG}" 2>&1; then
+if ! timeout 20s ros2 lifecycle set --no-daemon --spin-time 2 \
+    "${NODE_NAME}" configure >"${CONFIGURE_LOG}" 2>&1; then
   echo "ros2 lifecycle configure failed" >&2
   dump_logs
   exit 1
@@ -117,19 +130,11 @@ if ! grep -q 'Transitioning successful' "${CONFIGURE_LOG}"; then
   exit 1
 fi
 
-if ! timeout 20s ros2 lifecycle get "${NODE_NAME}" >"${GET_CONFIGURED_LOG}" 2>&1; then
-  echo "ros2 lifecycle get configured state failed" >&2
-  dump_logs
-  exit 1
-fi
+wait_lifecycle_state "inactive" "${GET_CONFIGURED_LOG}" \
+  "configured lifecycle state was not inactive"
 
-if ! grep -Eq '^inactive([[:space:]]|\[)' "${GET_CONFIGURED_LOG}"; then
-  echo "configured lifecycle state was not inactive" >&2
-  dump_logs
-  exit 1
-fi
-
-if ! timeout 20s ros2 lifecycle set "${NODE_NAME}" activate >"${ACTIVATE_LOG}" 2>&1; then
+if ! timeout 20s ros2 lifecycle set --no-daemon --spin-time 2 \
+    "${NODE_NAME}" activate >"${ACTIVATE_LOG}" 2>&1; then
   echo "ros2 lifecycle activate failed" >&2
   dump_logs
   exit 1
@@ -141,17 +146,8 @@ if ! grep -q 'Transitioning successful' "${ACTIVATE_LOG}"; then
   exit 1
 fi
 
-if ! timeout 20s ros2 lifecycle get "${NODE_NAME}" >"${GET_ACTIVE_LOG}" 2>&1; then
-  echo "ros2 lifecycle get active state failed" >&2
-  dump_logs
-  exit 1
-fi
-
-if ! grep -Eq '^active([[:space:]]|\[)' "${GET_ACTIVE_LOG}"; then
-  echo "activated lifecycle state was not active" >&2
-  dump_logs
-  exit 1
-fi
+wait_lifecycle_state "active" "${GET_ACTIVE_LOG}" \
+  "activated lifecycle state was not active"
 
 echo "RESULT|rmw_mdds_host_cli_lifecycle|PASS|active"
 echo "rmw_mdds_host_cli_lifecycle_ok"

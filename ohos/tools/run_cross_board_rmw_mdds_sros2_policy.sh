@@ -9,6 +9,8 @@ Runs board-side SROS2 policy evidence for rmw_mdds_cpp over the native MDDS
 transport:
   * positive: authorized std_msgs/String topic crosses from publisher board to subscriber board
   * negative: unauthorized publisher creation is denied before sending data
+  * scope: local XML topic policy only; protected/signed DDS Security artifacts
+    are covered by the full-parity protected-governance rejection gate
 
 Environment:
   HDC_BIN                         HDC executable, default: hdc
@@ -113,16 +115,16 @@ make_keystore_tarball() {
 <domains><id>0</id></domains>
 <allow_unauthenticated_participants>false</allow_unauthenticated_participants>
 <enable_join_access_control>true</enable_join_access_control>
-<discovery_protection_kind>ENCRYPT</discovery_protection_kind>
-<liveliness_protection_kind>ENCRYPT</liveliness_protection_kind>
-<rtps_protection_kind>ENCRYPT</rtps_protection_kind>
+<discovery_protection_kind>NONE</discovery_protection_kind>
+<liveliness_protection_kind>NONE</liveliness_protection_kind>
+<rtps_protection_kind>NONE</rtps_protection_kind>
 <topic_access_rules><topic_rule>
 <topic_expression>$(topic_to_rtps "${ALLOWED_TOPIC}")</topic_expression>
-<enable_discovery_protection>true</enable_discovery_protection>
+<enable_discovery_protection>false</enable_discovery_protection>
 <enable_read_access_control>true</enable_read_access_control>
 <enable_write_access_control>true</enable_write_access_control>
-<metadata_protection_kind>ENCRYPT</metadata_protection_kind>
-<data_protection_kind>ENCRYPT</data_protection_kind>
+<metadata_protection_kind>NONE</metadata_protection_kind>
+<data_protection_kind>NONE</data_protection_kind>
 </topic_rule></topic_access_rules>
 </domain_rule></domain_access_rules></dds>
 EOF

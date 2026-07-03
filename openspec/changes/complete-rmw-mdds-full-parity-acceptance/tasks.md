@@ -52,25 +52,55 @@ behavior change in this acceptance track has matching focused verification.
 
 ## 4. Runtime And Delivery Evidence
 
-- [ ] 4.1 Run `ohos/test_rmw_mdds_delivery_contracts.sh` and confirm markers cover all affected host surfaces.
+- [x] 4.1 Run `ohos/test_rmw_mdds_delivery_contracts.sh` and confirm markers cover all affected host surfaces.
 - [x] 4.2 Rebuild the OHOS `rmw_mdds_cpp` overlay after parity changes.
-- [ ] 4.3 Deploy the refreshed runtime delta to both RK3588/KaihongOS boards.
-- [ ] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and security board lanes with explicit PASS markers.
+- [x] 4.3 Deploy the refreshed runtime delta to both RK3588/KaihongOS boards.
+- [x] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and security board lanes with explicit PASS markers.
 - [ ] 4.5 Decide and execute the delivery endpoint: local handoff only, OpenSpec archive, push, PR, or Gerrit submission.
 
-Fresh host delivery evidence on 2026-07-03: after the security, broker network-flow, and explicit
-dynamic-loaned-message diagnostic changes, `ohos/test_rmw_mdds_delivery_contracts.sh` emits
-`rmw_mdds_delivery_contracts_ok`, including package CTest `22/22`, upstream `test_rmw_implementation`
-`16/16`, SROS2 local policy, zero-copy, artifact, type-description, and host CLI
-pub/sub/service/action/params/lifecycle/graph/QoS/transient-local/message-info PASS markers. Keep 4.1 open
-until the remaining loaned-shape implementation decision is complete and the contract is rerun as final
-evidence.
+Fresh host delivery evidence on 2026-07-03: after the security, broker network-flow, explicit
+dynamic-loaned-message diagnostic, and host CLI harness robustness changes, `ohos/test_rmw_mdds_delivery_contracts.sh`
+emits `rmw_mdds_delivery_contracts_ok`, including package CTest `22/22`, upstream
+`test_rmw_implementation` `16/16`, SROS2 local policy, zero-copy, artifact, type-description, and host CLI
+pub/sub/service/action/params/lifecycle/graph/QoS/transient-local/message-info PASS markers. During the
+current-tree rerun, the params/lifecycle probes exposed daemon/discovery timing misses; the harness now uses
+daemon-free discovery and state polling for those probes, and the final full delivery rerun passed. Re-run
+this contract again if the remaining loaned-shape implementation decision lands as another behavior change.
 
 OHOS overlay rebuild evidence on 2026-07-03: `./ohos/colcon_rk3588a.sh rmw_mdds_cpp` rebuilt and installed
 the target package into `install/ohos-colcon-rk3588a`, and `ohos/test_rmw_mdds_artifact_contracts.sh`
 emitted `rmw_mdds_artifact_contracts_ok`. Rebuilt artifact checksums:
 `librmw_mdds_cpp.so` sha `45b901717a47ce9b7d6124131df3f6a10f952b86581160a5f5e7375de1b9bdbb`;
 `rmw_mdds_broker` sha `85f5c7afc3c51f4bd98cad1c2e8f1edd3df968e6124b3c6e2435feac3680670f`.
+
+Board deploy evidence on 2026-07-03: `ohos/tools/deploy_rmw_mdds_delta.sh
+3e01ff55454d202020104033bf453b00 3e01ff55454d202020104433991c3b00` emitted
+`RESULT|rmw_mdds_deploy|PASS` for both boards with `librmw_mdds_cpp.so` sha
+`45b901717a47ce9b7d6124131df3f6a10f952b86581160a5f5e7375de1b9bdbb` and broker sha
+`85f5c7afc3c51f4bd98cad1c2e8f1edd3df968e6124b3c6e2435feac3680670f`; it also emitted
+`RESULT|mdds_bridge_deploy|PASS` for both boards with bridge sha
+`82e49a4c8e01df25a3980376ff5c24290bf4cded1c08a59c36d047c547e9e452`.
+
+Board runtime evidence on 2026-07-03: `ohos/tools/run_cross_board_rmw_mdds_m2m.sh
+3e01ff55454d202020104033bf453b00 3e01ff55454d202020104433991c3b00` emitted
+`M2M_SUMMARY pass=3 fail=0` and `cross_board_rmw_mdds_m2m_ok` for native MDDS pub/sub,
+service, and Fibonacci action. `ohos/tools/run_cross_board_rmw_mdds_matrix.sh
+3e01ff55454d202020104033bf453b00 3e01ff55454d202020104433991c3b00` emitted
+`MATRIX_SUMMARY pass=8 fail=0` and `cross_board_rmw_mdds_matrix_ok` for cross-RMW gateway
+String, PoseStamped, best-effort QoS, and TFMessage lanes in both directions. The zero-copy
+gate remains the host/static `RESULT|rmw_mdds_zero_copy_contracts|PASS` from the delivery
+contract; board runtime preservation after the zero-copy/security changes is covered by the
+native and gateway board lanes above.
+
+Board SROS2 policy evidence on 2026-07-03: the board harness was aligned with the supported local
+XML topic-policy scope (`NONE` protection kinds). It first failed against the old protected
+`ENCRYPT` governance, which is now intentionally rejected by `rmw_mdds_cpp`; after the harness fix,
+`ohos/tools/run_cross_board_rmw_mdds_sros2_policy.sh
+3e01ff55454d202020104433991c3b00 3e01ff55454d202020104033bf453b00` emitted
+`RESULT|board_sros2_authorized_pubsub|PASS|topic=/mdds_sros2_allowed|received=20`,
+`RESULT|board_sros2_unauthorized_publish|PASS|topic=/mdds_sros2_forbidden|denied`, and
+`cross_board_rmw_mdds_sros2_policy_ok`. Protected signed/transport SROS2 behavior remains a separate
+incomplete full-parity security row unless accepted out of scope.
 
 ## 5. Final Completion Decision
 

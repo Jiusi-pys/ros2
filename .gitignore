@@ -18,3 +18,9 @@ src/ros2/rmw_mdds/*
 !src/ros2/rmw_mdds/rmw_mdds_cpp/**
 src/ros2/rmw_mdds/rmw_mdds_cpp/src/log/**
 .deps/
+
+# Generated agent/codebase summary artifacts.
+**/SUMMARY.md
+.codex
+docs/superpowers/plans/
+docs/superpowers/tmp_*

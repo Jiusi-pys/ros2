@@ -366,9 +366,18 @@ TEST(RmwMddsBridgeLoanedRmw, DISABLED_FullParityLoanedUnboundedStringPublishesWi
   EXPECT_NE(nullptr, loaned_message);
   if (loaned_message != nullptr) {
     auto *msg = static_cast<std_msgs::msg::String *>(loaned_message);
-    msg->data = "full parity string loan";
+    msg->data.assign(4096u, 's');
+    auto *bridge_begin = static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
+    ASSERT_NE(nullptr, bridge_begin);
+    const uint32_t bridge_size = FakeMddsBridgeLastBorrowedSize();
+    auto *dynamic_begin = reinterpret_cast<const uint8_t *>(msg->data.data());
+    EXPECT_GE(dynamic_begin, bridge_begin)
+        << "full parity requires string storage to come from the bridge loan";
+    EXPECT_LE(dynamic_begin + msg->data.size(), bridge_begin + bridge_size)
+        << "full parity requires string storage to come from the bridge loan";
     EXPECT_EQ(RMW_RET_OK,
               rmw_publish_loaned_message(publisher, loaned_message, nullptr));
+    EXPECT_EQ(1, FakeMddsBridgePublishLoanedCount());
   }
 
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));
@@ -414,9 +423,19 @@ TEST(RmwMddsBridgeLoanedRmw, DISABLED_FullParityLoanedSequencePublishesWithoutCo
   EXPECT_NE(nullptr, loaned_message);
   if (loaned_message != nullptr) {
     auto *msg = static_cast<std_msgs::msg::Int32MultiArray *>(loaned_message);
-    msg->data = {3, 5, 8};
+    msg->data.assign(1024u, 3588);
+    auto *bridge_begin = static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
+    ASSERT_NE(nullptr, bridge_begin);
+    const uint32_t bridge_size = FakeMddsBridgeLastBorrowedSize();
+    auto *dynamic_begin = reinterpret_cast<const uint8_t *>(msg->data.data());
+    const size_t dynamic_bytes = msg->data.size() * sizeof(msg->data[0]);
+    EXPECT_GE(dynamic_begin, bridge_begin)
+        << "full parity requires sequence storage to come from the bridge loan";
+    EXPECT_LE(dynamic_begin + dynamic_bytes, bridge_begin + bridge_size)
+        << "full parity requires sequence storage to come from the bridge loan";
     EXPECT_EQ(RMW_RET_OK,
               rmw_publish_loaned_message(publisher, loaned_message, nullptr));
+    EXPECT_EQ(1, FakeMddsBridgePublishLoanedCount());
   }
 
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));

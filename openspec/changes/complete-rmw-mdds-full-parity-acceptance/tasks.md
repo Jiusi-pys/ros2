@@ -36,6 +36,12 @@ Broker network-flow GREEN evidence: `test_broker_mode` passes
 `ohos/test_rmw_mdds_full_parity_red_contracts.sh` now emits
 `RESULT|rmw_mdds_full_parity_broker_network_flow|PASS` while remaining nonzero for the still-open loaned-shape row.
 
+Loaned-shape blocker evidence: `test_bridge_loaned_rmw` still keeps
+`RmwMddsBridgeLoanedRmw.DISABLED_FullParityLoaned*` RED, and those gates now require unbounded string and
+sequence dynamic member storage to come from the bridge loan before publish. Do not turn these gates GREEN by
+serializing a default-allocator `std::string` or `std::vector` into a bridge loan; that would keep dynamic
+storage outside MDDS and would not satisfy true zero-copy.
+
 ## 4. Runtime And Delivery Evidence
 
 - [ ] 4.1 Run `ohos/test_rmw_mdds_delivery_contracts.sh` and confirm markers cover all affected host surfaces.

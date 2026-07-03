@@ -53,7 +53,7 @@ behavior change in this acceptance track has matching focused verification.
 ## 4. Runtime And Delivery Evidence
 
 - [ ] 4.1 Run `ohos/test_rmw_mdds_delivery_contracts.sh` and confirm markers cover all affected host surfaces.
-- [ ] 4.2 Rebuild the OHOS `rmw_mdds_cpp` overlay after parity changes.
+- [x] 4.2 Rebuild the OHOS `rmw_mdds_cpp` overlay after parity changes.
 - [ ] 4.3 Deploy the refreshed runtime delta to both RK3588/KaihongOS boards.
 - [ ] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and security board lanes with explicit PASS markers.
 - [ ] 4.5 Decide and execute the delivery endpoint: local handoff only, OpenSpec archive, push, PR, or Gerrit submission.
@@ -65,6 +65,12 @@ dynamic-loaned-message diagnostic changes, `ohos/test_rmw_mdds_delivery_contract
 pub/sub/service/action/params/lifecycle/graph/QoS/transient-local/message-info PASS markers. Keep 4.1 open
 until the remaining loaned-shape implementation decision is complete and the contract is rerun as final
 evidence.
+
+OHOS overlay rebuild evidence on 2026-07-03: `./ohos/colcon_rk3588a.sh rmw_mdds_cpp` rebuilt and installed
+the target package into `install/ohos-colcon-rk3588a`, and `ohos/test_rmw_mdds_artifact_contracts.sh`
+emitted `rmw_mdds_artifact_contracts_ok`. Rebuilt artifact checksums:
+`librmw_mdds_cpp.so` sha `45b901717a47ce9b7d6124131df3f6a10f952b86581160a5f5e7375de1b9bdbb`;
+`rmw_mdds_broker` sha `85f5c7afc3c51f4bd98cad1c2e8f1edd3df968e6124b3c6e2435feac3680670f`.
 
 ## 5. Final Completion Decision
 

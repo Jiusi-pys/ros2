@@ -44,6 +44,12 @@ storage outside MDDS and would not satisfy true zero-copy. Unsupported dynamic l
 specific error explaining that only flat fixed-size scalar types are bridge-loan backed and that dynamic
 string/sequence storage is not backed by the MDDS bridge loan.
 
+Focused verification evidence on 2026-07-03: `ohos/test_rmw_mdds_full_parity_red_contracts.sh` still exits
+nonzero by design with `RESULT|rmw_mdds_full_parity_loaned_shapes|RED|status=1`, while
+`RESULT|rmw_mdds_full_parity_signed_security|PASS` and
+`RESULT|rmw_mdds_full_parity_broker_network_flow|PASS` remain green. Keep 3.4 open until every future
+behavior change in this acceptance track has matching focused verification.
+
 ## 4. Runtime And Delivery Evidence
 
 - [ ] 4.1 Run `ohos/test_rmw_mdds_delivery_contracts.sh` and confirm markers cover all affected host surfaces.
@@ -52,12 +58,13 @@ string/sequence storage is not backed by the MDDS bridge loan.
 - [ ] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and security board lanes with explicit PASS markers.
 - [ ] 4.5 Decide and execute the delivery endpoint: local handoff only, OpenSpec archive, push, PR, or Gerrit submission.
 
-Interim host delivery evidence: after the security and broker network-flow behavior changes,
-`ohos/test_rmw_mdds_delivery_contracts.sh` emits `rmw_mdds_delivery_contracts_ok`, including package
-CTest `22/22`, upstream `test_rmw_implementation` `16/16`, SROS2 local policy, zero-copy, type
-description, and host CLI pub/sub/service/action/params/lifecycle/graph/QoS/transient-local/message-info
-PASS markers. Keep 4.1 open until the remaining loaned-shape implementation decision is complete and the
-contract is rerun as final evidence.
+Fresh host delivery evidence on 2026-07-03: after the security, broker network-flow, and explicit
+dynamic-loaned-message diagnostic changes, `ohos/test_rmw_mdds_delivery_contracts.sh` emits
+`rmw_mdds_delivery_contracts_ok`, including package CTest `22/22`, upstream `test_rmw_implementation`
+`16/16`, SROS2 local policy, zero-copy, artifact, type-description, and host CLI
+pub/sub/service/action/params/lifecycle/graph/QoS/transient-local/message-info PASS markers. Keep 4.1 open
+until the remaining loaned-shape implementation decision is complete and the contract is rerun as final
+evidence.
 
 ## 5. Final Completion Decision
 

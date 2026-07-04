@@ -1,10 +1,15 @@
 ## Context
 
-`complete-rmw-mdds-full-parity-acceptance` shows that the current implementation is strong for scoped ROS 2 runtime behavior but still incomplete for the user's broad "perfect/all ROS 2 middleware features" objective. The remaining technical blockers are not independent one-line fixes:
+`complete-rmw-mdds-full-parity-acceptance` showed that the implementation was strong for scoped ROS 2 runtime behavior but incomplete for the user's broad "perfect/all ROS 2 middleware features" objective. The proposal-time technical blockers were not independent one-line fixes:
 
-- Generalized loaned messages are intentionally rejected once the message contains unbounded strings, sequences, arrays, nested dynamic members, or other non-flat storage. Relaxing the current guard would not create true zero-copy because generated C++ `init_function` code constructs `std::string` and `std::vector` members with default heap-backed storage outside the MDDS bridge loan.
-- The current bridge loan record tracks the transport loan pointer, raw data pointer, and capacity. It does not expose an allocator, arena, segment table, or ownership API that generated dynamic members can use.
-- SROS2 local XML policy enforcement is proven for unprotected governance, but protected signed DDS Security semantics are still rejected or incomplete. Full security parity needs signed governance/permissions validation and an authenticated/encrypted MDDS/DSoftBus protected transport lane.
+- Generalized loaned messages were intentionally rejected once the message contained unbounded strings, sequences, arrays, nested dynamic members, or other non-flat storage. Relaxing the old guard would not create true zero-copy because generated C++ `init_function` code constructed `std::string` and `std::vector` members with default heap-backed storage outside the MDDS bridge loan.
+- The old bridge loan record tracked the transport loan pointer, raw data pointer, and capacity. It did not expose an allocator, arena, segment table, or ownership API that generated dynamic members could use.
+- SROS2 local XML policy enforcement was proven for unprotected governance, but protected signed DDS Security semantics were rejected or incomplete. Full security parity needed signed governance/permissions validation and an authenticated/encrypted MDDS/DSoftBus protected transport lane.
+
+The implemented result resolves those blockers for the approved scope: ROS 2 `rmw_mdds_cpp` local commit
+`86ab375` adds the loan arena, signed artifact validation, protected transport activation, and board harness
+updates; DSoftBus/MDDS local commit `e2f3d7e9a` adds the paired MDDS bridge/memory-model support and test
+evidence.
 
 ## Goals / Non-Goals
 
@@ -87,4 +92,5 @@ Rollback is to keep fixed-size raw loans and unprotected local XML SROS2 policy 
 
 - Which repository owns the generated loan-aware C++ message/type-support hook for Jazzy: a local `rmw_mdds` generator extension, `rosidl_typesupport_*` integration, or an MDDS-specific generated loan view?
 - Which MDDS/DSoftBus API is the authoritative source for board-visible authenticated and encrypted session proof?
-- Does the final delivery endpoint require a local handoff only, OpenSpec archive, push/PR, or Gerrit submission after implementation evidence is green?
+- Answered on 2026-07-04: the final delivery endpoint for this request is committed local handoff only; no
+  OpenSpec archive, push/PR, or Gerrit submission was requested.

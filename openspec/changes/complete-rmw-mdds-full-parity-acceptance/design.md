@@ -43,9 +43,13 @@ Alternative considered: count local topic policy enforcement as full security. T
 
 ### Decision: Delivery Completion Requires A Reproducible Handoff State
 
-The local commits and clean tracked status are useful, but upstream-ready delivery still needs a chosen handoff action: local branch ready for push, archive/sync of OpenSpec specs, or PR/push path. The final audit must not confuse "committed locally" with "delivered upstream."
+The local commits and clean tracked status are useful only when the final audit records the selected handoff
+action: local branch handoff, archive/sync of OpenSpec specs, or PR/push path. The final audit must not confuse
+"committed locally" with "delivered upstream"; if no remote or archive action is requested, the selected
+endpoint is an explicit local handoff with commit hashes.
 
-Alternative considered: mark complete with local commits only. This is rejected because the pasted note explicitly called out local-only delivery as a blocker.
+Alternative considered: mark complete with an uncommitted local workspace. This is rejected because the pasted
+note explicitly called out local-only dirty delivery as a blocker.
 
 ## Risks / Trade-offs
 
@@ -76,4 +80,5 @@ Rollback is to keep the two completed scoped changes and leave this final parity
 
 - Must the final definition of "perfect" include zero-copy for unbounded strings/sequences and dynamic message data, or is explicit unsupported behavior acceptable?
 - Must security parity include signed SROS2 artifact validation and transport crypto, or is local policy enforcement plus fail-closed behavior acceptable?
-- Is upstream-ready delivery satisfied by local commits and clean status, or does it require push/PR/archive in this workflow?
+- Answered on 2026-07-04: for the current request, delivery is satisfied by a committed local handoff in ROS 2
+  plus DSoftBus/MDDS, with no push, PR, Gerrit submission, or OpenSpec archive requested.

@@ -138,7 +138,7 @@ traffic evidence above.
 
 Delivery endpoint resolution on 2026-07-04: the executed endpoint is local handoff because no push, PR,
 Gerrit submission, or OpenSpec archive was requested. The paired local commits are DSoftBus/MDDS
-`e2f3d7e9a` on `mdds-claude` and ROS 2/rmw_mdds implementation `86ab375` on `jazzy-ubuntu-20.04`; this
+`ba9a5f605` on `mdds-claude` and ROS 2/rmw_mdds implementation `86ab375` on `jazzy-ubuntu-20.04`; this
 OpenSpec evidence update records the final local handoff state.
 
 Current host verification evidence on 2026-07-03: with

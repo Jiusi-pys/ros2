@@ -154,7 +154,7 @@ protected pub/sub PASS with `received=20`, unauthorized protected publish PASS w
 Delivery endpoint decision on 2026-07-04: no push, PR, Gerrit submission, or OpenSpec archive was requested,
 so the executed endpoint is a local two-repo handoff. The DSoftBus/MDDS side is committed on
 `/home/kaihong/M-DDS/OpenHarmony_lyl/foundation/communication/dsoftbus` branch `mdds-claude` at
-`e2f3d7e9a` (`feat(mdds): 完成零拷贝 loaned samples 与桥接验证`). The ROS 2/rmw_mdds side is committed on
+`ba9a5f605` (`<feat><29168><MDDS零拷贝loaned samples与桥接验证><source:int;none>`). The ROS 2/rmw_mdds side is committed on
 `/home/kaihong/ros2` branch `jazzy-ubuntu-20.04` at `86ab375` (`feat(rmw_mdds): complete MDDS parity board
 closure`), with this OpenSpec evidence update committed separately. This resolves the local delivery endpoint
 for the current request without touching remotes.

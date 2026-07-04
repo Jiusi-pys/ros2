@@ -8,7 +8,7 @@
 
 The implemented result resolves those blockers for the approved scope: ROS 2 `rmw_mdds_cpp` local commit
 `86ab375` adds the loan arena, signed artifact validation, protected transport activation, and board harness
-updates; DSoftBus/MDDS local commit `e2f3d7e9a` adds the paired MDDS bridge/memory-model support and test
+updates; DSoftBus/MDDS local commit `ba9a5f605` adds the paired MDDS bridge/memory-model support and test
 evidence.
 
 ## Goals / Non-Goals

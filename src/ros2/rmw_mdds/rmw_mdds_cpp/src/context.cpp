@@ -38,6 +38,7 @@
 #include <openssl/x509_vfy.h>
 #endif
 
+#include "bridge_backend.hpp"
 #include "broker.hpp"
 #include "rmw/error_handling.h"
 
@@ -171,6 +172,14 @@ bool ProtectedTransportAvailable(std::string * error)
     EnvFlagEnabled("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED") &&
     EnvFlagEnabled("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED")) {
     return true;
+  }
+  std::string protected_transport_error;
+  if (BridgeBackend::Instance().ActivateProtectedTransport(true, true, &protected_transport_error)) {
+    return true;
+  }
+  if (!protected_transport_error.empty()) {
+    SetError(error, protected_transport_error);
+    return false;
   }
   SetError(
     error,

@@ -31,7 +31,7 @@ A="$1"; B="$2"; DOM="${3:-93}"
 [[ "$A" != "$B" ]] || { echo "ERROR: device A and B must be distinct boards (got '$A' twice)" >&2; exit 2; }
 HDC="${HDC_BIN:-hdc}"
 PFX="${ROS2_OHOS_REMOTE_PREFIX:-/data/local/tmp/ohos-colcon-rk3588a}"
-BR="${RMW_MDDS_BRIDGE_LIBRARY:-/data/local/tmp/libmdds_bridge_shared.z.so}"
+BR="${RMW_MDDS_BRIDGE_LIBRARY:-${PFX}/lib/libmdds_bridge_shared.z.so}"
 LOG=/data/local/tmp/rmw_mdds_m2m
 
 LDP="${PFX}/lib:/data/local/tmp/ohos-prefix/lib:/data/local/tmp/ohos-fastdds/lib:/data/local/release/usr/lib:/system/lib64/platformsdk:/system/lib64/chipset-pub-sdk:/system/lib64"

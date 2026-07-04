@@ -75,9 +75,28 @@ target_link_libraries(rmw_mdds_cpp PRIVATE
   rosidl_typesupport_introspection_c::rosidl_typesupport_introspection_c
   rosidl_typesupport_introspection_cpp::rosidl_typesupport_introspection_cpp
 )
+
+set(rmw_mdds_openssl_crypto_target "")
 if(OpenSSL_FOUND)
+  set(rmw_mdds_openssl_crypto_target OpenSSL::Crypto)
+elseif(RMW_MDDS_TARGET_OPENSSL_INCLUDE_DIR AND RMW_MDDS_TARGET_OPENSSL_CRYPTO_LIBRARY)
+  if(EXISTS "${RMW_MDDS_TARGET_OPENSSL_INCLUDE_DIR}/openssl/evp.h" AND
+      EXISTS "${RMW_MDDS_TARGET_OPENSSL_INCLUDE_DIR}/openssl/err.h" AND
+      EXISTS "${RMW_MDDS_TARGET_OPENSSL_CRYPTO_LIBRARY}")
+    add_library(rmw_mdds_target_openssl_crypto UNKNOWN IMPORTED)
+    set_target_properties(rmw_mdds_target_openssl_crypto PROPERTIES
+      IMPORTED_LOCATION "${RMW_MDDS_TARGET_OPENSSL_CRYPTO_LIBRARY}"
+      INTERFACE_INCLUDE_DIRECTORIES "${RMW_MDDS_TARGET_OPENSSL_INCLUDE_DIR}"
+    )
+    set(rmw_mdds_openssl_crypto_target rmw_mdds_target_openssl_crypto)
+    message(STATUS "rmw_mdds_cpp: using target OpenSSL crypto library ${RMW_MDDS_TARGET_OPENSSL_CRYPTO_LIBRARY}")
+  else()
+    message(WARNING "rmw_mdds_cpp: incomplete target OpenSSL hints; signed SROS2 artifact validation disabled")
+  endif()
+endif()
+if(rmw_mdds_openssl_crypto_target)
   target_compile_definitions(rmw_mdds_cpp PRIVATE RMW_MDDS_HAS_OPENSSL=1)
-  target_link_libraries(rmw_mdds_cpp PRIVATE OpenSSL::Crypto)
+  target_link_libraries(rmw_mdds_cpp PRIVATE ${rmw_mdds_openssl_crypto_target})
 endif()
 
 configure_rmw_library(rmw_mdds_cpp)
@@ -392,8 +411,13 @@ if(BUILD_TESTING)
     ${RMW_MDDS_STD_SRVS_GENERATOR_C}
   )
 
+  add_library(fake_mdds_bridge SHARED test/fake_mdds_bridge.cpp)
+
   ament_add_gtest(test_pubsub_inproc test/test_pubsub_inproc.cpp)
+  target_compile_definitions(test_pubsub_inproc PRIVATE
+    "FAKE_MDDS_BRIDGE_PATH=\"$<TARGET_FILE:fake_mdds_bridge>\"")
   target_include_directories(test_pubsub_inproc PRIVATE
+    src
     ${RMW_MDDS_STD_MSGS_INCLUDE_DIR}
     ${RMW_MDDS_EXAMPLE_INTERFACES_INCLUDE_DIR}
     ${RMW_MDDS_SERVICE_MSGS_INCLUDE_DIR}
@@ -402,6 +426,7 @@ if(BUILD_TESTING)
     ${RMW_MDDS_TYPE_DESCRIPTION_INTERFACES_INCLUDE_DIR}
   )
   target_link_libraries(test_pubsub_inproc
+    fake_mdds_bridge
     rmw::rmw
     rmw_mdds_cpp
     rosidl_typesupport_c::rosidl_typesupport_c
@@ -508,8 +533,6 @@ if(BUILD_TESTING)
     rmw::rmw
     rmw_mdds_cpp
   )
-
-  add_library(fake_mdds_bridge SHARED test/fake_mdds_bridge.cpp)
 
   ament_add_gtest(test_ipc_broker test/test_ipc_broker.cpp)
   target_compile_definitions(test_ipc_broker PRIVATE

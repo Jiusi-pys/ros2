@@ -21,7 +21,7 @@ A="$1"; B="$2"; DDS_DOMAIN="${3:-101}"; MDDS_DOMAIN="$(( DDS_DOMAIN + 1 ))"
 [[ "$A" != "$B" ]] || { echo "ERROR: the two devices must differ" >&2; exit 2; }
 HDC="${HDC_BIN:-hdc}"
 PFX=/data/local/tmp/ohos-colcon-rk3588a
-BR=/data/local/tmp/libmdds_bridge_shared.z.so
+BR="${RMW_MDDS_BRIDGE_LIBRARY:-${PFX}/lib/libmdds_bridge_shared.z.so}"
 GW=/data/local/tmp/mdds_dds_gateway
 GWCFG=/data/local/tmp/gateway_rmw_mdds_matrix.yaml   # any valid topic config; gateway also reads the env services
 GWENV=/data/local/tmp/device_gateway_env.sh

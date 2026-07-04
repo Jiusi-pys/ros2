@@ -92,6 +92,8 @@ public:
   bool SubscriberSetOnMatched(void *subscription,
                               void (*callback)(uint32_t, void *),
                               void *user_data);
+  bool ActivateProtectedTransport(bool require_authenticated,
+                                  bool require_encrypted, std::string *error);
   /* Stop the MDDS spin + lane-worker threads and tear down the runtime while
    * the process (hence openssl, used by the DSoftBus encrypt path) is still
    * alive. Must run before process exit: otherwise a lane worker can call into
@@ -140,6 +142,7 @@ private:
   uint32_t (*subscriber_pub_count_)(void *) = nullptr;
   int32_t (*subscriber_set_on_matched_)(void *, void (*)(uint32_t, void *),
                                         void *) = nullptr;
+  int32_t (*activate_protected_transport_)(uint32_t) = nullptr;
 };
 
 BridgeQos ToBridgeQos(const rmw_qos_profile_t *qos);

@@ -702,11 +702,16 @@ bool BrokerModeEnabled()
 
 bool BrokerBridgePayloadEnabled()
 {
-  // Default-on: route payload over the bridge whenever the bridge library is
-  // loadable, not only when RMW_MDDS_BRIDGE_LIBRARY is set explicitly. The env
-  // override still works (Available() honours RMW_MDDS_BRIDGE=0), making
-  // broker+bridge-over-DSoftBus the zero-config default.
-  return BrokerModeEnabled() && BridgeBackend::Instance().Available();
+  if (!BrokerModeEnabled() || EnvValueDisabled(std::getenv("RMW_MDDS_BRIDGE"))) {
+    return false;
+  }
+  // When a broker client is explicitly pointed at a bridge library, encode and
+  // flag topic samples for the broker-owned bridge transport without requiring
+  // this client process to initialize the DSoftBus bridge itself.
+  if (EnvValueConfigured(std::getenv("RMW_MDDS_BRIDGE_LIBRARY"))) {
+    return true;
+  }
+  return BridgeBackend::Instance().Available();
 }
 
 std::string BrokerSocketPath()

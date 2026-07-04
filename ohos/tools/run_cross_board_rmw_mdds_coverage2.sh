@@ -16,7 +16,7 @@ A="$1"; B="$2"; DOM="${3:-85}"
 [[ "$A" != "$B" ]] || { echo "ERROR: devices must differ" >&2; exit 2; }
 HDC="${HDC_BIN:-hdc}"
 PFX=/data/local/tmp/ohos-colcon-rk3588a
-BR=/data/local/tmp/libmdds_bridge_shared.z.so
+BR="${RMW_MDDS_BRIDGE_LIBRARY:-${PFX}/lib/libmdds_bridge_shared.z.so}"
 LOG=/data/local/tmp/coverage2
 LDP="${PFX}/lib:/data/local/tmp/ohos-prefix/lib:/data/local/tmp/ohos-fastdds/lib:/data/local/release/usr/lib:/system/lib64/platformsdk:/system/lib64/chipset-pub-sdk:/system/lib64"
 MDDS="LD_LIBRARY_PATH=${LDP} RMW_IMPLEMENTATION=rmw_mdds_cpp RMW_MDDS_BROKER=1 RMW_MDDS_BRIDGE_LIBRARY=${BR}"

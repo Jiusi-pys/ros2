@@ -18,7 +18,7 @@ usage() { echo "Usage: $0 <mdds-device-id> <fastdds-device-id> [dds-domain]" >&2
 A="$1"; B="$2"; DDS_DOMAIN="${3:-101}"; MDDS_DOMAIN="$(( DDS_DOMAIN + 1 ))"
 HDC="${HDC_BIN:-hdc}"
 PFX=/data/local/tmp/ohos-colcon-rk3588a
-BR=/data/local/tmp/libmdds_bridge_shared.z.so
+BR="${RMW_MDDS_BRIDGE_LIBRARY:-${PFX}/lib/libmdds_bridge_shared.z.so}"
 GWENV=/data/local/tmp/device_gateway_env.sh
 GW=/data/local/tmp/mdds_dds_gateway
 CFG=/data/local/tmp/gateway_rmw_mdds_action.yaml

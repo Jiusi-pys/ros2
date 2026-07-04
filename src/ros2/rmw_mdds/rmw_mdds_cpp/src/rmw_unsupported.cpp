@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <dlfcn.h>
@@ -29,19 +30,19 @@
 #include "broker.hpp"
 #include "context.hpp"
 #include "ipc_client.hpp"
+#include "message_adapter.hpp"
 #include "rcutils/strdup.h"
 #include "rcutils/time.h"
-#include "rcutils/types/uint8_array.h"
 #include "rcutils/types/string_array.h"
-#include "rmw_dds_common/qos.hpp"
+#include "rcutils/types/uint8_array.h"
 #include "rmw/allocators.h"
 #include "rmw/error_handling.h"
-#include "rmw/events_statuses/matched.h"
+#include "rmw/events_statuses/incompatible_type.h"
 #include "rmw/events_statuses/liveliness_changed.h"
 #include "rmw/events_statuses/liveliness_lost.h"
-#include "rmw/events_statuses/requested_deadline_missed.h"
+#include "rmw/events_statuses/matched.h"
 #include "rmw/events_statuses/offered_deadline_missed.h"
-#include "rmw/events_statuses/incompatible_type.h"
+#include "rmw/events_statuses/requested_deadline_missed.h"
 #include "rmw/get_network_flow_endpoints.h"
 #include "rmw/get_node_info_and_types.h"
 #include "rmw/get_service_names_and_types.h"
@@ -57,12 +58,12 @@
 #include "rmw/validate_full_topic_name.h"
 #include "rmw/validate_namespace.h"
 #include "rmw/validate_node_name.h"
+#include "rmw_dds_common/qos.hpp"
 #include "rmw_mdds_cpp/identifier.hpp"
-#include "message_adapter.hpp"
-#include "rosidl_runtime_c/service_type_support_struct.h"
 #include "rosidl_dynamic_typesupport/api/dynamic_data.h"
 #include "rosidl_dynamic_typesupport/api/serialization_support.h"
 #include "rosidl_dynamic_typesupport/api/serialization_support_interface.h"
+#include "rosidl_runtime_c/service_type_support_struct.h"
 #include "rosidl_typesupport_introspection_c/field_types.h"
 #include "rosidl_typesupport_introspection_c/identifier.h"
 #include "rosidl_typesupport_introspection_c/message_introspection.h"
@@ -73,129 +74,125 @@
 #include "rosidl_typesupport_introspection_cpp/service_introspection.hpp"
 #include "string_adapter.hpp"
 
-namespace
-{
+namespace {
 std::mutex g_service_graph_mutex;
 std::vector<rmw_mdds_cpp::ServiceData *> g_services;
 std::vector<rmw_mdds_cpp::ClientData *> g_clients;
 
-struct ServiceTypeInfo
-{
+struct ServiceTypeInfo {
   std::string type_name;
   rmw_mdds_cpp::ServiceMessageTypeInfo request_type;
   rmw_mdds_cpp::ServiceMessageTypeInfo response_type;
 };
 
-rmw_ret_t Unsupported(const char * api_name)
-{
-  RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s is not supported by rmw_mdds_cpp yet", api_name);
+rmw_ret_t Unsupported(const char *api_name) {
+  RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
+      "%s is not supported by rmw_mdds_cpp yet", api_name);
   return RMW_RET_UNSUPPORTED;
 }
 
-bool IsZeroTimeout(const rmw_time_t & wait_timeout)
-{
+bool IsZeroTimeout(const rmw_time_t &wait_timeout) {
   return wait_timeout.sec == 0 && wait_timeout.nsec == 0;
 }
 
-uint64_t TimeoutNanosecondsClamped(const rmw_time_t & wait_timeout)
-{
+uint64_t TimeoutNanosecondsClamped(const rmw_time_t &wait_timeout) {
   constexpr uint64_t kNanosecondsPerSecond = 1000000000ull;
-  if (wait_timeout.sec > (std::numeric_limits<uint64_t>::max() - wait_timeout.nsec) /
-    kNanosecondsPerSecond)
-  {
+  if (wait_timeout.sec >
+      (std::numeric_limits<uint64_t>::max() - wait_timeout.nsec) /
+          kNanosecondsPerSecond) {
     return std::numeric_limits<uint64_t>::max();
   }
   return wait_timeout.sec * kNanosecondsPerSecond + wait_timeout.nsec;
 }
 
-bool QosDurationEquals(const rmw_time_t & lhs, const rmw_time_t & rhs)
-{
+bool QosDurationEquals(const rmw_time_t &lhs, const rmw_time_t &rhs) {
   return lhs.sec == rhs.sec && lhs.nsec == rhs.nsec;
 }
 
-bool IsUnknownQosProfile(const rmw_qos_profile_t & qos_profile)
-{
+bool IsUnknownQosProfile(const rmw_qos_profile_t &qos_profile) {
   return qos_profile.history == rmw_qos_profile_unknown.history &&
          qos_profile.depth == rmw_qos_profile_unknown.depth &&
          qos_profile.reliability == rmw_qos_profile_unknown.reliability &&
          qos_profile.durability == rmw_qos_profile_unknown.durability &&
-         QosDurationEquals(qos_profile.deadline, rmw_qos_profile_unknown.deadline) &&
-         QosDurationEquals(qos_profile.lifespan, rmw_qos_profile_unknown.lifespan) &&
+         QosDurationEquals(qos_profile.deadline,
+                           rmw_qos_profile_unknown.deadline) &&
+         QosDurationEquals(qos_profile.lifespan,
+                           rmw_qos_profile_unknown.lifespan) &&
          qos_profile.liveliness == rmw_qos_profile_unknown.liveliness &&
-         QosDurationEquals(
-           qos_profile.liveliness_lease_duration,
-           rmw_qos_profile_unknown.liveliness_lease_duration) &&
+         QosDurationEquals(qos_profile.liveliness_lease_duration,
+                           rmw_qos_profile_unknown.liveliness_lease_duration) &&
          qos_profile.avoid_ros_namespace_conventions ==
-           rmw_qos_profile_unknown.avoid_ros_namespace_conventions;
+             rmw_qos_profile_unknown.avoid_ros_namespace_conventions;
 }
 
-bool ValidateQosProfile(const rmw_qos_profile_t * qos_profile, const char * entity_name)
-{
+bool ValidateQosProfile(const rmw_qos_profile_t *qos_profile,
+                        const char *entity_name) {
   if (qos_profile == nullptr) {
     RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s qos profile is null", entity_name);
     return false;
   }
   if (IsUnknownQosProfile(*qos_profile)) {
-    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s qos profile is unknown", entity_name);
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s qos profile is unknown",
+                                         entity_name);
     return false;
   }
   return true;
 }
 
-rmw_qos_profile_t ResolveActualQosProfile(
-  const rmw_qos_profile_t & qos_profile, const rmw_qos_profile_t & default_qos)
-{
+rmw_qos_profile_t
+ResolveActualQosProfile(const rmw_qos_profile_t &qos_profile,
+                        const rmw_qos_profile_t &default_qos) {
   rmw_qos_profile_t actual_qos = qos_profile;
   if (actual_qos.history == RMW_QOS_POLICY_HISTORY_SYSTEM_DEFAULT) {
     actual_qos.history =
-      default_qos.history == RMW_QOS_POLICY_HISTORY_SYSTEM_DEFAULT ?
-      RMW_QOS_POLICY_HISTORY_KEEP_LAST : default_qos.history;
+        default_qos.history == RMW_QOS_POLICY_HISTORY_SYSTEM_DEFAULT
+            ? RMW_QOS_POLICY_HISTORY_KEEP_LAST
+            : default_qos.history;
   }
   if (actual_qos.depth == RMW_QOS_POLICY_DEPTH_SYSTEM_DEFAULT) {
-    actual_qos.depth =
-      default_qos.depth == RMW_QOS_POLICY_DEPTH_SYSTEM_DEFAULT ? 10u : default_qos.depth;
+    actual_qos.depth = default_qos.depth == RMW_QOS_POLICY_DEPTH_SYSTEM_DEFAULT
+                           ? 10u
+                           : default_qos.depth;
   }
-  if (
-    actual_qos.reliability == RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT ||
-    actual_qos.reliability == RMW_QOS_POLICY_RELIABILITY_BEST_AVAILABLE) {
+  if (actual_qos.reliability == RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT ||
+      actual_qos.reliability == RMW_QOS_POLICY_RELIABILITY_BEST_AVAILABLE) {
     actual_qos.reliability =
-      default_qos.reliability == RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT ?
-      RMW_QOS_POLICY_RELIABILITY_RELIABLE : default_qos.reliability;
+        default_qos.reliability == RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT
+            ? RMW_QOS_POLICY_RELIABILITY_RELIABLE
+            : default_qos.reliability;
   }
-  if (
-    actual_qos.durability == RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT ||
-    actual_qos.durability == RMW_QOS_POLICY_DURABILITY_BEST_AVAILABLE) {
+  if (actual_qos.durability == RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT ||
+      actual_qos.durability == RMW_QOS_POLICY_DURABILITY_BEST_AVAILABLE) {
     actual_qos.durability =
-      default_qos.durability == RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT ?
-      RMW_QOS_POLICY_DURABILITY_VOLATILE : default_qos.durability;
+        default_qos.durability == RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT
+            ? RMW_QOS_POLICY_DURABILITY_VOLATILE
+            : default_qos.durability;
   }
-  if (
-    actual_qos.liveliness == RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT ||
-    actual_qos.liveliness == RMW_QOS_POLICY_LIVELINESS_BEST_AVAILABLE) {
+  if (actual_qos.liveliness == RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT ||
+      actual_qos.liveliness == RMW_QOS_POLICY_LIVELINESS_BEST_AVAILABLE) {
     actual_qos.liveliness =
-      default_qos.liveliness == RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT ?
-      RMW_QOS_POLICY_LIVELINESS_AUTOMATIC : default_qos.liveliness;
+        default_qos.liveliness == RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT
+            ? RMW_QOS_POLICY_LIVELINESS_AUTOMATIC
+            : default_qos.liveliness;
   }
   if (QosDurationEquals(actual_qos.deadline, RMW_QOS_DEADLINE_BEST_AVAILABLE)) {
     actual_qos.deadline = default_qos.deadline;
   }
-  if (
-    QosDurationEquals(
-      actual_qos.liveliness_lease_duration,
-      RMW_QOS_LIVELINESS_LEASE_DURATION_BEST_AVAILABLE)) {
-    actual_qos.liveliness_lease_duration = default_qos.liveliness_lease_duration;
+  if (QosDurationEquals(actual_qos.liveliness_lease_duration,
+                        RMW_QOS_LIVELINESS_LEASE_DURATION_BEST_AVAILABLE)) {
+    actual_qos.liveliness_lease_duration =
+        default_qos.liveliness_lease_duration;
   }
   return actual_qos;
 }
 
-rmw_ret_t WaitForBridgeReliableAcks(
-  rmw_mdds_cpp::PublisherData * data, rmw_time_t wait_timeout)
-{
+rmw_ret_t WaitForBridgeReliableAcks(rmw_mdds_cpp::PublisherData *data,
+                                    rmw_time_t wait_timeout) {
   if (data == nullptr || data->bridge_publisher == nullptr) {
     return RMW_RET_OK;
   }
 
-  auto & backend = rmw_mdds_cpp::BridgeBackend::Instance();
+  auto &backend = rmw_mdds_cpp::BridgeBackend::Instance();
   uint32_t unacked_count = 0;
   if (!backend.PublisherUnackedCount(data->bridge_publisher, &unacked_count)) {
     bool unacknowledged = false;
@@ -217,12 +214,14 @@ rmw_ret_t WaitForBridgeReliableAcks(
       return RMW_RET_TIMEOUT;
     }
     const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      std::chrono::steady_clock::now() - start).count();
+                             std::chrono::steady_clock::now() - start)
+                             .count();
     if (elapsed >= 0 && static_cast<uint64_t>(elapsed) >= timeout_ns) {
       return RMW_RET_TIMEOUT;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    if (!backend.PublisherUnackedCount(data->bridge_publisher, &unacked_count)) {
+    if (!backend.PublisherUnackedCount(data->bridge_publisher,
+                                       &unacked_count)) {
       return RMW_RET_TIMEOUT;
     }
   }
@@ -234,14 +233,14 @@ rmw_ret_t WaitForBridgeReliableAcks(
   return RMW_RET_OK;
 }
 
-using DynamicSerializationImplInit =
-  rcutils_ret_t (*)(rcutils_allocator_t *, rosidl_dynamic_typesupport_serialization_support_impl_t *);
-using DynamicSerializationInterfaceInit =
-  rcutils_ret_t (*)(
-    rcutils_allocator_t *, rosidl_dynamic_typesupport_serialization_support_interface_t *);
+using DynamicSerializationImplInit = rcutils_ret_t (*)(
+    rcutils_allocator_t *,
+    rosidl_dynamic_typesupport_serialization_support_impl_t *);
+using DynamicSerializationInterfaceInit = rcutils_ret_t (*)(
+    rcutils_allocator_t *,
+    rosidl_dynamic_typesupport_serialization_support_interface_t *);
 
-rmw_ret_t DynamicSupportRcutilsError(rcutils_ret_t ret, const char * what)
-{
+rmw_ret_t DynamicSupportRcutilsError(rcutils_ret_t ret, const char *what) {
   if (ret == RCUTILS_RET_OK) {
     return RMW_RET_OK;
   }
@@ -253,63 +252,61 @@ rmw_ret_t DynamicSupportRcutilsError(rcutils_ret_t ret, const char * what)
   return RMW_RET_ERROR;
 }
 
-bool IsFastCdrDynamicSerializationName(const char * serialization_lib_name)
-{
+bool IsFastCdrDynamicSerializationName(const char *serialization_lib_name) {
   return serialization_lib_name != nullptr &&
          (std::strcmp(serialization_lib_name, "cdr") == 0 ||
-         std::strcmp(serialization_lib_name, "fastcdr") == 0 ||
-         std::strcmp(serialization_lib_name, "rosidl_dynamic_typesupport_fastrtps") == 0 ||
-         std::strcmp(serialization_lib_name, "librosidl_dynamic_typesupport_fastrtps.so") == 0);
+          std::strcmp(serialization_lib_name, "fastcdr") == 0 ||
+          std::strcmp(serialization_lib_name,
+                      "rosidl_dynamic_typesupport_fastrtps") == 0 ||
+          std::strcmp(serialization_lib_name,
+                      "librosidl_dynamic_typesupport_fastrtps.so") == 0);
 }
 
-void * OpenFastRtpsDynamicTypesupport()
-{
+void *OpenFastRtpsDynamicTypesupport() {
   int flags = RTLD_LAZY | RTLD_LOCAL;
 #ifdef RTLD_NODELETE
   flags |= RTLD_NODELETE;
 #endif
-  void * handle = dlopen("librosidl_dynamic_typesupport_fastrtps.so", flags);
+  void *handle = dlopen("librosidl_dynamic_typesupport_fastrtps.so", flags);
   if (handle == nullptr) {
     RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
-      "failed to load FastRTPS dynamic typesupport: %s", dlerror());
+        "failed to load FastRTPS dynamic typesupport: %s", dlerror());
   }
   return handle;
 }
 
-template<typename FunctionT>
-FunctionT ResolveDynamicTypesupportSymbol(void * handle, const char * symbol_name)
-{
+template <typename FunctionT>
+FunctionT ResolveDynamicTypesupportSymbol(void *handle,
+                                          const char *symbol_name) {
   dlerror();
-  auto * symbol = dlsym(handle, symbol_name);
-  const char * error = dlerror();
+  auto *symbol = dlsym(handle, symbol_name);
+  const char *error = dlerror();
   if (error != nullptr || symbol == nullptr) {
     RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
-      "failed to resolve FastRTPS dynamic typesupport symbol %s: %s",
-      symbol_name, error != nullptr ? error : "symbol is null");
+        "failed to resolve FastRTPS dynamic typesupport symbol %s: %s",
+        symbol_name, error != nullptr ? error : "symbol is null");
     return nullptr;
   }
   return reinterpret_cast<FunctionT>(symbol);
 }
 
-bool IsSupportedMatchedEvent(rmw_event_type_t event_type)
-{
+bool IsSupportedMatchedEvent(rmw_event_type_t event_type) {
   return event_type == RMW_EVENT_PUBLICATION_MATCHED ||
          event_type == RMW_EVENT_SUBSCRIPTION_MATCHED;
 }
 
-// QoS-status events rmw_mdds actually enforces and raises: offered-deadline-missed
-// (publisher) and requested-deadline-missed / liveliness-changed (subscription).
-// take_event reports real accumulated counts for these (see broker.cpp deadline /
-// liveliness accounting), driven by the rmw_wait poll loop.
-bool IsEnforcedPublisherEvent(rmw_event_type_t event_type)
-{
+// QoS-status events rmw_mdds actually enforces and raises:
+// offered-deadline-missed (publisher) and requested-deadline-missed /
+// liveliness-changed (subscription). take_event reports real accumulated counts
+// for these (see broker.cpp deadline / liveliness accounting), driven by the
+// rmw_wait poll loop.
+bool IsEnforcedPublisherEvent(rmw_event_type_t event_type) {
   return event_type == RMW_EVENT_OFFERED_DEADLINE_MISSED ||
          event_type == RMW_EVENT_LIVELINESS_LOST ||
          event_type == RMW_EVENT_OFFERED_QOS_INCOMPATIBLE ||
          event_type == RMW_EVENT_PUBLISHER_INCOMPATIBLE_TYPE;
 }
-bool IsEnforcedSubscriptionEvent(rmw_event_type_t event_type)
-{
+bool IsEnforcedSubscriptionEvent(rmw_event_type_t event_type) {
   return event_type == RMW_EVENT_REQUESTED_DEADLINE_MISSED ||
          event_type == RMW_EVENT_LIVELINESS_CHANGED ||
          event_type == RMW_EVENT_REQUESTED_QOS_INCOMPATIBLE ||
@@ -317,31 +314,28 @@ bool IsEnforcedSubscriptionEvent(rmw_event_type_t event_type)
          event_type == RMW_EVENT_SUBSCRIPTION_INCOMPATIBLE_TYPE;
 }
 
-bool IsNoOpPublisherEvent(rmw_event_type_t event_type)
-{
+bool IsNoOpPublisherEvent(rmw_event_type_t event_type) {
   (void)event_type;
   return false;
 }
-bool IsNoOpSubscriptionEvent(rmw_event_type_t event_type)
-{
+bool IsNoOpSubscriptionEvent(rmw_event_type_t event_type) {
   (void)event_type;
   return false;
 }
 
 constexpr uint32_t kDefaultBridgeLoanedPayloadCapacity = 64u * 1024u;
 
-bool BorrowPublisherBridgeLoan(
-  rmw_mdds_cpp::PublisherData * data, rmw_mdds_cpp::BridgePublisherLoanRecord * loan)
-{
+bool BorrowPublisherBridgeLoan(rmw_mdds_cpp::PublisherData *data,
+                               rmw_mdds_cpp::BridgePublisherLoanRecord *loan) {
   if (data == nullptr || data->bridge_publisher == nullptr || loan == nullptr) {
     return false;
   }
-  void * bridge_loan = nullptr;
-  void * bridge_data = nullptr;
-  auto & backend = rmw_mdds_cpp::BridgeBackend::Instance();
-  if (!backend.BorrowLoanedSample(
-      data->bridge_publisher, kDefaultBridgeLoanedPayloadCapacity, &bridge_loan,
-      &bridge_data)) {
+  void *bridge_loan = nullptr;
+  void *bridge_data = nullptr;
+  auto &backend = rmw_mdds_cpp::BridgeBackend::Instance();
+  if (!backend.BorrowLoanedSample(data->bridge_publisher,
+                                  kDefaultBridgeLoanedPayloadCapacity,
+                                  &bridge_loan, &bridge_data)) {
     return false;
   }
   if (bridge_loan == nullptr || bridge_data == nullptr) {
@@ -358,9 +352,8 @@ bool BorrowPublisherBridgeLoan(
 }
 
 bool StorePublisherLoanRecord(
-  rmw_mdds_cpp::PublisherData * data, void * ros_message,
-  const rmw_mdds_cpp::BridgePublisherLoanRecord & loan)
-{
+    rmw_mdds_cpp::PublisherData *data, void *ros_message,
+    const rmw_mdds_cpp::BridgePublisherLoanRecord &loan) {
   if (data == nullptr || ros_message == nullptr) {
     return false;
   }
@@ -368,10 +361,24 @@ bool StorePublisherLoanRecord(
   return data->bridge_publisher_loans.emplace(ros_message, loan).second;
 }
 
-bool TakePublisherLoanRecord(
-  rmw_mdds_cpp::PublisherData * data, void * ros_message,
-  rmw_mdds_cpp::BridgePublisherLoanRecord * loan)
-{
+bool ArmPublisherLoanArena(rmw_mdds_cpp::PublisherData *data, void *ros_message,
+                           size_t allocation_count, size_t alignment) {
+  if (data == nullptr || ros_message == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(data->mutex);
+  auto it = data->bridge_publisher_loans.find(ros_message);
+  if (it == data->bridge_publisher_loans.end()) {
+    return false;
+  }
+  rmw_mdds_cpp::ArmLoanArenaForNextAllocation(&it->second.arena,
+                                              allocation_count, alignment);
+  return true;
+}
+
+bool TakePublisherLoanRecord(rmw_mdds_cpp::PublisherData *data,
+                             void *ros_message,
+                             rmw_mdds_cpp::BridgePublisherLoanRecord *loan) {
   if (data == nullptr || ros_message == nullptr || loan == nullptr) {
     return false;
   }
@@ -380,25 +387,26 @@ bool TakePublisherLoanRecord(
   if (it == data->bridge_publisher_loans.end()) {
     return false;
   }
+  rmw_mdds_cpp::DisarmLoanArenaAllocation(&it->second.arena);
   *loan = it->second;
   data->bridge_publisher_loans.erase(it);
   return true;
 }
 
 bool ReturnPublisherBridgeLoan(
-  rmw_mdds_cpp::PublisherData * data, const rmw_mdds_cpp::BridgePublisherLoanRecord & loan)
-{
-  if (data == nullptr || data->bridge_publisher == nullptr || loan.loan == nullptr) {
+    rmw_mdds_cpp::PublisherData *data,
+    const rmw_mdds_cpp::BridgePublisherLoanRecord &loan) {
+  if (data == nullptr || data->bridge_publisher == nullptr ||
+      loan.loan == nullptr) {
     return true;
   }
   return rmw_mdds_cpp::BridgeBackend::Instance().ReturnLoanedSample(
-    data->bridge_publisher, loan.loan);
+      data->bridge_publisher, loan.loan);
 }
 
 void DestroyPublisherLoanedRosMessage(
-  rmw_mdds_cpp::PublisherData * data, void * ros_message,
-  const rmw_mdds_cpp::BridgePublisherLoanRecord & bridge_loan)
-{
+    rmw_mdds_cpp::PublisherData *data, void *ros_message,
+    const rmw_mdds_cpp::BridgePublisherLoanRecord &bridge_loan) {
   if (data == nullptr || ros_message == nullptr) {
     return;
   }
@@ -412,12 +420,12 @@ void DestroyPublisherLoanedRosMessage(
   }
 }
 
-bool IsSampleExpiredByLifespan(
-  const rmw_qos_profile_t & qos, const rmw_message_info_t & info)
-{
+bool IsSampleExpiredByLifespan(const rmw_qos_profile_t &qos,
+                               const rmw_message_info_t &info) {
   const rmw_time_t lifespan = qos.lifespan;
-  constexpr uint64_t kInfiniteSec = 9223372036ULL;  // RMW_DURATION_INFINITE.sec
-  if ((lifespan.sec == 0 && lifespan.nsec == 0) || lifespan.sec >= kInfiniteSec) {
+  constexpr uint64_t kInfiniteSec = 9223372036ULL; // RMW_DURATION_INFINITE.sec
+  if ((lifespan.sec == 0 && lifespan.nsec == 0) ||
+      lifespan.sec >= kInfiniteSec) {
     return false;
   }
   if (info.source_timestamp <= 0) {
@@ -428,13 +436,13 @@ bool IsSampleExpiredByLifespan(
     return false;
   }
   const int64_t lifespan_ns =
-    static_cast<int64_t>(lifespan.sec) * 1000000000LL + static_cast<int64_t>(lifespan.nsec);
+      static_cast<int64_t>(lifespan.sec) * 1000000000LL +
+      static_cast<int64_t>(lifespan.nsec);
   return (now - static_cast<int64_t>(info.source_timestamp)) > lifespan_ns;
 }
 
-bool TakeNextLiveQueuedSample(
-  rmw_mdds_cpp::SubscriptionData * data, rmw_mdds_cpp::QueuedSample * sample)
-{
+bool TakeNextLiveQueuedSample(rmw_mdds_cpp::SubscriptionData *data,
+                              rmw_mdds_cpp::QueuedSample *sample) {
   while (rmw_mdds_cpp::TakeQueuedSample(data, sample)) {
     if (!IsSampleExpiredByLifespan(data->actual_qos, sample->info)) {
       return true;
@@ -443,10 +451,11 @@ bool TakeNextLiveQueuedSample(
   return false;
 }
 
-std::string MakeRosServiceTypeName(
-  const char * service_namespace, const char * service_name, const char * separator)
-{
-  if (service_namespace == nullptr || service_name == nullptr || separator == nullptr) {
+std::string MakeRosServiceTypeName(const char *service_namespace,
+                                   const char *service_name,
+                                   const char *separator) {
+  if (service_namespace == nullptr || service_name == nullptr ||
+      separator == nullptr) {
     return {};
   }
   std::string ns(service_namespace);
@@ -458,21 +467,23 @@ std::string MakeRosServiceTypeName(
   return ns + "/" + service_name;
 }
 
-ServiceTypeInfo ResolveServiceTypeInfo(const rosidl_service_type_support_t * type_support)
-{
+ServiceTypeInfo
+ResolveServiceTypeInfo(const rosidl_service_type_support_t *type_support) {
   ServiceTypeInfo info;
   if (type_support == nullptr) {
     return info;
   }
 
-  const rosidl_service_type_support_t * cpp_introspection = get_service_typesupport_handle(
-    type_support, rosidl_typesupport_introspection_cpp::typesupport_identifier);
+  const rosidl_service_type_support_t *cpp_introspection =
+      get_service_typesupport_handle(
+          type_support,
+          rosidl_typesupport_introspection_cpp::typesupport_identifier);
   if (cpp_introspection != nullptr && cpp_introspection->data != nullptr) {
-    const auto * members =
-      static_cast<const rosidl_typesupport_introspection_cpp::ServiceMembers *>(
+    const auto *members = static_cast<
+        const rosidl_typesupport_introspection_cpp::ServiceMembers *>(
         cpp_introspection->data);
-    info.type_name =
-      MakeRosServiceTypeName(members->service_namespace_, members->service_name_, "::");
+    info.type_name = MakeRosServiceTypeName(members->service_namespace_,
+                                            members->service_name_, "::");
     if (members->request_members_ != nullptr) {
       info.request_type.kind = rmw_mdds_cpp::ServiceMessageMembersKind::Cpp;
       info.request_type.members = members->request_members_;
@@ -487,13 +498,15 @@ ServiceTypeInfo ResolveServiceTypeInfo(const rosidl_service_type_support_t * typ
   }
 
   rmw_reset_error();
-  const rosidl_service_type_support_t * c_introspection =
-    get_service_typesupport_handle(type_support, rosidl_typesupport_introspection_c__identifier);
+  const rosidl_service_type_support_t *c_introspection =
+      get_service_typesupport_handle(
+          type_support, rosidl_typesupport_introspection_c__identifier);
   if (c_introspection != nullptr && c_introspection->data != nullptr) {
-    const auto * members = static_cast<const rosidl_typesupport_introspection_c__ServiceMembers *>(
-      c_introspection->data);
-    info.type_name =
-      MakeRosServiceTypeName(members->service_namespace_, members->service_name_, "__");
+    const auto *members =
+        static_cast<const rosidl_typesupport_introspection_c__ServiceMembers *>(
+            c_introspection->data);
+    info.type_name = MakeRosServiceTypeName(members->service_namespace_,
+                                            members->service_name_, "__");
     if (members->request_members_ != nullptr) {
       info.request_type.kind = rmw_mdds_cpp::ServiceMessageMembersKind::C;
       info.request_type.members = members->request_members_;
@@ -511,92 +524,94 @@ ServiceTypeInfo ResolveServiceTypeInfo(const rosidl_service_type_support_t * typ
   return info;
 }
 
-bool ServiceTypeInfoIsValid(const ServiceTypeInfo & info)
-{
+bool ServiceTypeInfoIsValid(const ServiceTypeInfo &info) {
   return !info.type_name.empty() &&
-         info.request_type.kind != rmw_mdds_cpp::ServiceMessageMembersKind::None &&
+         info.request_type.kind !=
+             rmw_mdds_cpp::ServiceMessageMembersKind::None &&
          info.request_type.members != nullptr && info.request_type.size != 0 &&
-         info.response_type.kind != rmw_mdds_cpp::ServiceMessageMembersKind::None &&
+         info.response_type.kind !=
+             rmw_mdds_cpp::ServiceMessageMembersKind::None &&
          info.response_type.members != nullptr && info.response_type.size != 0;
 }
 
-rmw_ret_t CheckNode(const rmw_node_t * node)
-{
+rmw_ret_t CheckNode(const rmw_node_t *node) {
   if (node == nullptr) {
     RMW_SET_ERROR_MSG("node is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!rmw_mdds_cpp::IsMddsIdentifier(node->implementation_identifier)) {
-    RMW_SET_ERROR_MSG("node implementation identifier does not match rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG(
+        "node implementation identifier does not match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t CheckPublisher(const rmw_publisher_t * publisher)
-{
+rmw_ret_t CheckPublisher(const rmw_publisher_t *publisher) {
   if (publisher == nullptr) {
     RMW_SET_ERROR_MSG("publisher is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!rmw_mdds_cpp::IsMddsIdentifier(publisher->implementation_identifier)) {
-    RMW_SET_ERROR_MSG("publisher implementation identifier does not match rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG(
+        "publisher implementation identifier does not match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t CheckSubscription(const rmw_subscription_t * subscription)
-{
+rmw_ret_t CheckSubscription(const rmw_subscription_t *subscription) {
   if (subscription == nullptr) {
     RMW_SET_ERROR_MSG("subscription is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (!rmw_mdds_cpp::IsMddsIdentifier(subscription->implementation_identifier)) {
-    RMW_SET_ERROR_MSG("subscription implementation identifier does not match rmw_mdds_cpp");
+  if (!rmw_mdds_cpp::IsMddsIdentifier(
+          subscription->implementation_identifier)) {
+    RMW_SET_ERROR_MSG(
+        "subscription implementation identifier does not match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t CheckService(const rmw_service_t * service)
-{
+rmw_ret_t CheckService(const rmw_service_t *service) {
   if (service == nullptr) {
     RMW_SET_ERROR_MSG("service is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!rmw_mdds_cpp::IsMddsIdentifier(service->implementation_identifier)) {
-    RMW_SET_ERROR_MSG("service implementation identifier does not match rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG(
+        "service implementation identifier does not match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t CheckClient(const rmw_client_t * client)
-{
+rmw_ret_t CheckClient(const rmw_client_t *client) {
   if (client == nullptr) {
     RMW_SET_ERROR_MSG("client is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!rmw_mdds_cpp::IsMddsIdentifier(client->implementation_identifier)) {
-    RMW_SET_ERROR_MSG("client implementation identifier does not match rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG(
+        "client implementation identifier does not match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t AbortNamesAndTypesInit(rmw_names_and_types_t * names_and_types, const char * message)
-{
+rmw_ret_t AbortNamesAndTypesInit(rmw_names_and_types_t *names_and_types,
+                                 const char *message) {
   const rmw_ret_t fini_ret = rmw_names_and_types_fini(names_and_types);
   (void)fini_ret;
   RMW_SET_ERROR_MSG(message);
   return RMW_RET_BAD_ALLOC;
 }
 
-rmw_ret_t InitNamesAndTypes(
-  const rmw_node_t * node, rcutils_allocator_t * allocator, rmw_names_and_types_t * names_and_types,
-  const std::vector<rmw_mdds_cpp::NameAndTypes> & entries)
-{
+rmw_ret_t
+InitNamesAndTypes(const rmw_node_t *node, rcutils_allocator_t *allocator,
+                  rmw_names_and_types_t *names_and_types,
+                  const std::vector<rmw_mdds_cpp::NameAndTypes> &entries) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -620,21 +635,26 @@ rmw_ret_t InitNamesAndTypes(
   }
 
   for (size_t i = 0; i < entries.size(); ++i) {
-    names_and_types->names.data[i] = rcutils_strdup(entries[i].name.c_str(), *allocator);
+    names_and_types->names.data[i] =
+        rcutils_strdup(entries[i].name.c_str(), *allocator);
     if (names_and_types->names.data[i] == nullptr) {
-      return AbortNamesAndTypesInit(names_and_types, "failed to allocate graph name");
+      return AbortNamesAndTypesInit(names_and_types,
+                                    "failed to allocate graph name");
     }
 
-    if (
-      rcutils_string_array_init(&names_and_types->types[i], entries[i].types.size(), allocator) !=
-      RCUTILS_RET_OK) {
-      return AbortNamesAndTypesInit(names_and_types, "failed to allocate graph type array");
+    if (rcutils_string_array_init(&names_and_types->types[i],
+                                  entries[i].types.size(),
+                                  allocator) != RCUTILS_RET_OK) {
+      return AbortNamesAndTypesInit(names_and_types,
+                                    "failed to allocate graph type array");
     }
 
     for (size_t j = 0; j < entries[i].types.size(); ++j) {
-      names_and_types->types[i].data[j] = rcutils_strdup(entries[i].types[j].c_str(), *allocator);
+      names_and_types->types[i].data[j] =
+          rcutils_strdup(entries[i].types[j].c_str(), *allocator);
       if (names_and_types->types[i].data[j] == nullptr) {
-        return AbortNamesAndTypesInit(names_and_types, "failed to allocate graph type name");
+        return AbortNamesAndTypesInit(names_and_types,
+                                      "failed to allocate graph type name");
       }
     }
   }
@@ -643,15 +663,15 @@ rmw_ret_t InitNamesAndTypes(
 }
 
 void AddServiceNameAndType(
-  std::vector<rmw_mdds_cpp::NameAndTypes> * names_and_types, const std::string & name,
-  const std::string & type)
-{
+    std::vector<rmw_mdds_cpp::NameAndTypes> *names_and_types,
+    const std::string &name, const std::string &type) {
   if (names_and_types == nullptr || name.empty() || type.empty()) {
     return;
   }
-  auto it = std::find_if(
-    names_and_types->begin(), names_and_types->end(),
-    [&name](const rmw_mdds_cpp::NameAndTypes & entry) { return entry.name == name; });
+  auto it = std::find_if(names_and_types->begin(), names_and_types->end(),
+                         [&name](const rmw_mdds_cpp::NameAndTypes &entry) {
+                           return entry.name == name;
+                         });
   if (it == names_and_types->end()) {
     names_and_types->push_back(rmw_mdds_cpp::NameAndTypes{name, {type}});
     return;
@@ -661,42 +681,41 @@ void AddServiceNameAndType(
   }
 }
 
-bool BelongsToNode(
-  const std::string & entity_node_name, const std::string & entity_node_namespace,
-  const char * node_name, const char * node_namespace)
-{
-  return node_name != nullptr && node_namespace != nullptr && entity_node_name == node_name &&
+bool BelongsToNode(const std::string &entity_node_name,
+                   const std::string &entity_node_namespace,
+                   const char *node_name, const char *node_namespace) {
+  return node_name != nullptr && node_namespace != nullptr &&
+         entity_node_name == node_name &&
          entity_node_namespace == node_namespace;
 }
 
-void AddUniqueNodeGraphInfo(
-  std::vector<rmw_mdds_cpp::NodeGraphInfo> * nodes,
-  const rmw_mdds_cpp::NodeGraphInfo & candidate)
-{
+void AddUniqueNodeGraphInfo(std::vector<rmw_mdds_cpp::NodeGraphInfo> *nodes,
+                            const rmw_mdds_cpp::NodeGraphInfo &candidate) {
   if (nodes == nullptr || candidate.node_name.empty()) {
     return;
   }
   const auto it = std::find_if(
-    nodes->begin(), nodes->end(), [&candidate](const rmw_mdds_cpp::NodeGraphInfo & current) {
-      return current.node_name == candidate.node_name &&
-             current.node_namespace == candidate.node_namespace &&
-             current.enclave == candidate.enclave;
-    });
+      nodes->begin(), nodes->end(),
+      [&candidate](const rmw_mdds_cpp::NodeGraphInfo &current) {
+        return current.node_name == candidate.node_name &&
+               current.node_namespace == candidate.node_namespace &&
+               current.enclave == candidate.enclave;
+      });
   if (it == nodes->end()) {
     nodes->push_back(candidate);
   }
 }
 
-bool GraphNodeExists(const char * node_name, const char * node_namespace)
-{
+bool GraphNodeExists(const char *node_name, const char *node_namespace) {
   auto nodes = rmw_mdds_cpp::GetRegisteredNodes();
   if (rmw_mdds_cpp::BrokerModeEnabled()) {
-    for (const auto & broker_node : rmw_mdds_cpp::GetBrokerGraphNodes()) {
+    for (const auto &broker_node : rmw_mdds_cpp::GetBrokerGraphNodes()) {
       AddUniqueNodeGraphInfo(&nodes, broker_node);
     }
   }
-  for (const auto & node_info : nodes) {
-    if (node_info.node_name == node_name && node_info.node_namespace == node_namespace) {
+  for (const auto &node_info : nodes) {
+    if (node_info.node_name == node_name &&
+        node_info.node_namespace == node_namespace) {
       return true;
     }
   }
@@ -704,9 +723,9 @@ bool GraphNodeExists(const char * node_name, const char * node_namespace)
 }
 
 rmw_ret_t ValidateNamesAndTypesByNodeQuery(
-  const rmw_node_t * node, rcutils_allocator_t * allocator, const char * node_name,
-  const char * node_namespace, rmw_names_and_types_t * names_and_types)
-{
+    const rmw_node_t *node, rcutils_allocator_t *allocator,
+    const char *node_name, const char *node_namespace,
+    rmw_names_and_types_t *names_and_types) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -737,7 +756,8 @@ rmw_ret_t ValidateNamesAndTypesByNodeQuery(
   }
   validation_result = RMW_NAMESPACE_VALID;
   invalid_index = 0;
-  ret = rmw_validate_namespace(node_namespace, &validation_result, &invalid_index);
+  ret = rmw_validate_namespace(node_namespace, &validation_result,
+                               &invalid_index);
   if (ret != RMW_RET_OK || validation_result != RMW_NAMESPACE_VALID) {
     RMW_SET_ERROR_MSG("node namespace is invalid");
     return RMW_RET_INVALID_ARGUMENT;
@@ -749,37 +769,38 @@ rmw_ret_t ValidateNamesAndTypesByNodeQuery(
   return RMW_RET_OK;
 }
 
-rmw_ret_t ValidateFullyQualifiedName(const char * name, const char * argument_name)
-{
+rmw_ret_t ValidateFullyQualifiedName(const char *name,
+                                     const char *argument_name) {
   int validation_result = RMW_TOPIC_VALID;
   size_t invalid_index = 0;
-  const rmw_ret_t ret = rmw_validate_full_topic_name(
-    name, &validation_result, &invalid_index);
+  const rmw_ret_t ret =
+      rmw_validate_full_topic_name(name, &validation_result, &invalid_index);
   if (ret == RMW_RET_OK && validation_result == RMW_TOPIC_VALID) {
     return RMW_RET_OK;
   }
 
-  const char * reason = rmw_full_topic_name_validation_result_string(validation_result);
+  const char *reason =
+      rmw_full_topic_name_validation_result_string(validation_result);
   if (reason == nullptr) {
     RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s is invalid", argument_name);
   } else {
-    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s is invalid: %s", argument_name, reason);
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s is invalid: %s", argument_name,
+                                         reason);
   }
   return RMW_RET_INVALID_ARGUMENT;
 }
 
-bool SameServiceNameAndType(
-  const rmw_mdds_cpp::ServiceData * service, const rmw_mdds_cpp::ClientData * client)
-{
-  if (service == nullptr || client == nullptr || service->service_name != client->service_name) {
+bool SameServiceNameAndType(const rmw_mdds_cpp::ServiceData *service,
+                            const rmw_mdds_cpp::ClientData *client) {
+  if (service == nullptr || client == nullptr ||
+      service->service_name != client->service_name) {
     return false;
   }
   return service->type_name.empty() || client->type_name.empty() ||
          service->type_name == client->type_name;
 }
 
-void RegisterService(rmw_mdds_cpp::ServiceData * service)
-{
+void RegisterService(rmw_mdds_cpp::ServiceData *service) {
   if (service == nullptr) {
     return;
   }
@@ -787,14 +808,13 @@ void RegisterService(rmw_mdds_cpp::ServiceData * service)
   g_services.push_back(service);
 }
 
-void UnregisterService(rmw_mdds_cpp::ServiceData * service)
-{
+void UnregisterService(rmw_mdds_cpp::ServiceData *service) {
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
-  g_services.erase(std::remove(g_services.begin(), g_services.end(), service), g_services.end());
+  g_services.erase(std::remove(g_services.begin(), g_services.end(), service),
+                   g_services.end());
 }
 
-void RegisterClient(rmw_mdds_cpp::ClientData * client)
-{
+void RegisterClient(rmw_mdds_cpp::ClientData *client) {
   if (client == nullptr) {
     return;
   }
@@ -802,77 +822,76 @@ void RegisterClient(rmw_mdds_cpp::ClientData * client)
   g_clients.push_back(client);
 }
 
-void UnregisterClient(rmw_mdds_cpp::ClientData * client)
-{
+void UnregisterClient(rmw_mdds_cpp::ClientData *client) {
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
-  g_clients.erase(std::remove(g_clients.begin(), g_clients.end(), client), g_clients.end());
+  g_clients.erase(std::remove(g_clients.begin(), g_clients.end(), client),
+                  g_clients.end());
 }
 
-size_t CountServicesByName(const char * service_name)
-{
+size_t CountServicesByName(const char *service_name) {
   if (service_name == nullptr) {
     return 0;
   }
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
   return static_cast<size_t>(std::count_if(
-    g_services.begin(), g_services.end(),
-    [service_name](const rmw_mdds_cpp::ServiceData * service) {
-      return service != nullptr && service->service_name == service_name;
-    }));
+      g_services.begin(), g_services.end(),
+      [service_name](const rmw_mdds_cpp::ServiceData *service) {
+        return service != nullptr && service->service_name == service_name;
+      }));
 }
 
-size_t CountClientsByName(const char * service_name)
-{
+size_t CountClientsByName(const char *service_name) {
   if (service_name == nullptr) {
     return 0;
   }
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
   return static_cast<size_t>(std::count_if(
-    g_clients.begin(), g_clients.end(), [service_name](const rmw_mdds_cpp::ClientData * client) {
-      return client != nullptr && client->service_name == service_name;
-    }));
+      g_clients.begin(), g_clients.end(),
+      [service_name](const rmw_mdds_cpp::ClientData *client) {
+        return client != nullptr && client->service_name == service_name;
+      }));
 }
 
-bool HasMatchingService(const rmw_mdds_cpp::ClientData * client)
-{
+bool HasMatchingService(const rmw_mdds_cpp::ClientData *client) {
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
-  return std::any_of(
-    g_services.begin(), g_services.end(), [client](const rmw_mdds_cpp::ServiceData * service) {
-      return SameServiceNameAndType(service, client);
-    });
+  return std::any_of(g_services.begin(), g_services.end(),
+                     [client](const rmw_mdds_cpp::ServiceData *service) {
+                       return SameServiceNameAndType(service, client);
+                     });
 }
 
-void FillClientGuid(const rmw_mdds_cpp::ClientData * client, uint8_t guid[RMW_GID_STORAGE_SIZE])
-{
+void FillClientGuid(const rmw_mdds_cpp::ClientData *client,
+                    uint8_t guid[RMW_GID_STORAGE_SIZE]) {
   std::memset(guid, 0, RMW_GID_STORAGE_SIZE);
   const uintptr_t address = reinterpret_cast<uintptr_t>(client);
-  std::memcpy(guid, &address, std::min(sizeof(address), static_cast<size_t>(RMW_GID_STORAGE_SIZE)));
+  std::memcpy(
+      guid, &address,
+      std::min(sizeof(address), static_cast<size_t>(RMW_GID_STORAGE_SIZE)));
 }
 
-bool ClientMatchesGuid(
-  const rmw_mdds_cpp::ClientData * client, const uint8_t guid[RMW_GID_STORAGE_SIZE])
-{
+bool ClientMatchesGuid(const rmw_mdds_cpp::ClientData *client,
+                       const uint8_t guid[RMW_GID_STORAGE_SIZE]) {
   uint8_t expected[RMW_GID_STORAGE_SIZE];
   FillClientGuid(client, expected);
   return std::memcmp(expected, guid, RMW_GID_STORAGE_SIZE) == 0;
 }
 
-rmw_mdds_cpp::ClientData * FindClientByGuid(const uint8_t guid[RMW_GID_STORAGE_SIZE])
-{
+rmw_mdds_cpp::ClientData *
+FindClientByGuid(const uint8_t guid[RMW_GID_STORAGE_SIZE]) {
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
-  const auto it = std::find_if(
-    g_clients.begin(), g_clients.end(), [guid](const rmw_mdds_cpp::ClientData * client) {
-      return client != nullptr && ClientMatchesGuid(client, guid);
-    });
+  const auto it = std::find_if(g_clients.begin(), g_clients.end(),
+                               [guid](const rmw_mdds_cpp::ClientData *client) {
+                                 return client != nullptr &&
+                                        ClientMatchesGuid(client, guid);
+                               });
   return it == g_clients.end() ? nullptr : *it;
 }
 
-std::vector<rmw_mdds_cpp::ServiceData *> GetMatchingServices(
-  const rmw_mdds_cpp::ClientData * client)
-{
+std::vector<rmw_mdds_cpp::ServiceData *>
+GetMatchingServices(const rmw_mdds_cpp::ClientData *client) {
   std::vector<rmw_mdds_cpp::ServiceData *> services;
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
-  for (auto * service : g_services) {
+  for (auto *service : g_services) {
     if (SameServiceNameAndType(service, client)) {
       services.push_back(service);
     }
@@ -880,21 +899,21 @@ std::vector<rmw_mdds_cpp::ServiceData *> GetMatchingServices(
   return services;
 }
 
-std::string MakeServiceBridgeTopic(const char * prefix, const std::string & service_name)
-{
+std::string MakeServiceBridgeTopic(const char *prefix,
+                                   const std::string &service_name) {
   std::string topic(prefix == nullptr ? "" : prefix);
   topic += rmw_mdds_cpp::ToMddsTopicName(service_name.c_str());
   return topic;
 }
 
-std::string MakeNodeServicePrefix(const char * node_name, const char * node_namespace)
-{
+std::string MakeNodeServicePrefix(const char *node_name,
+                                  const char *node_namespace) {
   if (node_name == nullptr || node_name[0] == '\0') {
     return {};
   }
   std::string prefix;
   if (node_namespace == nullptr || node_namespace[0] == '\0' ||
-    std::strcmp(node_namespace, "/") == 0) {
+      std::strcmp(node_namespace, "/") == 0) {
     prefix = "/";
   } else {
     prefix = node_namespace;
@@ -906,9 +925,9 @@ std::string MakeNodeServicePrefix(const char * node_name, const char * node_name
   return prefix;
 }
 
-bool AllowsLocalOnlyInternalService(
-  const char * service_name, const char * node_name, const char * node_namespace)
-{
+bool AllowsLocalOnlyInternalService(const char *service_name,
+                                    const char *node_name,
+                                    const char *node_namespace) {
   if (service_name == nullptr) {
     return false;
   }
@@ -916,18 +935,18 @@ bool AllowsLocalOnlyInternalService(
   if (prefix.empty()) {
     return false;
   }
-  static constexpr const char * kInternalServiceSuffixes[] = {
-    "/get_type_description",
-    "/describe_parameters",
-    "/get_parameters",
-    "/get_parameter_types",
-    "/list_parameters",
-    "/set_parameters",
-    "/set_parameters_atomically",
-    "/get_logger_levels",
-    "/set_logger_levels",
+  static constexpr const char *kInternalServiceSuffixes[] = {
+      "/get_type_description",
+      "/describe_parameters",
+      "/get_parameters",
+      "/get_parameter_types",
+      "/list_parameters",
+      "/set_parameters",
+      "/set_parameters_atomically",
+      "/get_logger_levels",
+      "/set_logger_levels",
   };
-  for (const char * suffix : kInternalServiceSuffixes) {
+  for (const char *suffix : kInternalServiceSuffixes) {
     const std::string expected = prefix + suffix;
     if (expected == service_name) {
       return true;
@@ -936,8 +955,8 @@ bool AllowsLocalOnlyInternalService(
   return false;
 }
 
-std::string MakeServiceBridgeType(const std::string & service_type_name, const char * suffix)
-{
+std::string MakeServiceBridgeType(const std::string &service_type_name,
+                                  const char *suffix) {
   if (service_type_name.empty()) {
     return {};
   }
@@ -946,8 +965,7 @@ std::string MakeServiceBridgeType(const std::string & service_type_name, const c
   return type_name;
 }
 
-void AppendI64(std::vector<uint8_t> * payload, int64_t value)
-{
+void AppendI64(std::vector<uint8_t> *payload, int64_t value) {
   if (payload == nullptr) {
     return;
   }
@@ -957,9 +975,9 @@ void AppendI64(std::vector<uint8_t> * payload, int64_t value)
   }
 }
 
-bool ReadI64(const uint8_t * data, size_t len, size_t * offset, int64_t * value)
-{
-  if (data == nullptr || offset == nullptr || value == nullptr || len - *offset < sizeof(uint64_t)) {
+bool ReadI64(const uint8_t *data, size_t len, size_t *offset, int64_t *value) {
+  if (data == nullptr || offset == nullptr || value == nullptr ||
+      len - *offset < sizeof(uint64_t)) {
     return false;
   }
   uint64_t bits = 0;
@@ -971,26 +989,27 @@ bool ReadI64(const uint8_t * data, size_t len, size_t * offset, int64_t * value)
   return true;
 }
 
-bool EncodeServiceWirePayload(
-  const rmw_request_id_t & request_id, rmw_time_point_value_t source_timestamp,
-  const std::vector<uint8_t> & payload, std::vector<uint8_t> * wire_payload)
-{
+bool EncodeServiceWirePayload(const rmw_request_id_t &request_id,
+                              rmw_time_point_value_t source_timestamp,
+                              const std::vector<uint8_t> &payload,
+                              std::vector<uint8_t> *wire_payload) {
   if (wire_payload == nullptr) {
     return false;
   }
   wire_payload->clear();
-  wire_payload->reserve(sizeof(int64_t) + RMW_GID_STORAGE_SIZE + sizeof(int64_t) + payload.size());
+  wire_payload->reserve(sizeof(int64_t) + RMW_GID_STORAGE_SIZE +
+                        sizeof(int64_t) + payload.size());
   AppendI64(wire_payload, request_id.sequence_number);
-  wire_payload->insert(
-    wire_payload->end(), request_id.writer_guid, request_id.writer_guid + RMW_GID_STORAGE_SIZE);
+  wire_payload->insert(wire_payload->end(), request_id.writer_guid,
+                       request_id.writer_guid + RMW_GID_STORAGE_SIZE);
   AppendI64(wire_payload, static_cast<int64_t>(source_timestamp));
   wire_payload->insert(wire_payload->end(), payload.begin(), payload.end());
   return true;
 }
 
-bool DecodeServiceWirePayloadBytes(
-  const uint8_t * data, size_t len, rmw_service_info_t * info, std::vector<uint8_t> * payload)
-{
+bool DecodeServiceWirePayloadBytes(const uint8_t *data, size_t len,
+                                   rmw_service_info_t *info,
+                                   std::vector<uint8_t> *payload) {
   if (info == nullptr || payload == nullptr || (data == nullptr && len != 0)) {
     return false;
   }
@@ -1005,83 +1024,82 @@ bool DecodeServiceWirePayloadBytes(
   }
   *info = {};
   info->request_id.sequence_number = sequence_number;
-  std::memcpy(info->request_id.writer_guid, data + offset, RMW_GID_STORAGE_SIZE);
+  std::memcpy(info->request_id.writer_guid, data + offset,
+              RMW_GID_STORAGE_SIZE);
   offset += RMW_GID_STORAGE_SIZE;
   if (!ReadI64(data, len, &offset, &source_timestamp)) {
     return false;
   }
-  info->source_timestamp = static_cast<rmw_time_point_value_t>(source_timestamp);
+  info->source_timestamp =
+      static_cast<rmw_time_point_value_t>(source_timestamp);
   payload->assign(data + offset, data + len);
   return true;
 }
 
-bool DecodeServiceWirePayload(
-  const rmw_mdds_cpp::BridgeSample * sample, rmw_service_info_t * info,
-  std::vector<uint8_t> * payload)
-{
+bool DecodeServiceWirePayload(const rmw_mdds_cpp::BridgeSample *sample,
+                              rmw_service_info_t *info,
+                              std::vector<uint8_t> *payload) {
   if (sample == nullptr) {
     return false;
   }
   return DecodeServiceWirePayloadBytes(
-    static_cast<const uint8_t *>(sample->data), sample->len, info, payload);
+      static_cast<const uint8_t *>(sample->data), sample->len, info, payload);
 }
 
-bool ScalarSizeForType(uint8_t type_id, size_t * size)
-{
+bool ScalarSizeForType(uint8_t type_id, size_t *size) {
   if (size == nullptr) {
     return false;
   }
   switch (type_id) {
-    case rosidl_typesupport_introspection_c__ROS_TYPE_FLOAT:
-      *size = sizeof(float);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_DOUBLE:
-      *size = sizeof(double);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_LONG_DOUBLE:
-      *size = sizeof(long double);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_CHAR:
-      *size = sizeof(char);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_WCHAR:
-      *size = sizeof(char16_t);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_BOOLEAN:
-      *size = sizeof(bool);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_OCTET:
-    case rosidl_typesupport_introspection_c__ROS_TYPE_UINT8:
-      *size = sizeof(uint8_t);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_INT8:
-      *size = sizeof(int8_t);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_UINT16:
-      *size = sizeof(uint16_t);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_INT16:
-      *size = sizeof(int16_t);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_UINT32:
-      *size = sizeof(uint32_t);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_INT32:
-      *size = sizeof(int32_t);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_UINT64:
-      *size = sizeof(uint64_t);
-      return true;
-    case rosidl_typesupport_introspection_c__ROS_TYPE_INT64:
-      *size = sizeof(int64_t);
-      return true;
-    default:
-      return false;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_FLOAT:
+    *size = sizeof(float);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_DOUBLE:
+    *size = sizeof(double);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_LONG_DOUBLE:
+    *size = sizeof(long double);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_CHAR:
+    *size = sizeof(char);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_WCHAR:
+    *size = sizeof(char16_t);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_BOOLEAN:
+    *size = sizeof(bool);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_OCTET:
+  case rosidl_typesupport_introspection_c__ROS_TYPE_UINT8:
+    *size = sizeof(uint8_t);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_INT8:
+    *size = sizeof(int8_t);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_UINT16:
+    *size = sizeof(uint16_t);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_INT16:
+    *size = sizeof(int16_t);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_UINT32:
+    *size = sizeof(uint32_t);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_INT32:
+    *size = sizeof(int32_t);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_UINT64:
+    *size = sizeof(uint64_t);
+    return true;
+  case rosidl_typesupport_introspection_c__ROS_TYPE_INT64:
+    *size = sizeof(int64_t);
+    return true;
+  default:
+    return false;
   }
 }
 
-bool AddSerializedSize(size_t value, size_t * total)
-{
+bool AddSerializedSize(size_t value, size_t *total) {
   if (total == nullptr || value > std::numeric_limits<size_t>::max() - *total) {
     return false;
   }
@@ -1089,8 +1107,7 @@ bool AddSerializedSize(size_t value, size_t * total)
   return true;
 }
 
-bool AddCdrAlignment(size_t alignment, size_t * total)
-{
+bool AddCdrAlignment(size_t alignment, size_t *total) {
   if (alignment == 0 || total == nullptr) {
     return false;
   }
@@ -1101,20 +1118,19 @@ bool AddCdrAlignment(size_t alignment, size_t * total)
   return AddSerializedSize(alignment - remainder, total);
 }
 
-bool AddCdrAlignedSize(size_t value_size, size_t * total)
-{
+bool AddCdrAlignedSize(size_t value_size, size_t *total) {
   if (!AddCdrAlignment(value_size, total)) {
     return false;
   }
   return AddSerializedSize(value_size, total);
 }
 
-bool AddCdrStringSize(size_t string_upper_bound, size_t * total)
-{
+bool AddCdrStringSize(size_t string_upper_bound, size_t *total) {
   if (string_upper_bound == 0 || total == nullptr) {
     return false;
   }
-  if (!AddCdrAlignment(sizeof(uint32_t), total) || !AddSerializedSize(sizeof(uint32_t), total)) {
+  if (!AddCdrAlignment(sizeof(uint32_t), total) ||
+      !AddSerializedSize(sizeof(uint32_t), total)) {
     return false;
   }
   if (!AddSerializedSize(string_upper_bound, total)) {
@@ -1124,23 +1140,24 @@ bool AddCdrStringSize(size_t string_upper_bound, size_t * total)
 }
 
 bool AddFixedValueSerializedSizeC(
-  const rosidl_typesupport_introspection_c__MessageMember & member, size_t * total);
+    const rosidl_typesupport_introspection_c__MessageMember &member,
+    size_t *total);
 
 bool AddFixedMessageSerializedSizeC(
-  const rosidl_typesupport_introspection_c__MessageMembers * members, size_t * total)
-{
-  if (
-    members == nullptr || total == nullptr ||
-    (members->member_count_ != 0 && members->members_ == nullptr)) {
+    const rosidl_typesupport_introspection_c__MessageMembers *members,
+    size_t *total) {
+  if (members == nullptr || total == nullptr ||
+      (members->member_count_ != 0 && members->members_ == nullptr)) {
     return false;
   }
   for (uint32_t i = 0; i < members->member_count_; ++i) {
-    const auto & member = members->members_[i];
+    const auto &member = members->members_[i];
     if (member.is_array_) {
       if (member.array_size_ == 0 && !member.is_upper_bound_) {
         return false;
       }
-      if (member.is_upper_bound_ && !AddCdrAlignedSize(sizeof(uint32_t), total)) {
+      if (member.is_upper_bound_ &&
+          !AddCdrAlignedSize(sizeof(uint32_t), total)) {
         return false;
       }
       for (size_t j = 0; j < member.array_size_; ++j) {
@@ -1158,8 +1175,8 @@ bool AddFixedMessageSerializedSizeC(
 }
 
 bool FixedMessageSerializedSizeC(
-  const rosidl_typesupport_introspection_c__MessageMembers * members, size_t * size)
-{
+    const rosidl_typesupport_introspection_c__MessageMembers *members,
+    size_t *size) {
   if (size == nullptr) {
     return false;
   }
@@ -1172,8 +1189,8 @@ bool FixedMessageSerializedSizeC(
 }
 
 bool AddFixedValueSerializedSizeC(
-  const rosidl_typesupport_introspection_c__MessageMember & member, size_t * total)
-{
+    const rosidl_typesupport_introspection_c__MessageMember &member,
+    size_t *total) {
   if (total == nullptr) {
     return false;
   }
@@ -1181,13 +1198,16 @@ bool AddFixedValueSerializedSizeC(
     return AddCdrStringSize(member.string_upper_bound_, total);
   }
   if (member.type_id_ == rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE) {
-    const rosidl_message_type_support_t * nested = get_message_typesupport_handle(
-      member.members_, rosidl_typesupport_introspection_c__identifier);
+    const rosidl_message_type_support_t *nested =
+        get_message_typesupport_handle(
+            member.members_, rosidl_typesupport_introspection_c__identifier);
     if (nested == nullptr || nested->data == nullptr) {
       return false;
     }
     return AddFixedMessageSerializedSizeC(
-      static_cast<const rosidl_typesupport_introspection_c__MessageMembers *>(nested->data), total);
+        static_cast<const rosidl_typesupport_introspection_c__MessageMembers *>(
+            nested->data),
+        total);
   }
   size_t scalar_size = 0;
   if (!ScalarSizeForType(member.type_id_, &scalar_size)) {
@@ -1197,23 +1217,24 @@ bool AddFixedValueSerializedSizeC(
 }
 
 bool AddFixedValueSerializedSizeCpp(
-  const rosidl_typesupport_introspection_cpp::MessageMember & member, size_t * total);
+    const rosidl_typesupport_introspection_cpp::MessageMember &member,
+    size_t *total);
 
 bool AddFixedMessageSerializedSizeCpp(
-  const rosidl_typesupport_introspection_cpp::MessageMembers * members, size_t * total)
-{
-  if (
-    members == nullptr || total == nullptr ||
-    (members->member_count_ != 0 && members->members_ == nullptr)) {
+    const rosidl_typesupport_introspection_cpp::MessageMembers *members,
+    size_t *total) {
+  if (members == nullptr || total == nullptr ||
+      (members->member_count_ != 0 && members->members_ == nullptr)) {
     return false;
   }
   for (uint32_t i = 0; i < members->member_count_; ++i) {
-    const auto & member = members->members_[i];
+    const auto &member = members->members_[i];
     if (member.is_array_) {
       if (member.array_size_ == 0 && !member.is_upper_bound_) {
         return false;
       }
-      if (member.is_upper_bound_ && !AddCdrAlignedSize(sizeof(uint32_t), total)) {
+      if (member.is_upper_bound_ &&
+          !AddCdrAlignedSize(sizeof(uint32_t), total)) {
         return false;
       }
       for (size_t j = 0; j < member.array_size_; ++j) {
@@ -1231,8 +1252,8 @@ bool AddFixedMessageSerializedSizeCpp(
 }
 
 bool FixedMessageSerializedSizeCpp(
-  const rosidl_typesupport_introspection_cpp::MessageMembers * members, size_t * size)
-{
+    const rosidl_typesupport_introspection_cpp::MessageMembers *members,
+    size_t *size) {
   if (size == nullptr) {
     return false;
   }
@@ -1245,23 +1266,28 @@ bool FixedMessageSerializedSizeCpp(
 }
 
 bool AddFixedValueSerializedSizeCpp(
-  const rosidl_typesupport_introspection_cpp::MessageMember & member, size_t * total)
-{
+    const rosidl_typesupport_introspection_cpp::MessageMember &member,
+    size_t *total) {
   if (total == nullptr) {
     return false;
   }
-  if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+  if (member.type_id_ ==
+      rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
     return AddCdrStringSize(member.string_upper_bound_, total);
   }
-  if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
-    const rosidl_message_type_support_t * nested = get_message_typesupport_handle(
-      member.members_, rosidl_typesupport_introspection_cpp::typesupport_identifier);
+  if (member.type_id_ ==
+      rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
+    const rosidl_message_type_support_t *nested =
+        get_message_typesupport_handle(
+            member.members_,
+            rosidl_typesupport_introspection_cpp::typesupport_identifier);
     if (nested == nullptr || nested->data == nullptr) {
       return false;
     }
     return AddFixedMessageSerializedSizeCpp(
-      static_cast<const rosidl_typesupport_introspection_cpp::MessageMembers *>(nested->data),
-      total);
+        static_cast<const rosidl_typesupport_introspection_cpp::MessageMembers
+                        *>(nested->data),
+        total);
   }
   size_t scalar_size = 0;
   if (!ScalarSizeForType(member.type_id_, &scalar_size)) {
@@ -1270,19 +1296,22 @@ bool AddFixedValueSerializedSizeCpp(
   return AddCdrAlignedSize(scalar_size, total);
 }
 
-bool FixedSerializedMessageSize(const rosidl_message_type_support_t * type_support, size_t * size)
-{
+bool FixedSerializedMessageSize(
+    const rosidl_message_type_support_t *type_support, size_t *size) {
   if (type_support == nullptr || size == nullptr) {
     return false;
   }
-  const rosidl_message_type_support_t * cpp_introspection = get_message_typesupport_handle(
-    type_support, rosidl_typesupport_introspection_cpp::typesupport_identifier);
+  const rosidl_message_type_support_t *cpp_introspection =
+      get_message_typesupport_handle(
+          type_support,
+          rosidl_typesupport_introspection_cpp::typesupport_identifier);
   if (cpp_introspection != nullptr && cpp_introspection->data != nullptr) {
     size_t payload_size = 0;
     if (!FixedMessageSerializedSizeCpp(
-      static_cast<const rosidl_typesupport_introspection_cpp::MessageMembers *>(
-        cpp_introspection->data),
-      &payload_size)) {
+            static_cast<
+                const rosidl_typesupport_introspection_cpp::MessageMembers *>(
+                cpp_introspection->data),
+            &payload_size)) {
       return false;
     }
     if (!AddSerializedSize(4u, &payload_size)) {
@@ -1292,14 +1321,15 @@ bool FixedSerializedMessageSize(const rosidl_message_type_support_t * type_suppo
     return true;
   }
   rmw_reset_error();
-  const rosidl_message_type_support_t * c_introspection =
-    get_message_typesupport_handle(type_support, rosidl_typesupport_introspection_c__identifier);
+  const rosidl_message_type_support_t *c_introspection =
+      get_message_typesupport_handle(
+          type_support, rosidl_typesupport_introspection_c__identifier);
   if (c_introspection != nullptr && c_introspection->data != nullptr) {
     size_t payload_size = 0;
     if (!FixedMessageSerializedSizeC(
-      static_cast<const rosidl_typesupport_introspection_c__MessageMembers *>(
-        c_introspection->data),
-      &payload_size)) {
+            static_cast<const rosidl_typesupport_introspection_c__MessageMembers
+                            *>(c_introspection->data),
+            &payload_size)) {
       return false;
     }
     if (!AddSerializedSize(4u, &payload_size)) {
@@ -1312,51 +1342,51 @@ bool FixedSerializedMessageSize(const rosidl_message_type_support_t * type_suppo
   return false;
 }
 
-bool CopyFromRosMessage(
-  const void * ros_message, const rmw_mdds_cpp::ServiceMessageTypeInfo & type,
-  std::vector<uint8_t> * payload)
-{
+bool CopyFromRosMessage(const void *ros_message,
+                        const rmw_mdds_cpp::ServiceMessageTypeInfo &type,
+                        std::vector<uint8_t> *payload) {
   if (payload == nullptr || (ros_message == nullptr && type.size != 0)) {
     return false;
   }
   if (type.kind == rmw_mdds_cpp::ServiceMessageMembersKind::C) {
     rmw_mdds_cpp::StringAdapter adapter;
     return adapter.InitC(
-             static_cast<const rosidl_typesupport_introspection_c__MessageMembers *>(
-               type.members)) &&
+               static_cast<
+                   const rosidl_typesupport_introspection_c__MessageMembers *>(
+                   type.members)) &&
            adapter.Encode(ros_message, payload);
   }
   if (type.kind == rmw_mdds_cpp::ServiceMessageMembersKind::Cpp) {
     rmw_mdds_cpp::StringAdapter adapter;
     return adapter.InitCpp(
-             static_cast<const rosidl_typesupport_introspection_cpp::MessageMembers *>(
-               type.members)) &&
+               static_cast<const rosidl_typesupport_introspection_cpp::
+                               MessageMembers *>(type.members)) &&
            adapter.Encode(ros_message, payload);
   }
-  const auto * bytes = static_cast<const uint8_t *>(ros_message);
+  const auto *bytes = static_cast<const uint8_t *>(ros_message);
   payload->assign(bytes, bytes + type.size);
   return true;
 }
 
-bool CopyToRosMessage(
-  const std::vector<uint8_t> & payload, const rmw_mdds_cpp::ServiceMessageTypeInfo & type,
-  void * ros_message)
-{
+bool CopyToRosMessage(const std::vector<uint8_t> &payload,
+                      const rmw_mdds_cpp::ServiceMessageTypeInfo &type,
+                      void *ros_message) {
   if (ros_message == nullptr) {
     return false;
   }
   if (type.kind == rmw_mdds_cpp::ServiceMessageMembersKind::C) {
     rmw_mdds_cpp::StringAdapter adapter;
     return adapter.InitC(
-             static_cast<const rosidl_typesupport_introspection_c__MessageMembers *>(
-               type.members)) &&
+               static_cast<
+                   const rosidl_typesupport_introspection_c__MessageMembers *>(
+                   type.members)) &&
            adapter.Decode(payload.data(), payload.size(), ros_message);
   }
   if (type.kind == rmw_mdds_cpp::ServiceMessageMembersKind::Cpp) {
     rmw_mdds_cpp::StringAdapter adapter;
     return adapter.InitCpp(
-             static_cast<const rosidl_typesupport_introspection_cpp::MessageMembers *>(
-               type.members)) &&
+               static_cast<const rosidl_typesupport_introspection_cpp::
+                               MessageMembers *>(type.members)) &&
            adapter.Decode(payload.data(), payload.size(), ros_message);
   }
   if (payload.size() != type.size) {
@@ -1368,57 +1398,59 @@ bool CopyToRosMessage(
   return true;
 }
 
-std::vector<rmw_mdds_cpp::NameAndTypes> GetServiceNamesAndTypes()
-{
+std::vector<rmw_mdds_cpp::NameAndTypes> GetServiceNamesAndTypes() {
   std::vector<rmw_mdds_cpp::NameAndTypes> names_and_types;
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
-  for (const auto * service : g_services) {
+  for (const auto *service : g_services) {
     if (service != nullptr) {
-      AddServiceNameAndType(&names_and_types, service->service_name, service->type_name);
+      AddServiceNameAndType(&names_and_types, service->service_name,
+                            service->type_name);
     }
   }
   return names_and_types;
 }
 
-std::vector<rmw_mdds_cpp::NameAndTypes> GetServiceNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace)
-{
+std::vector<rmw_mdds_cpp::NameAndTypes>
+GetServiceNamesAndTypesByNode(const char *node_name,
+                              const char *node_namespace) {
   std::vector<rmw_mdds_cpp::NameAndTypes> names_and_types;
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
-  for (const auto * service : g_services) {
-    if (
-      service != nullptr &&
-      BelongsToNode(service->node_name, service->node_namespace, node_name, node_namespace)) {
-      AddServiceNameAndType(&names_and_types, service->service_name, service->type_name);
+  for (const auto *service : g_services) {
+    if (service != nullptr &&
+        BelongsToNode(service->node_name, service->node_namespace, node_name,
+                      node_namespace)) {
+      AddServiceNameAndType(&names_and_types, service->service_name,
+                            service->type_name);
     }
   }
   return names_and_types;
 }
 
-std::vector<rmw_mdds_cpp::NameAndTypes> GetClientNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace)
-{
+std::vector<rmw_mdds_cpp::NameAndTypes>
+GetClientNamesAndTypesByNode(const char *node_name,
+                             const char *node_namespace) {
   std::vector<rmw_mdds_cpp::NameAndTypes> names_and_types;
   std::lock_guard<std::mutex> lock(g_service_graph_mutex);
-  for (const auto * client : g_clients) {
-    if (
-      client != nullptr &&
-      BelongsToNode(client->node_name, client->node_namespace, node_name, node_namespace)) {
-      AddServiceNameAndType(&names_and_types, client->service_name, client->type_name);
+  for (const auto *client : g_clients) {
+    if (client != nullptr &&
+        BelongsToNode(client->node_name, client->node_namespace, node_name,
+                      node_namespace)) {
+      AddServiceNameAndType(&names_and_types, client->service_name,
+                            client->type_name);
     }
   }
   return names_and_types;
 }
 
-rmw_ret_t InitStringArray(
-  rcutils_allocator_t * allocator, const std::vector<std::string> & values,
-  rcutils_string_array_t * string_array)
-{
+rmw_ret_t InitStringArray(rcutils_allocator_t *allocator,
+                          const std::vector<std::string> &values,
+                          rcutils_string_array_t *string_array) {
   if (allocator == nullptr || string_array == nullptr) {
     RMW_SET_ERROR_MSG("string array argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (rcutils_string_array_init(string_array, values.size(), allocator) != RCUTILS_RET_OK) {
+  if (rcutils_string_array_init(string_array, values.size(), allocator) !=
+      RCUTILS_RET_OK) {
     RMW_SET_ERROR_MSG("failed to initialize string array");
     return RMW_RET_BAD_ALLOC;
   }
@@ -1434,10 +1466,10 @@ rmw_ret_t InitStringArray(
   return RMW_RET_OK;
 }
 
-rmw_ret_t InitNodeGraphStringArrays(
-  const rmw_node_t * node, rcutils_string_array_t * node_names,
-  rcutils_string_array_t * node_namespaces, rcutils_string_array_t * enclaves)
-{
+rmw_ret_t InitNodeGraphStringArrays(const rmw_node_t *node,
+                                    rcutils_string_array_t *node_names,
+                                    rcutils_string_array_t *node_namespaces,
+                                    rcutils_string_array_t *enclaves) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -1463,7 +1495,7 @@ rmw_ret_t InitNodeGraphStringArrays(
 
   auto nodes = rmw_mdds_cpp::GetRegisteredNodes();
   if (rmw_mdds_cpp::BrokerModeEnabled()) {
-    for (const auto & broker_node : rmw_mdds_cpp::GetBrokerGraphNodes()) {
+    for (const auto &broker_node : rmw_mdds_cpp::GetBrokerGraphNodes()) {
       AddUniqueNodeGraphInfo(&nodes, broker_node);
     }
   }
@@ -1473,7 +1505,7 @@ rmw_ret_t InitNodeGraphStringArrays(
   names.reserve(nodes.size());
   namespaces.reserve(nodes.size());
   enclave_values.reserve(nodes.size());
-  for (const auto & node_info : nodes) {
+  for (const auto &node_info : nodes) {
     names.push_back(node_info.node_name);
     namespaces.push_back(node_info.node_namespace);
     enclave_values.push_back(node_info.enclave);
@@ -1493,8 +1525,10 @@ rmw_ret_t InitNodeGraphStringArrays(
   if (enclaves != nullptr) {
     ret = InitStringArray(&allocator, enclave_values, enclaves);
     if (ret != RMW_RET_OK) {
-      const rcutils_ret_t namespaces_fini_ret = rcutils_string_array_fini(node_namespaces);
-      const rcutils_ret_t names_fini_ret = rcutils_string_array_fini(node_names);
+      const rcutils_ret_t namespaces_fini_ret =
+          rcutils_string_array_fini(node_namespaces);
+      const rcutils_ret_t names_fini_ret =
+          rcutils_string_array_fini(node_names);
       (void)namespaces_fini_ret;
       (void)names_fini_ret;
       return ret;
@@ -1503,48 +1537,52 @@ rmw_ret_t InitNodeGraphStringArrays(
   return RMW_RET_OK;
 }
 
-rmw_ret_t PopulateTopicEndpointInfo(
-  const rmw_mdds_cpp::TopicEndpointInfo & source, rcutils_allocator_t * allocator,
-  rmw_topic_endpoint_info_t * destination)
-{
+rmw_ret_t
+PopulateTopicEndpointInfo(const rmw_mdds_cpp::TopicEndpointInfo &source,
+                          rcutils_allocator_t *allocator,
+                          rmw_topic_endpoint_info_t *destination) {
   if (allocator == nullptr || destination == nullptr) {
     RMW_SET_ERROR_MSG("topic endpoint populate argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  rmw_ret_t ret =
-    rmw_topic_endpoint_info_set_node_name(destination, source.node_name.c_str(), allocator);
+  rmw_ret_t ret = rmw_topic_endpoint_info_set_node_name(
+      destination, source.node_name.c_str(), allocator);
   if (ret != RMW_RET_OK) {
     return ret;
   }
   ret = rmw_topic_endpoint_info_set_node_namespace(
-    destination, source.node_namespace.c_str(), allocator);
+      destination, source.node_namespace.c_str(), allocator);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  ret = rmw_topic_endpoint_info_set_topic_type(destination, source.topic_type.c_str(), allocator);
+  ret = rmw_topic_endpoint_info_set_topic_type(
+      destination, source.topic_type.c_str(), allocator);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  ret = rmw_topic_endpoint_info_set_topic_type_hash(destination, &source.topic_type_hash);
+  ret = rmw_topic_endpoint_info_set_topic_type_hash(destination,
+                                                    &source.topic_type_hash);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  ret = rmw_topic_endpoint_info_set_endpoint_type(destination, source.endpoint_type);
+  ret = rmw_topic_endpoint_info_set_endpoint_type(destination,
+                                                  source.endpoint_type);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  ret = rmw_topic_endpoint_info_set_gid(destination, source.gid.data, RMW_GID_STORAGE_SIZE);
+  ret = rmw_topic_endpoint_info_set_gid(destination, source.gid.data,
+                                        RMW_GID_STORAGE_SIZE);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  return rmw_topic_endpoint_info_set_qos_profile(destination, &source.qos_profile);
+  return rmw_topic_endpoint_info_set_qos_profile(destination,
+                                                 &source.qos_profile);
 }
 
 rmw_ret_t InitTopicEndpointInfoArray(
-  const rmw_node_t * node, rcutils_allocator_t * allocator,
-  const std::vector<rmw_mdds_cpp::TopicEndpointInfo> & infos,
-  rmw_topic_endpoint_info_array_t * info_array)
-{
+    const rmw_node_t *node, rcutils_allocator_t *allocator,
+    const std::vector<rmw_mdds_cpp::TopicEndpointInfo> &infos,
+    rmw_topic_endpoint_info_array_t *info_array) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -1564,14 +1602,17 @@ rmw_ret_t InitTopicEndpointInfoArray(
   if (infos.empty()) {
     return RMW_RET_OK;
   }
-  ret = rmw_topic_endpoint_info_array_init_with_size(info_array, infos.size(), allocator);
+  ret = rmw_topic_endpoint_info_array_init_with_size(info_array, infos.size(),
+                                                     allocator);
   if (ret != RMW_RET_OK) {
     return ret;
   }
   for (size_t i = 0; i < infos.size(); ++i) {
-    ret = PopulateTopicEndpointInfo(infos[i], allocator, &info_array->info_array[i]);
+    ret = PopulateTopicEndpointInfo(infos[i], allocator,
+                                    &info_array->info_array[i]);
     if (ret != RMW_RET_OK) {
-      const rmw_ret_t fini_ret = rmw_topic_endpoint_info_array_fini(info_array, allocator);
+      const rmw_ret_t fini_ret =
+          rmw_topic_endpoint_info_array_fini(info_array, allocator);
       (void)fini_ret;
       return ret;
     }
@@ -1579,19 +1620,19 @@ rmw_ret_t InitTopicEndpointInfoArray(
   return RMW_RET_OK;
 }
 
-void FillPublisherGid(const rmw_publisher_t * publisher, rmw_gid_t * gid)
-{
-  const auto * data = publisher == nullptr
-                        ? nullptr
-                        : static_cast<const rmw_mdds_cpp::PublisherData *>(publisher->data);
+void FillPublisherGid(const rmw_publisher_t *publisher, rmw_gid_t *gid) {
+  const auto *data =
+      publisher == nullptr
+          ? nullptr
+          : static_cast<const rmw_mdds_cpp::PublisherData *>(publisher->data);
   rmw_mdds_cpp::FillPublisherGid(data, gid);
 }
 
 rmw_ret_t InitRtpsUserDataNetworkFlowEndpoints(
-  const rmw_context_t * context, rcutils_allocator_t * allocator,
-  rmw_network_flow_endpoint_array_t * network_flow_endpoint_array)
-{
-  rmw_ret_t ret = rmw_network_flow_endpoint_array_check_zero(network_flow_endpoint_array);
+    const rmw_context_t *context, rcutils_allocator_t *allocator,
+    rmw_network_flow_endpoint_array_t *network_flow_endpoint_array) {
+  rmw_ret_t ret =
+      rmw_network_flow_endpoint_array_check_zero(network_flow_endpoint_array);
   if (ret != RMW_RET_OK) {
     return ret;
   }
@@ -1602,58 +1643,60 @@ rmw_ret_t InitRtpsUserDataNetworkFlowEndpoints(
     if (!rmw_mdds_cpp::BrokerModeEnabled()) {
       return RMW_RET_OK;
     }
-    ret = rmw_network_flow_endpoint_array_init(network_flow_endpoint_array, 1u, allocator);
+    ret = rmw_network_flow_endpoint_array_init(network_flow_endpoint_array, 1u,
+                                               allocator);
     if (ret != RMW_RET_OK) {
       return ret;
     }
-    rmw_network_flow_endpoint_t & endpoint =
-      network_flow_endpoint_array->network_flow_endpoint[0];
+    rmw_network_flow_endpoint_t &endpoint =
+        network_flow_endpoint_array->network_flow_endpoint[0];
     endpoint.transport_protocol = RMW_TRANSPORT_PROTOCOL_UNKNOWN;
     endpoint.internet_protocol = RMW_INTERNET_PROTOCOL_UNKNOWN;
     endpoint.transport_port = 0u;
     constexpr char kBrokerEndpoint[] = "rmw_mdds_broker";
     ret = rmw_network_flow_endpoint_set_internet_address(
-      &endpoint, kBrokerEndpoint, std::strlen(kBrokerEndpoint));
+        &endpoint, kBrokerEndpoint, std::strlen(kBrokerEndpoint));
     if (ret != RMW_RET_OK) {
       const rmw_ret_t fini_ret =
-        rmw_network_flow_endpoint_array_fini(network_flow_endpoint_array);
+          rmw_network_flow_endpoint_array_fini(network_flow_endpoint_array);
       (void)fini_ret;
     }
     return ret;
   }
 
-  const uint16_t user_data_port = context->impl->rtps_participant->local_user_unicast_port();
+  const uint16_t user_data_port =
+      context->impl->rtps_participant->local_user_unicast_port();
   if (user_data_port == 0u) {
     return RMW_RET_OK;
   }
 
-  ret = rmw_network_flow_endpoint_array_init(network_flow_endpoint_array, 1u, allocator);
+  ret = rmw_network_flow_endpoint_array_init(network_flow_endpoint_array, 1u,
+                                             allocator);
   if (ret != RMW_RET_OK) {
     return ret;
   }
 
-  rmw_network_flow_endpoint_t & endpoint =
-    network_flow_endpoint_array->network_flow_endpoint[0];
+  rmw_network_flow_endpoint_t &endpoint =
+      network_flow_endpoint_array->network_flow_endpoint[0];
   endpoint.transport_protocol = RMW_TRANSPORT_PROTOCOL_UDP;
   endpoint.internet_protocol = RMW_INTERNET_PROTOCOL_IPV4;
   endpoint.transport_port = user_data_port;
 
-  const std::string & address =
-    context->impl->rtps_participant_config.advertised_address.empty()
-    ? context->impl->rtps_participant_config.bind_address
-    : context->impl->rtps_participant_config.advertised_address;
+  const std::string &address =
+      context->impl->rtps_participant_config.advertised_address.empty()
+          ? context->impl->rtps_participant_config.bind_address
+          : context->impl->rtps_participant_config.advertised_address;
   ret = rmw_network_flow_endpoint_set_internet_address(
-    &endpoint, address.c_str(), address.size());
+      &endpoint, address.c_str(), address.size());
   if (ret != RMW_RET_OK) {
     const rmw_ret_t fini_ret =
-      rmw_network_flow_endpoint_array_fini(network_flow_endpoint_array);
+        rmw_network_flow_endpoint_array_fini(network_flow_endpoint_array);
     (void)fini_ret;
   }
   return ret;
 }
 
-void FillClientGid(const rmw_mdds_cpp::ClientData * client, rmw_gid_t * gid)
-{
+void FillClientGid(const rmw_mdds_cpp::ClientData *client, rmw_gid_t *gid) {
   if (gid == nullptr) {
     return;
   }
@@ -1662,69 +1705,67 @@ void FillClientGid(const rmw_mdds_cpp::ClientData * client, rmw_gid_t * gid)
   FillClientGuid(client, gid->data);
 }
 
-struct EventCallbackInvocation
-{
+struct EventCallbackInvocation {
   rmw_event_callback_t callback = nullptr;
-  const void * user_data = nullptr;
+  const void *user_data = nullptr;
   size_t event_count = 0;
 };
 
-rmw_time_point_value_t NowNanoseconds()
-{
+rmw_time_point_value_t NowNanoseconds() {
   rcutils_time_point_value_t now = 0;
   return rcutils_system_time_now(&now) == RCUTILS_RET_OK ? now : 0;
 }
 
-rmw_time_point_value_t ReceivedTimestampFor(rmw_time_point_value_t source_timestamp)
-{
+rmw_time_point_value_t
+ReceivedTimestampFor(rmw_time_point_value_t source_timestamp) {
   const rmw_time_point_value_t received_timestamp = NowNanoseconds();
-  return received_timestamp < source_timestamp ? source_timestamp : received_timestamp;
+  return received_timestamp < source_timestamp ? source_timestamp
+                                               : received_timestamp;
 }
 
-void InvokeEventCallback(const EventCallbackInvocation & invocation)
-{
+void InvokeEventCallback(const EventCallbackInvocation &invocation) {
   if (invocation.callback != nullptr && invocation.event_count != 0) {
     invocation.callback(invocation.user_data, invocation.event_count);
   }
 }
 
-void EnqueueServiceRequest(
-  rmw_mdds_cpp::ServiceData * service, rmw_mdds_cpp::ServiceRequestSample sample)
-{
+void EnqueueServiceRequest(rmw_mdds_cpp::ServiceData *service,
+                           rmw_mdds_cpp::ServiceRequestSample sample) {
   if (service == nullptr) {
     return;
   }
   EventCallbackInvocation callback;
   {
     std::lock_guard<std::mutex> lock(service->mutex);
-    sample.info.received_timestamp = ReceivedTimestampFor(sample.info.source_timestamp);
+    sample.info.received_timestamp =
+        ReceivedTimestampFor(sample.info.source_timestamp);
     service->requests.push_back(std::move(sample));
-    callback = EventCallbackInvocation{
-      service->request_callback, service->request_callback_user_data, 1};
+    callback = EventCallbackInvocation{service->request_callback,
+                                       service->request_callback_user_data, 1};
   }
   InvokeEventCallback(callback);
 }
 
-void EnqueueClientResponse(
-  rmw_mdds_cpp::ClientData * client, rmw_mdds_cpp::ServiceResponseSample sample)
-{
+void EnqueueClientResponse(rmw_mdds_cpp::ClientData *client,
+                           rmw_mdds_cpp::ServiceResponseSample sample) {
   if (client == nullptr) {
     return;
   }
   EventCallbackInvocation callback;
   {
     std::lock_guard<std::mutex> lock(client->mutex);
-    sample.info.received_timestamp = ReceivedTimestampFor(sample.info.source_timestamp);
+    sample.info.received_timestamp =
+        ReceivedTimestampFor(sample.info.source_timestamp);
     client->responses.push_back(std::move(sample));
-    callback = EventCallbackInvocation{
-      client->response_callback, client->response_callback_user_data, 1};
+    callback = EventCallbackInvocation{client->response_callback,
+                                       client->response_callback_user_data, 1};
   }
   InvokeEventCallback(callback);
 }
 
-void ServiceRequestBridgeCallback(const rmw_mdds_cpp::BridgeSample * sample, void * user_data)
-{
-  auto * service = static_cast<rmw_mdds_cpp::ServiceData *>(user_data);
+void ServiceRequestBridgeCallback(const rmw_mdds_cpp::BridgeSample *sample,
+                                  void *user_data) {
+  auto *service = static_cast<rmw_mdds_cpp::ServiceData *>(user_data);
   if (service == nullptr) {
     return;
   }
@@ -1737,61 +1778,60 @@ void ServiceRequestBridgeCallback(const rmw_mdds_cpp::BridgeSample * sample, voi
   EnqueueServiceRequest(service, std::move(request_sample));
 }
 
-void ClientResponseBridgeCallback(const rmw_mdds_cpp::BridgeSample * sample, void * user_data)
-{
-  auto * client = static_cast<rmw_mdds_cpp::ClientData *>(user_data);
+void ClientResponseBridgeCallback(const rmw_mdds_cpp::BridgeSample *sample,
+                                  void *user_data) {
+  auto *client = static_cast<rmw_mdds_cpp::ClientData *>(user_data);
   if (client == nullptr) {
     return;
   }
   rmw_service_info_t info{};
   std::vector<uint8_t> payload;
   if (!DecodeServiceWirePayload(sample, &info, &payload) ||
-    !ClientMatchesGuid(client, info.request_id.writer_guid)) {
+      !ClientMatchesGuid(client, info.request_id.writer_guid)) {
     return;
   }
   rmw_mdds_cpp::ServiceResponseSample response_sample{info, std::move(payload)};
   EnqueueClientResponse(client, std::move(response_sample));
 }
 
-void ServiceRequestBrokerCallback(const std::vector<uint8_t> & wire_payload, void * user_data)
-{
-  auto * service = static_cast<rmw_mdds_cpp::ServiceData *>(user_data);
+void ServiceRequestBrokerCallback(const std::vector<uint8_t> &wire_payload,
+                                  void *user_data) {
+  auto *service = static_cast<rmw_mdds_cpp::ServiceData *>(user_data);
   if (service == nullptr) {
     return;
   }
   rmw_service_info_t info{};
   std::vector<uint8_t> payload;
-  if (!DecodeServiceWirePayloadBytes(
-      wire_payload.data(), wire_payload.size(), &info, &payload)) {
+  if (!DecodeServiceWirePayloadBytes(wire_payload.data(), wire_payload.size(),
+                                     &info, &payload)) {
     return;
   }
   rmw_mdds_cpp::ServiceRequestSample request_sample{info, std::move(payload)};
   EnqueueServiceRequest(service, std::move(request_sample));
 }
 
-void ClientResponseBrokerCallback(const std::vector<uint8_t> & wire_payload, void * user_data)
-{
-  auto * client = static_cast<rmw_mdds_cpp::ClientData *>(user_data);
+void ClientResponseBrokerCallback(const std::vector<uint8_t> &wire_payload,
+                                  void *user_data) {
+  auto *client = static_cast<rmw_mdds_cpp::ClientData *>(user_data);
   if (client == nullptr) {
     return;
   }
   rmw_service_info_t info{};
   std::vector<uint8_t> payload;
-  if (
-    !DecodeServiceWirePayloadBytes(wire_payload.data(), wire_payload.size(), &info, &payload) ||
-    !ClientMatchesGuid(client, info.request_id.writer_guid)) {
+  if (!DecodeServiceWirePayloadBytes(wire_payload.data(), wire_payload.size(),
+                                     &info, &payload) ||
+      !ClientMatchesGuid(client, info.request_id.writer_guid)) {
     return;
   }
   rmw_mdds_cpp::ServiceResponseSample response_sample{info, std::move(payload)};
   EnqueueClientResponse(client, std::move(response_sample));
 }
 
-void DestroyServiceBridgeEndpoints(rmw_mdds_cpp::ServiceData * service)
-{
+void DestroyServiceBridgeEndpoints(rmw_mdds_cpp::ServiceData *service) {
   if (service == nullptr) {
     return;
   }
-  auto & bridge_backend = rmw_mdds_cpp::BridgeBackend::Instance();
+  auto &bridge_backend = rmw_mdds_cpp::BridgeBackend::Instance();
   if (service->bridge_request_subscription != nullptr) {
     bridge_backend.Unsubscribe(service->bridge_request_subscription);
     service->bridge_request_subscription = nullptr;
@@ -1802,12 +1842,11 @@ void DestroyServiceBridgeEndpoints(rmw_mdds_cpp::ServiceData * service)
   }
 }
 
-void DestroyClientBridgeEndpoints(rmw_mdds_cpp::ClientData * client)
-{
+void DestroyClientBridgeEndpoints(rmw_mdds_cpp::ClientData *client) {
   if (client == nullptr) {
     return;
   }
-  auto & bridge_backend = rmw_mdds_cpp::BridgeBackend::Instance();
+  auto &bridge_backend = rmw_mdds_cpp::BridgeBackend::Instance();
   if (client->bridge_response_subscription != nullptr) {
     bridge_backend.Unsubscribe(client->bridge_response_subscription);
     client->bridge_response_subscription = nullptr;
@@ -1818,8 +1857,7 @@ void DestroyClientBridgeEndpoints(rmw_mdds_cpp::ClientData * client)
   }
 }
 
-void DestroyServiceBrokerEndpoint(rmw_mdds_cpp::ServiceData * service)
-{
+void DestroyServiceBrokerEndpoint(rmw_mdds_cpp::ServiceData *service) {
   if (service == nullptr || service->broker_client == nullptr) {
     return;
   }
@@ -1827,8 +1865,7 @@ void DestroyServiceBrokerEndpoint(rmw_mdds_cpp::ServiceData * service)
   service->broker_client = nullptr;
 }
 
-void DestroyClientBrokerEndpoint(rmw_mdds_cpp::ClientData * client)
-{
+void DestroyClientBrokerEndpoint(rmw_mdds_cpp::ClientData *client) {
   if (client == nullptr || client->broker_client == nullptr) {
     return;
   }
@@ -1836,9 +1873,9 @@ void DestroyClientBrokerEndpoint(rmw_mdds_cpp::ClientData * client)
   client->broker_client = nullptr;
 }
 
-size_t SetServiceRequestCallback(
-  rmw_mdds_cpp::ServiceData * service, rmw_event_callback_t callback, const void * user_data)
-{
+size_t SetServiceRequestCallback(rmw_mdds_cpp::ServiceData *service,
+                                 rmw_event_callback_t callback,
+                                 const void *user_data) {
   if (service == nullptr) {
     return 0;
   }
@@ -1848,9 +1885,9 @@ size_t SetServiceRequestCallback(
   return callback == nullptr ? 0 : service->requests.size();
 }
 
-size_t SetClientResponseCallback(
-  rmw_mdds_cpp::ClientData * client, rmw_event_callback_t callback, const void * user_data)
-{
+size_t SetClientResponseCallback(rmw_mdds_cpp::ClientData *client,
+                                 rmw_event_callback_t callback,
+                                 const void *user_data) {
   if (client == nullptr) {
     return 0;
   }
@@ -1859,12 +1896,10 @@ size_t SetClientResponseCallback(
   client->response_callback_user_data = user_data;
   return callback == nullptr ? 0 : client->responses.size();
 }
-}  // namespace
+} // namespace
 
-namespace rmw_mdds_cpp
-{
-bool HasQueuedServiceRequest(ServiceData * service)
-{
+namespace rmw_mdds_cpp {
+bool HasQueuedServiceRequest(ServiceData *service) {
   if (service == nullptr) {
     return false;
   }
@@ -1872,21 +1907,20 @@ bool HasQueuedServiceRequest(ServiceData * service)
   return !service->requests.empty();
 }
 
-bool HasQueuedClientResponse(ClientData * client)
-{
+bool HasQueuedClientResponse(ClientData *client) {
   if (client == nullptr) {
     return false;
   }
   std::lock_guard<std::mutex> lock(client->mutex);
   return !client->responses.empty();
 }
-}  // namespace rmw_mdds_cpp
+} // namespace rmw_mdds_cpp
 
 extern "C" {
 rmw_ret_t rmw_init_publisher_allocation(
-  const rosidl_message_type_support_t * type_support,
-  const rosidl_runtime_c__Sequence__bound * message_bounds, rmw_publisher_allocation_t * allocation)
-{
+    const rosidl_message_type_support_t *type_support,
+    const rosidl_runtime_c__Sequence__bound *message_bounds,
+    rmw_publisher_allocation_t *allocation) {
   (void)message_bounds;
   if (type_support == nullptr || allocation == nullptr) {
     RMW_SET_ERROR_MSG("publisher allocation argument is null");
@@ -1894,7 +1928,8 @@ rmw_ret_t rmw_init_publisher_allocation(
   }
   rmw_mdds_cpp::MessageAdapter adapter;
   if (!adapter.Init(type_support)) {
-    RMW_SET_ERROR_MSG("publisher allocation type support is not supported by rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG(
+        "publisher allocation type support is not supported by rmw_mdds_cpp");
     return RMW_RET_UNSUPPORTED;
   }
   allocation->implementation_identifier = rmw_mdds_cpp_identifier;
@@ -1902,14 +1937,15 @@ rmw_ret_t rmw_init_publisher_allocation(
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_fini_publisher_allocation(rmw_publisher_allocation_t * allocation)
-{
+rmw_ret_t
+rmw_fini_publisher_allocation(rmw_publisher_allocation_t *allocation) {
   if (allocation == nullptr) {
     RMW_SET_ERROR_MSG("publisher allocation is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!rmw_mdds_cpp::IsMddsIdentifier(allocation->implementation_identifier)) {
-    RMW_SET_ERROR_MSG("publisher allocation implementation identifier does not match rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG("publisher allocation implementation identifier does not "
+                      "match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   allocation->implementation_identifier = nullptr;
@@ -1919,12 +1955,12 @@ rmw_ret_t rmw_fini_publisher_allocation(rmw_publisher_allocation_t * allocation)
 
 // Loaned messages expose the ROS typed object required by the rmw API. When a
 // bridge publisher is active, borrow also holds an MDDS bridge loan so publish
-// can write the serialized payload into that transport loan instead of borrowing
-// one only at publish time.
-rmw_ret_t rmw_borrow_loaned_message(
-  const rmw_publisher_t * publisher, const rosidl_message_type_support_t * type_support,
-  void ** ros_message)
-{
+// can write the serialized payload into that transport loan instead of
+// borrowing one only at publish time.
+rmw_ret_t
+rmw_borrow_loaned_message(const rmw_publisher_t *publisher,
+                          const rosidl_message_type_support_t *type_support,
+                          void **ros_message) {
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -1941,24 +1977,31 @@ rmw_ret_t rmw_borrow_loaned_message(
     RMW_SET_ERROR_MSG("ros_message is already allocated");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  auto * data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
+  auto *data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
   if (data == nullptr || !data->adapter.IsValid()) {
     RMW_SET_ERROR_MSG("publisher does not support loaned messages");
     return RMW_RET_UNSUPPORTED;
   }
   rmw_mdds_cpp::MessageAdapter requested_adapter;
   if (!requested_adapter.Init(type_support)) {
-    RMW_SET_ERROR_MSG("loaned message type support is not supported by rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG(
+        "loaned message type support is not supported by rmw_mdds_cpp");
     return RMW_RET_UNSUPPORTED;
   }
   if (requested_adapter.TypeName() != data->adapter.TypeName()) {
-    RMW_SET_ERROR_MSG("loaned message type support does not match publisher type");
+    RMW_SET_ERROR_MSG(
+        "loaned message type support does not match publisher type");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (!data->adapter.SupportsRawLoanedMessage()) {
-    RMW_SET_ERROR_MSG(
-      "loaned messages require a flat fixed-size scalar type; "
-      "dynamic string/sequence storage is not backed by the MDDS bridge loan");
+  const bool supports_raw_loan = data->adapter.SupportsRawLoanedMessage();
+  const bool supports_dynamic_string_loan =
+      data->adapter.SupportsDynamicStringLoanedMessage();
+  const bool supports_dynamic_loan =
+      data->adapter.SupportsDynamicLoanedMessage();
+  if (!supports_raw_loan && !supports_dynamic_loan) {
+    RMW_SET_ERROR_MSG("loaned messages require a flat fixed-size scalar type; "
+                      "dynamic string/sequence storage is not backed by the "
+                      "MDDS bridge loan");
     return RMW_RET_UNSUPPORTED;
   }
   if (!publisher->can_loan_messages) {
@@ -1967,16 +2010,50 @@ rmw_ret_t rmw_borrow_loaned_message(
   }
   rmw_mdds_cpp::BridgePublisherLoanRecord bridge_loan;
   if (BorrowPublisherBridgeLoan(data, &bridge_loan)) {
-    void * message = data->adapter.ConstructMessageInPlace(
-      bridge_loan.data, bridge_loan.capacity);
-    if (message != nullptr) {
-      bridge_loan.message_in_loan = true;
-      bridge_loan.raw_message_in_loan = true;
-      if (StorePublisherLoanRecord(data, message, bridge_loan)) {
-        *ros_message = message;
-        return RMW_RET_OK;
+    if (supports_raw_loan) {
+      void *message = data->adapter.ConstructMessageInPlace(
+          bridge_loan.data, bridge_loan.capacity);
+      if (message != nullptr) {
+        bridge_loan.message_in_loan = true;
+        bridge_loan.raw_message_in_loan = true;
+        if (StorePublisherLoanRecord(data, message, bridge_loan)) {
+          *ros_message = message;
+          return RMW_RET_OK;
+        }
+        data->adapter.DestroyMessageInPlace(message);
       }
-      data->adapter.DestroyMessageInPlace(message);
+    } else if (supports_dynamic_loan) {
+      constexpr size_t kCdrStringDataOffset = 8u;
+      constexpr size_t kDynamicPayloadHeadroom = 32u * 1024u;
+      const size_t reserved_size = supports_dynamic_string_loan
+                                       ? kCdrStringDataOffset
+                                       : kDynamicPayloadHeadroom;
+      void *reserved_header =
+          bridge_loan.arena.Allocate(reserved_size, alignof(char));
+      void *message = reserved_header == nullptr
+                          ? nullptr
+                          : data->adapter.ConstructMessageInPlaceAtEnd(
+                                bridge_loan.data, bridge_loan.capacity);
+      if (message != nullptr) {
+        bridge_loan.message_in_loan = true;
+        bridge_loan.raw_message_in_loan = false;
+        const bool stored =
+            StorePublisherLoanRecord(data, message, bridge_loan);
+        const size_t allocation_count = supports_dynamic_string_loan ? 1u : 8u;
+        const size_t allocation_alignment = supports_dynamic_string_loan
+                                                ? alignof(char)
+                                                : alignof(std::max_align_t);
+        if (stored && ArmPublisherLoanArena(data, message, allocation_count,
+                                            allocation_alignment)) {
+          *ros_message = message;
+          return RMW_RET_OK;
+        }
+        if (stored) {
+          rmw_mdds_cpp::BridgePublisherLoanRecord unused_loan;
+          (void)TakePublisherLoanRecord(data, message, &unused_loan);
+        }
+        data->adapter.DestroyMessageInPlace(message);
+      }
     }
     (void)ReturnPublisherBridgeLoan(data, bridge_loan);
   }
@@ -1984,15 +2061,16 @@ rmw_ret_t rmw_borrow_loaned_message(
   return RMW_RET_ERROR;
 }
 
-rmw_ret_t rmw_return_loaned_message_from_publisher(
-  const rmw_publisher_t * publisher, void * loaned_message)
-{
+rmw_ret_t
+rmw_return_loaned_message_from_publisher(const rmw_publisher_t *publisher,
+                                         void *loaned_message) {
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  auto * data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
-  if (data == nullptr || !data->adapter.IsValid() || !publisher->can_loan_messages) {
+  auto *data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
+  if (data == nullptr || !data->adapter.IsValid() ||
+      !publisher->can_loan_messages) {
     RMW_SET_ERROR_MSG("publisher does not support loaned messages");
     return RMW_RET_UNSUPPORTED;
   }
@@ -2006,7 +2084,8 @@ rmw_ret_t rmw_return_loaned_message_from_publisher(
     return RMW_RET_INVALID_ARGUMENT;
   }
   DestroyPublisherLoanedRosMessage(data, loaned_message, bridge_loan);
-  const bool returned_bridge_loan = ReturnPublisherBridgeLoan(data, bridge_loan);
+  const bool returned_bridge_loan =
+      ReturnPublisherBridgeLoan(data, bridge_loan);
   if (bridge_loan.loan != nullptr && !returned_bridge_loan) {
     RMW_SET_ERROR_MSG("MddsBridgeReturnLoanedSample failed");
     return RMW_RET_ERROR;
@@ -2014,9 +2093,9 @@ rmw_ret_t rmw_return_loaned_message_from_publisher(
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_publish_loaned_message(
-  const rmw_publisher_t * publisher, void * ros_message, rmw_publisher_allocation_t * allocation)
-{
+rmw_ret_t rmw_publish_loaned_message(const rmw_publisher_t *publisher,
+                                     void *ros_message,
+                                     rmw_publisher_allocation_t *allocation) {
   (void)allocation;
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
@@ -2026,8 +2105,9 @@ rmw_ret_t rmw_publish_loaned_message(
     RMW_SET_ERROR_MSG("loaned message is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  auto * data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
-  if (data == nullptr || !data->adapter.IsValid() || !publisher->can_loan_messages) {
+  auto *data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
+  if (data == nullptr || !data->adapter.IsValid() ||
+      !publisher->can_loan_messages) {
     RMW_SET_ERROR_MSG("publisher does not support loaned messages");
     return RMW_RET_UNSUPPORTED;
   }
@@ -2038,20 +2118,92 @@ rmw_ret_t rmw_publish_loaned_message(
   }
   const size_t payload_size = data->adapter.MessageSize();
   const bool can_publish_raw_loan =
-    data->bridge_publisher != nullptr && bridge_loan.loan != nullptr &&
-    bridge_loan.raw_message_in_loan && payload_size != 0 &&
-    payload_size <= bridge_loan.capacity &&
-    payload_size <= std::numeric_limits<uint32_t>::max();
+      data->bridge_publisher != nullptr && bridge_loan.loan != nullptr &&
+      bridge_loan.raw_message_in_loan && payload_size != 0 &&
+      payload_size <= bridge_loan.capacity &&
+      payload_size <= std::numeric_limits<uint32_t>::max();
   if (!can_publish_raw_loan) {
+    const bool can_publish_dynamic_string_loan =
+        data->bridge_publisher != nullptr && bridge_loan.loan != nullptr &&
+        bridge_loan.message_in_loan && !bridge_loan.raw_message_in_loan &&
+        data->adapter.SupportsDynamicStringLoanedMessage();
+    if (can_publish_dynamic_string_loan) {
+      size_t dynamic_payload_size = 0u;
+      if (!data->adapter.EncodeLoanedStringMddsIntoBuffer(
+              ros_message, bridge_loan.data, bridge_loan.capacity,
+              &dynamic_payload_size) ||
+          dynamic_payload_size == 0u ||
+          dynamic_payload_size > std::numeric_limits<uint32_t>::max()) {
+        DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
+        (void)ReturnPublisherBridgeLoan(data, bridge_loan);
+        RMW_SET_ERROR_MSG("loaned dynamic string storage is not backed by the "
+                          "MDDS bridge loan");
+        return RMW_RET_UNSUPPORTED;
+      }
+      DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
+      auto &backend = rmw_mdds_cpp::BridgeBackend::Instance();
+      if (backend.PublishLoaned(data->bridge_publisher, bridge_loan.loan,
+                                static_cast<uint32_t>(dynamic_payload_size))) {
+        if (data->actual_qos.reliability ==
+            RMW_QOS_POLICY_RELIABILITY_RELIABLE) {
+          std::lock_guard<std::mutex> lock(data->mutex);
+          data->bridge_reliable_publication_unacknowledged = true;
+        }
+        return RMW_RET_OK;
+      }
+      if (!ReturnPublisherBridgeLoan(data, bridge_loan)) {
+        RMW_SET_ERROR_MSG("MddsBridgeReturnLoanedSample failed");
+        return RMW_RET_ERROR;
+      }
+      RMW_SET_ERROR_MSG("MddsBridgePublishLoaned failed");
+      return RMW_RET_ERROR;
+    }
+    const bool can_publish_dynamic_loan =
+        data->bridge_publisher != nullptr && bridge_loan.loan != nullptr &&
+        bridge_loan.message_in_loan && !bridge_loan.raw_message_in_loan &&
+        data->adapter.SupportsDynamicLoanedMessage();
+    if (can_publish_dynamic_loan) {
+      constexpr size_t kDynamicPayloadHeadroom = 32u * 1024u;
+      size_t dynamic_payload_size = 0u;
+      if (!data->adapter.PrepareLoanedDynamicMddsPayload(
+              ros_message, bridge_loan.data, bridge_loan.capacity,
+              &dynamic_payload_size) ||
+          dynamic_payload_size == 0u ||
+          dynamic_payload_size > kDynamicPayloadHeadroom ||
+          dynamic_payload_size > std::numeric_limits<uint32_t>::max()) {
+        DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
+        (void)ReturnPublisherBridgeLoan(data, bridge_loan);
+        RMW_SET_ERROR_MSG("loaned dynamic message storage is not backed by the "
+                          "MDDS bridge loan");
+        return RMW_RET_UNSUPPORTED;
+      }
+      DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
+      auto &backend = rmw_mdds_cpp::BridgeBackend::Instance();
+      if (backend.PublishLoaned(data->bridge_publisher, bridge_loan.loan,
+                                static_cast<uint32_t>(dynamic_payload_size))) {
+        if (data->actual_qos.reliability ==
+            RMW_QOS_POLICY_RELIABILITY_RELIABLE) {
+          std::lock_guard<std::mutex> lock(data->mutex);
+          data->bridge_reliable_publication_unacknowledged = true;
+        }
+        return RMW_RET_OK;
+      }
+      if (!ReturnPublisherBridgeLoan(data, bridge_loan)) {
+        RMW_SET_ERROR_MSG("MddsBridgeReturnLoanedSample failed");
+        return RMW_RET_ERROR;
+      }
+      RMW_SET_ERROR_MSG("MddsBridgePublishLoaned failed");
+      return RMW_RET_ERROR;
+    }
     DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
     (void)ReturnPublisherBridgeLoan(data, bridge_loan);
     RMW_SET_ERROR_MSG("loaned publish requires a raw fixed-size bridge loan");
     return RMW_RET_UNSUPPORTED;
   }
   DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
-  auto & backend = rmw_mdds_cpp::BridgeBackend::Instance();
-  if (backend.PublishLoaned(
-      data->bridge_publisher, bridge_loan.loan, static_cast<uint32_t>(payload_size))) {
+  auto &backend = rmw_mdds_cpp::BridgeBackend::Instance();
+  if (backend.PublishLoaned(data->bridge_publisher, bridge_loan.loan,
+                            static_cast<uint32_t>(payload_size))) {
     if (data->actual_qos.reliability == RMW_QOS_POLICY_RELIABILITY_RELIABLE) {
       std::lock_guard<std::mutex> lock(data->mutex);
       data->bridge_reliable_publication_unacknowledged = true;
@@ -2066,9 +2218,9 @@ rmw_ret_t rmw_publish_loaned_message(
   return RMW_RET_ERROR;
 }
 
-rmw_ret_t rmw_publisher_count_matched_subscriptions(
-  const rmw_publisher_t * publisher, size_t * subscription_count)
-{
+rmw_ret_t
+rmw_publisher_count_matched_subscriptions(const rmw_publisher_t *publisher,
+                                          size_t *subscription_count) {
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -2077,19 +2229,20 @@ rmw_ret_t rmw_publisher_count_matched_subscriptions(
     RMW_SET_ERROR_MSG("subscription count is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  auto * data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
+  auto *data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
   if (data == nullptr) {
     *subscription_count = 0;
   } else if (rmw_mdds_cpp::BrokerModeEnabled()) {
-    *subscription_count = rmw_mdds_cpp::CountBrokerGraphSubscriptionsForPublisher(data);
+    *subscription_count =
+        rmw_mdds_cpp::CountBrokerGraphSubscriptionsForPublisher(data);
   } else {
     *subscription_count = rmw_mdds_cpp::CountSubscriptionsForPublisher(*data);
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_publisher_get_actual_qos(const rmw_publisher_t * publisher, rmw_qos_profile_t * qos)
-{
+rmw_ret_t rmw_publisher_get_actual_qos(const rmw_publisher_t *publisher,
+                                       rmw_qos_profile_t *qos) {
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -2098,14 +2251,14 @@ rmw_ret_t rmw_publisher_get_actual_qos(const rmw_publisher_t * publisher, rmw_qo
     RMW_SET_ERROR_MSG("publisher qos output is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  auto * data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
+  auto *data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
   *qos = data == nullptr ? rmw_qos_profile_default : data->actual_qos;
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_publisher_event_init(
-  rmw_event_t * rmw_event, const rmw_publisher_t * publisher, rmw_event_type_t event_type)
-{
+rmw_ret_t rmw_publisher_event_init(rmw_event_t *rmw_event,
+                                   const rmw_publisher_t *publisher,
+                                   rmw_event_type_t event_type) {
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -2114,8 +2267,9 @@ rmw_ret_t rmw_publisher_event_init(
     RMW_SET_ERROR_MSG("publisher event is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (event_type != RMW_EVENT_PUBLICATION_MATCHED && !IsEnforcedPublisherEvent(event_type) &&
-    !IsNoOpPublisherEvent(event_type)) {
+  if (event_type != RMW_EVENT_PUBLICATION_MATCHED &&
+      !IsEnforcedPublisherEvent(event_type) &&
+      !IsNoOpPublisherEvent(event_type)) {
     return Unsupported("rmw_publisher_event_init");
   }
   if (publisher->data == nullptr) {
@@ -2129,43 +2283,42 @@ rmw_ret_t rmw_publisher_event_init(
 }
 
 rmw_ret_t rmw_get_serialized_message_size(
-  const rosidl_message_type_support_t * type_support,
-  const rosidl_runtime_c__Sequence__bound * message_bounds, size_t * size)
-{
+    const rosidl_message_type_support_t *type_support,
+    const rosidl_runtime_c__Sequence__bound *message_bounds, size_t *size) {
   (void)message_bounds;
   if (type_support == nullptr || size == nullptr) {
     RMW_SET_ERROR_MSG("serialized message size argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!rmw_mdds_cpp::CdrMaxSerializedMessageSize(type_support, size) &&
-    !FixedSerializedMessageSize(type_support, size)) {
-    RMW_SET_ERROR_MSG("serialized message size is not fixed or type support is unsupported");
+      !FixedSerializedMessageSize(type_support, size)) {
+    RMW_SET_ERROR_MSG(
+        "serialized message size is not fixed or type support is unsupported");
     return RMW_RET_UNSUPPORTED;
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_publisher_assert_liveliness(const rmw_publisher_t * publisher)
-{
+rmw_ret_t rmw_publisher_assert_liveliness(const rmw_publisher_t *publisher) {
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
     return ret;
   }
   rmw_mdds_cpp::NotePublisherLivelinessAsserted(
-    static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data),
-    rmw_mdds_cpp::MddsNowNanoseconds());
+      static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data),
+      rmw_mdds_cpp::MddsNowNanoseconds());
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_publisher_wait_for_all_acked(
-  const rmw_publisher_t * publisher, rmw_time_t wait_timeout)
-{
+rmw_ret_t rmw_publisher_wait_for_all_acked(const rmw_publisher_t *publisher,
+                                           rmw_time_t wait_timeout) {
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  auto * data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
-  if (data == nullptr || data->actual_qos.reliability != RMW_QOS_POLICY_RELIABILITY_RELIABLE) {
+  auto *data = static_cast<rmw_mdds_cpp::PublisherData *>(publisher->data);
+  if (data == nullptr ||
+      data->actual_qos.reliability != RMW_QOS_POLICY_RELIABILITY_RELIABLE) {
     return RMW_RET_OK;
   }
   if (data->bridge_publisher != nullptr) {
@@ -2174,17 +2327,18 @@ rmw_ret_t rmw_publisher_wait_for_all_acked(
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_serialize(
-  const void * ros_message, const rosidl_message_type_support_t * type_support,
-  rmw_serialized_message_t * serialized_message)
-{
-  if (ros_message == nullptr || type_support == nullptr || serialized_message == nullptr) {
+rmw_ret_t rmw_serialize(const void *ros_message,
+                        const rosidl_message_type_support_t *type_support,
+                        rmw_serialized_message_t *serialized_message) {
+  if (ros_message == nullptr || type_support == nullptr ||
+      serialized_message == nullptr) {
     RMW_SET_ERROR_MSG("serialize argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   rmw_mdds_cpp::MessageAdapter adapter;
   if (!adapter.Init(type_support)) {
-    RMW_SET_ERROR_MSG("message type support is not supported by rmw_mdds_cpp serialization");
+    RMW_SET_ERROR_MSG(
+        "message type support is not supported by rmw_mdds_cpp serialization");
     return RMW_RET_UNSUPPORTED;
   }
   std::vector<uint8_t> payload;
@@ -2193,7 +2347,8 @@ rmw_ret_t rmw_serialize(
     return RMW_RET_ERROR;
   }
   if (payload.size() > serialized_message->buffer_capacity) {
-    if (rmw_serialized_message_resize(serialized_message, payload.size()) != RCUTILS_RET_OK) {
+    if (rmw_serialized_message_resize(serialized_message, payload.size()) !=
+        RCUTILS_RET_OK) {
       RMW_SET_ERROR_MSG("failed to resize serialized message buffer");
       return RMW_RET_ERROR;
     }
@@ -2209,24 +2364,27 @@ rmw_ret_t rmw_serialize(
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_deserialize(
-  const rmw_serialized_message_t * serialized_message,
-  const rosidl_message_type_support_t * type_support, void * ros_message)
-{
-  if (serialized_message == nullptr || type_support == nullptr || ros_message == nullptr) {
+rmw_ret_t rmw_deserialize(const rmw_serialized_message_t *serialized_message,
+                          const rosidl_message_type_support_t *type_support,
+                          void *ros_message) {
+  if (serialized_message == nullptr || type_support == nullptr ||
+      ros_message == nullptr) {
     RMW_SET_ERROR_MSG("deserialize argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (serialized_message->buffer == nullptr && serialized_message->buffer_length != 0) {
+  if (serialized_message->buffer == nullptr &&
+      serialized_message->buffer_length != 0) {
     RMW_SET_ERROR_MSG("serialized message buffer is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   rmw_mdds_cpp::MessageAdapter adapter;
   if (!adapter.Init(type_support)) {
-    RMW_SET_ERROR_MSG("message type support is not supported by rmw_mdds_cpp serialization");
+    RMW_SET_ERROR_MSG(
+        "message type support is not supported by rmw_mdds_cpp serialization");
     return RMW_RET_UNSUPPORTED;
   }
-  if (!adapter.Decode(serialized_message->buffer, serialized_message->buffer_length, ros_message)) {
+  if (!adapter.Decode(serialized_message->buffer,
+                      serialized_message->buffer_length, ros_message)) {
     RMW_SET_ERROR_MSG("failed to deserialize message");
     return RMW_RET_ERROR;
   }
@@ -2234,10 +2392,9 @@ rmw_ret_t rmw_deserialize(
 }
 
 rmw_ret_t rmw_init_subscription_allocation(
-  const rosidl_message_type_support_t * type_support,
-  const rosidl_runtime_c__Sequence__bound * message_bounds,
-  rmw_subscription_allocation_t * allocation)
-{
+    const rosidl_message_type_support_t *type_support,
+    const rosidl_runtime_c__Sequence__bound *message_bounds,
+    rmw_subscription_allocation_t *allocation) {
   (void)message_bounds;
   if (type_support == nullptr || allocation == nullptr) {
     RMW_SET_ERROR_MSG("subscription allocation argument is null");
@@ -2245,7 +2402,8 @@ rmw_ret_t rmw_init_subscription_allocation(
   }
   rmw_mdds_cpp::MessageAdapter adapter;
   if (!adapter.Init(type_support)) {
-    RMW_SET_ERROR_MSG("subscription allocation type support is not supported by rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG("subscription allocation type support is not supported "
+                      "by rmw_mdds_cpp");
     return RMW_RET_UNSUPPORTED;
   }
   allocation->implementation_identifier = rmw_mdds_cpp_identifier;
@@ -2253,15 +2411,15 @@ rmw_ret_t rmw_init_subscription_allocation(
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_fini_subscription_allocation(rmw_subscription_allocation_t * allocation)
-{
+rmw_ret_t
+rmw_fini_subscription_allocation(rmw_subscription_allocation_t *allocation) {
   if (allocation == nullptr) {
     RMW_SET_ERROR_MSG("subscription allocation is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!rmw_mdds_cpp::IsMddsIdentifier(allocation->implementation_identifier)) {
-    RMW_SET_ERROR_MSG(
-      "subscription allocation implementation identifier does not match rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG("subscription allocation implementation identifier does "
+                      "not match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   allocation->implementation_identifier = nullptr;
@@ -2270,8 +2428,7 @@ rmw_ret_t rmw_fini_subscription_allocation(rmw_subscription_allocation_t * alloc
 }
 
 rmw_ret_t rmw_subscription_count_matched_publishers(
-  const rmw_subscription_t * subscription, size_t * publisher_count)
-{
+    const rmw_subscription_t *subscription, size_t *publisher_count) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -2280,20 +2437,22 @@ rmw_ret_t rmw_subscription_count_matched_publishers(
     RMW_SET_ERROR_MSG("publisher count is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  const auto * data = static_cast<const rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  const auto *data =
+      static_cast<const rmw_mdds_cpp::SubscriptionData *>(subscription->data);
   if (data == nullptr) {
     *publisher_count = 0;
   } else if (rmw_mdds_cpp::BrokerModeEnabled()) {
-    *publisher_count = rmw_mdds_cpp::CountBrokerGraphPublishersForSubscription(data);
+    *publisher_count =
+        rmw_mdds_cpp::CountBrokerGraphPublishersForSubscription(data);
   } else {
     *publisher_count = rmw_mdds_cpp::CountPublishersForSubscription(*data);
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_subscription_get_actual_qos(
-  const rmw_subscription_t * subscription, rmw_qos_profile_t * qos)
-{
+rmw_ret_t
+rmw_subscription_get_actual_qos(const rmw_subscription_t *subscription,
+                                rmw_qos_profile_t *qos) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -2302,14 +2461,15 @@ rmw_ret_t rmw_subscription_get_actual_qos(
     RMW_SET_ERROR_MSG("subscription qos output is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  const auto * data = static_cast<const rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  const auto *data =
+      static_cast<const rmw_mdds_cpp::SubscriptionData *>(subscription->data);
   *qos = data == nullptr ? rmw_qos_profile_default : data->actual_qos;
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_subscription_event_init(
-  rmw_event_t * rmw_event, const rmw_subscription_t * subscription, rmw_event_type_t event_type)
-{
+rmw_ret_t rmw_subscription_event_init(rmw_event_t *rmw_event,
+                                      const rmw_subscription_t *subscription,
+                                      rmw_event_type_t event_type) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -2318,8 +2478,9 @@ rmw_ret_t rmw_subscription_event_init(
     RMW_SET_ERROR_MSG("subscription event is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (event_type != RMW_EVENT_SUBSCRIPTION_MATCHED && !IsEnforcedSubscriptionEvent(event_type) &&
-    !IsNoOpSubscriptionEvent(event_type)) {
+  if (event_type != RMW_EVENT_SUBSCRIPTION_MATCHED &&
+      !IsEnforcedSubscriptionEvent(event_type) &&
+      !IsNoOpSubscriptionEvent(event_type)) {
     return Unsupported("rmw_subscription_event_init");
   }
   if (subscription->data == nullptr) {
@@ -2333,48 +2494,53 @@ rmw_ret_t rmw_subscription_event_init(
 }
 
 rmw_ret_t rmw_subscription_set_content_filter(
-  rmw_subscription_t * subscription, const rmw_subscription_content_filter_options_t * options)
-{
+    rmw_subscription_t *subscription,
+    const rmw_subscription_content_filter_options_t *options) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  auto * data = static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  auto *data =
+      static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
   ret = rmw_mdds_cpp::SetSubscriptionContentFilter(data, options);
   if (ret == RMW_RET_OK) {
-    subscription->is_cft_enabled =
-      options != nullptr && options->filter_expression != nullptr && options->filter_expression[0] != '\0';
+    subscription->is_cft_enabled = options != nullptr &&
+                                   options->filter_expression != nullptr &&
+                                   options->filter_expression[0] != '\0';
   }
   return ret;
 }
 
 rmw_ret_t rmw_subscription_get_content_filter(
-  const rmw_subscription_t * subscription, rcutils_allocator_t * allocator,
-  rmw_subscription_content_filter_options_t * options)
-{
+    const rmw_subscription_t *subscription, rcutils_allocator_t *allocator,
+    rmw_subscription_content_filter_options_t *options) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  auto * data = static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  auto *data =
+      static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
   return rmw_mdds_cpp::GetSubscriptionContentFilter(data, allocator, options);
 }
 
-rmw_ret_t TryTakeBridgeLoanedMessageCopy(
-  rmw_mdds_cpp::SubscriptionData * data, void * message, bool * taken,
-  rmw_message_info_t * message_info, bool * attempted);
+rmw_ret_t TryTakeBridgeLoanedMessageCopy(rmw_mdds_cpp::SubscriptionData *data,
+                                         void *message, bool *taken,
+                                         rmw_message_info_t *message_info,
+                                         bool *attempted);
 
-rmw_ret_t rmw_take_sequence(
-  const rmw_subscription_t * subscription, size_t count, rmw_message_sequence_t * message_sequence,
-  rmw_message_info_sequence_t * message_info_sequence, size_t * taken,
-  rmw_subscription_allocation_t * allocation)
-{
+rmw_ret_t rmw_take_sequence(const rmw_subscription_t *subscription,
+                            size_t count,
+                            rmw_message_sequence_t *message_sequence,
+                            rmw_message_info_sequence_t *message_info_sequence,
+                            size_t *taken,
+                            rmw_subscription_allocation_t *allocation) {
   (void)allocation;
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  if (message_sequence == nullptr || message_info_sequence == nullptr || taken == nullptr) {
+  if (message_sequence == nullptr || message_info_sequence == nullptr ||
+      taken == nullptr) {
     RMW_SET_ERROR_MSG("take sequence argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
@@ -2382,11 +2548,13 @@ rmw_ret_t rmw_take_sequence(
     RMW_SET_ERROR_MSG("take sequence count is zero");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (message_sequence->capacity < count || message_info_sequence->capacity < count) {
+  if (message_sequence->capacity < count ||
+      message_info_sequence->capacity < count) {
     RMW_SET_ERROR_MSG("take sequence capacity is smaller than requested count");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (message_sequence->data == nullptr || message_info_sequence->data == nullptr) {
+  if (message_sequence->data == nullptr ||
+      message_info_sequence->data == nullptr) {
     RMW_SET_ERROR_MSG("take sequence data is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
@@ -2400,13 +2568,19 @@ rmw_ret_t rmw_take_sequence(
   *taken = 0;
   message_sequence->size = 0;
   message_info_sequence->size = 0;
-  auto * data = static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  auto *data =
+      static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
   for (size_t i = 0; i < count; ++i) {
     rmw_mdds_cpp::QueuedSample sample;
     if (TakeNextLiveQueuedSample(data, &sample)) {
-      const bool decoded = sample.from_bridge ?
-        data->adapter.DecodeMdds(sample.payload.data(), sample.payload.size(), message_sequence->data[i]) :
-        data->adapter.Decode(sample.payload.data(), sample.payload.size(), message_sequence->data[i]);
+      const bool decoded =
+          sample.from_bridge
+              ? data->adapter.DecodeMdds(sample.payload.data(),
+                                         sample.payload.size(),
+                                         message_sequence->data[i])
+              : data->adapter.Decode(sample.payload.data(),
+                                     sample.payload.size(),
+                                     message_sequence->data[i]);
       if (!decoded) {
         RMW_SET_ERROR_MSG("failed to decode message sequence sample");
         return RMW_RET_ERROR;
@@ -2416,8 +2590,8 @@ rmw_ret_t rmw_take_sequence(
       bool bridge_taken = false;
       bool attempted_bridge_loaned = false;
       ret = TryTakeBridgeLoanedMessageCopy(
-        data, message_sequence->data[i], &bridge_taken, &message_info_sequence->data[i],
-        &attempted_bridge_loaned);
+          data, message_sequence->data[i], &bridge_taken,
+          &message_info_sequence->data[i], &attempted_bridge_loaned);
       if (ret != RMW_RET_OK) {
         return ret;
       }
@@ -2433,48 +2607,49 @@ rmw_ret_t rmw_take_sequence(
 }
 
 rmw_message_info_t MakeBridgeLoanedMessageInfo(
-  rmw_mdds_cpp::SubscriptionData * data, const rmw_mdds_cpp::BridgeLoanedMessage & bridge_message)
-{
+    rmw_mdds_cpp::SubscriptionData *data,
+    const rmw_mdds_cpp::BridgeLoanedMessage &bridge_message) {
   rmw_message_info_t info = rmw_get_zero_initialized_message_info();
   info.publication_sequence_number = bridge_message.sequenceNumber;
   info.publisher_gid.implementation_identifier = rmw_mdds_cpp_identifier;
-  std::memcpy(
-    info.publisher_gid.data, bridge_message.senderGuid,
-    std::min(sizeof(bridge_message.senderGuid), sizeof(info.publisher_gid.data)));
-  info.source_timestamp = static_cast<rmw_time_point_value_t>(bridge_message.timestamp);
+  std::memcpy(info.publisher_gid.data, bridge_message.senderGuid,
+              std::min(sizeof(bridge_message.senderGuid),
+                       sizeof(info.publisher_gid.data)));
+  info.source_timestamp =
+      static_cast<rmw_time_point_value_t>(bridge_message.timestamp);
   info.received_timestamp = ReceivedTimestampFor(info.source_timestamp);
   info.from_intra_process = false;
 
   std::lock_guard<std::mutex> lock(data->mutex);
   info.reception_sequence_number = data->next_reception_sequence_number++;
-  data->requested_deadline_last_active_ns = static_cast<int64_t>(info.received_timestamp);
+  data->requested_deadline_last_active_ns =
+      static_cast<int64_t>(info.received_timestamp);
   return info;
 }
 
-rmw_mdds_cpp::BridgeLoanedMessage ToBridgeLoanedMessage(
-  const rmw_mdds_cpp::BridgeLoanedMessageRecord & record)
-{
+rmw_mdds_cpp::BridgeLoanedMessage
+ToBridgeLoanedMessage(const rmw_mdds_cpp::BridgeLoanedMessageRecord &record) {
   rmw_mdds_cpp::BridgeLoanedMessage bridge_message{};
   bridge_message.data = record.data;
   bridge_message.len = record.len;
   bridge_message.timestamp = record.timestamp;
   bridge_message.sequenceNumber = record.sequenceNumber;
   std::memcpy(
-    bridge_message.senderGuid, record.senderGuid.data(),
-    std::min(sizeof(bridge_message.senderGuid), record.senderGuid.size()));
+      bridge_message.senderGuid, record.senderGuid.data(),
+      std::min(sizeof(bridge_message.senderGuid), record.senderGuid.size()));
   bridge_message.loanHandle = record.loanHandle;
   bridge_message.loanKind = record.loanKind;
   return bridge_message;
 }
 
-rmw_ret_t TryTakeBridgeLoanedMessageCopy(
-  rmw_mdds_cpp::SubscriptionData * data, void * message, bool * taken,
-  rmw_message_info_t * message_info, bool * attempted)
-{
+rmw_ret_t TryTakeBridgeLoanedMessageCopy(rmw_mdds_cpp::SubscriptionData *data,
+                                         void *message, bool *taken,
+                                         rmw_message_info_t *message_info,
+                                         bool *attempted) {
   *taken = false;
   *attempted = false;
-  if (
-    data == nullptr || data->bridge_subscription == nullptr || rmw_mdds_cpp::HasQueuedSample(data)) {
+  if (data == nullptr || data->bridge_subscription == nullptr ||
+      rmw_mdds_cpp::HasQueuedSample(data)) {
     return RMW_RET_OK;
   }
 
@@ -2484,36 +2659,39 @@ rmw_ret_t TryTakeBridgeLoanedMessageCopy(
     *attempted = true;
     if (bridge_message.data == nullptr && bridge_message.len != 0u) {
       (void)rmw_mdds_cpp::BridgeBackend::Instance().SubscriberReturnLoaned(
-        data->bridge_subscription, &bridge_message);
+          data->bridge_subscription, &bridge_message);
       RMW_SET_ERROR_MSG("bridge loaned message payload is null");
       return RMW_RET_ERROR;
     }
     std::vector<uint8_t> payload;
     if (bridge_message.data != nullptr && bridge_message.len != 0u) {
-      const auto * begin = static_cast<const uint8_t *>(bridge_message.data);
+      const auto *begin = static_cast<const uint8_t *>(bridge_message.data);
       payload.assign(begin, begin + bridge_message.len);
     }
     bool matches_filter = true;
     {
       std::lock_guard<std::mutex> lock(data->mutex);
-      matches_filter = rmw_mdds_cpp::PayloadMatchesContentFilter(*data, payload, true);
+      matches_filter =
+          rmw_mdds_cpp::PayloadMatchesContentFilter(*data, payload, true);
     }
     if (!matches_filter) {
       (void)rmw_mdds_cpp::BridgeBackend::Instance().SubscriberReturnLoaned(
-        data->bridge_subscription, &bridge_message);
+          data->bridge_subscription, &bridge_message);
       bridge_message = {};
       continue;
     }
     if (!data->adapter.DecodeMdds(
-        static_cast<const uint8_t *>(bridge_message.data), bridge_message.len, message)) {
+            static_cast<const uint8_t *>(bridge_message.data),
+            bridge_message.len, message)) {
       (void)rmw_mdds_cpp::BridgeBackend::Instance().SubscriberReturnLoaned(
-        data->bridge_subscription, &bridge_message);
+          data->bridge_subscription, &bridge_message);
       RMW_SET_ERROR_MSG("failed to decode bridge loaned message");
       return RMW_RET_ERROR;
     }
-    const rmw_message_info_t info = MakeBridgeLoanedMessageInfo(data, bridge_message);
+    const rmw_message_info_t info =
+        MakeBridgeLoanedMessageInfo(data, bridge_message);
     if (!rmw_mdds_cpp::BridgeBackend::Instance().SubscriberReturnLoaned(
-        data->bridge_subscription, &bridge_message)) {
+            data->bridge_subscription, &bridge_message)) {
       RMW_SET_ERROR_MSG("MddsBridgeSubscriberReturnLoaned failed");
       return RMW_RET_ERROR;
     }
@@ -2527,9 +2705,8 @@ rmw_ret_t TryTakeBridgeLoanedMessageCopy(
 }
 
 bool BridgeLoanedMessageMatchesContentFilter(
-  rmw_mdds_cpp::SubscriptionData * data,
-  const rmw_mdds_cpp::BridgeLoanedMessage & bridge_message)
-{
+    rmw_mdds_cpp::SubscriptionData *data,
+    const rmw_mdds_cpp::BridgeLoanedMessage &bridge_message) {
   if (data == nullptr) {
     return true;
   }
@@ -2540,16 +2717,16 @@ bool BridgeLoanedMessageMatchesContentFilter(
 
   std::vector<uint8_t> payload;
   if (bridge_message.data != nullptr && bridge_message.len != 0u) {
-    const auto * begin = static_cast<const uint8_t *>(bridge_message.data);
+    const auto *begin = static_cast<const uint8_t *>(bridge_message.data);
     payload.assign(begin, begin + bridge_message.len);
   }
   return rmw_mdds_cpp::PayloadMatchesContentFilter(*data, payload, true);
 }
 
-rmw_ret_t TryTakeBridgeLoanedMessage(
-  rmw_mdds_cpp::SubscriptionData * data, void ** message, bool * taken,
-  rmw_message_info_t * message_info, bool * attempted)
-{
+rmw_ret_t TryTakeBridgeLoanedMessage(rmw_mdds_cpp::SubscriptionData *data,
+                                     void **message, bool *taken,
+                                     rmw_message_info_t *message_info,
+                                     bool *attempted) {
   if (message == nullptr) {
     RMW_SET_ERROR_MSG("bridge loaned message output is null");
     return RMW_RET_INVALID_ARGUMENT;
@@ -2557,8 +2734,8 @@ rmw_ret_t TryTakeBridgeLoanedMessage(
   *message = nullptr;
   *taken = false;
   *attempted = false;
-  if (
-    data == nullptr || data->bridge_subscription == nullptr || rmw_mdds_cpp::HasQueuedSample(data)) {
+  if (data == nullptr || data->bridge_subscription == nullptr ||
+      rmw_mdds_cpp::HasQueuedSample(data)) {
     return RMW_RET_OK;
   }
   const size_t message_size = data->adapter.MessageSize();
@@ -2567,22 +2744,27 @@ rmw_ret_t TryTakeBridgeLoanedMessage(
     return RMW_RET_UNSUPPORTED;
   }
   if (data->content_filter_enabled || data->numeric_filter_enabled) {
-    RMW_SET_ERROR_MSG("loaned take with content filters is not supported for raw bridge loans");
+    RMW_SET_ERROR_MSG("loaned take with content filters is not supported for "
+                      "raw bridge loans");
     return RMW_RET_UNSUPPORTED;
   }
 
   rmw_mdds_cpp::BridgeLoanedMessage bridge_message{};
-  auto & backend = rmw_mdds_cpp::BridgeBackend::Instance();
-  while (backend.SubscriberTakeLoaned(data->bridge_subscription, &bridge_message)) {
+  auto &backend = rmw_mdds_cpp::BridgeBackend::Instance();
+  while (backend.SubscriberTakeLoaned(data->bridge_subscription,
+                                      &bridge_message)) {
     *attempted = true;
     if (bridge_message.data == nullptr) {
-      (void)backend.SubscriberReturnLoaned(data->bridge_subscription, &bridge_message);
+      (void)backend.SubscriberReturnLoaned(data->bridge_subscription,
+                                           &bridge_message);
       RMW_SET_ERROR_MSG("bridge loaned message payload is null");
       return RMW_RET_ERROR;
     }
     if (bridge_message.len < message_size) {
-      (void)backend.SubscriberReturnLoaned(data->bridge_subscription, &bridge_message);
-      RMW_SET_ERROR_MSG("bridge loaned message is smaller than the ROS message type");
+      (void)backend.SubscriberReturnLoaned(data->bridge_subscription,
+                                           &bridge_message);
+      RMW_SET_ERROR_MSG(
+          "bridge loaned message is smaller than the ROS message type");
       return RMW_RET_ERROR;
     }
 
@@ -2592,15 +2774,16 @@ rmw_ret_t TryTakeBridgeLoanedMessage(
     record.timestamp = bridge_message.timestamp;
     record.sequenceNumber = bridge_message.sequenceNumber;
     std::memcpy(
-    record.senderGuid.data(), bridge_message.senderGuid,
-      std::min(record.senderGuid.size(), sizeof(bridge_message.senderGuid)));
+        record.senderGuid.data(), bridge_message.senderGuid,
+        std::min(record.senderGuid.size(), sizeof(bridge_message.senderGuid)));
     record.loanHandle = bridge_message.loanHandle;
     record.loanKind = bridge_message.loanKind;
     record.messageInBridgeStorage = false;
     record.rawMessageInBridgeLoan = true;
 
-    const rmw_message_info_t info = MakeBridgeLoanedMessageInfo(data, bridge_message);
-    void * raw_message = const_cast<void *>(bridge_message.data);
+    const rmw_message_info_t info =
+        MakeBridgeLoanedMessageInfo(data, bridge_message);
+    void *raw_message = const_cast<void *>(bridge_message.data);
     {
       std::lock_guard<std::mutex> lock(data->mutex);
       data->bridge_loaned_messages[raw_message] = record;
@@ -2615,18 +2798,20 @@ rmw_ret_t TryTakeBridgeLoanedMessage(
   return RMW_RET_OK;
 }
 
-rmw_ret_t TryTakeQueuedLoanedMessage(
-  rmw_mdds_cpp::SubscriptionData * data, void * message, bool * taken,
-  rmw_message_info_t * message_info)
-{
+rmw_ret_t TryTakeQueuedLoanedMessage(rmw_mdds_cpp::SubscriptionData *data,
+                                     void *message, bool *taken,
+                                     rmw_message_info_t *message_info) {
   *taken = false;
   rmw_mdds_cpp::QueuedSample sample;
   if (!TakeNextLiveQueuedSample(data, &sample)) {
     return RMW_RET_OK;
   }
-  const bool decoded = sample.from_bridge ?
-    data->adapter.DecodeMdds(sample.payload.data(), sample.payload.size(), message) :
-    data->adapter.Decode(sample.payload.data(), sample.payload.size(), message);
+  const bool decoded =
+      sample.from_bridge
+          ? data->adapter.DecodeMdds(sample.payload.data(),
+                                     sample.payload.size(), message)
+          : data->adapter.Decode(sample.payload.data(), sample.payload.size(),
+                                 message);
   if (!decoded) {
     RMW_SET_ERROR_MSG("failed to decode queued loaned message");
     return RMW_RET_ERROR;
@@ -2641,10 +2826,10 @@ rmw_ret_t TryTakeQueuedLoanedMessage(
 // Loaned take prefers a bridge-owned typed storage block tied to the MDDS loan.
 // Older bridge libraries do not expose that optional symbol, so fallback stays
 // the heap-backed queue/take path.
-static rmw_ret_t TakeLoanedCommon(
-  const rmw_subscription_t * subscription, void ** loaned_message, bool * taken,
-  rmw_message_info_t * message_info, rmw_subscription_allocation_t * allocation)
-{
+static rmw_ret_t TakeLoanedCommon(const rmw_subscription_t *subscription,
+                                  void **loaned_message, bool *taken,
+                                  rmw_message_info_t *message_info,
+                                  rmw_subscription_allocation_t *allocation) {
   if (loaned_message == nullptr || taken == nullptr) {
     RMW_SET_ERROR_MSG("take_loaned argument is null");
     return RMW_RET_INVALID_ARGUMENT;
@@ -2654,15 +2839,17 @@ static rmw_ret_t TakeLoanedCommon(
     RMW_SET_ERROR_MSG("loaned message is already allocated");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  auto * data = static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
-  if (data == nullptr || !data->adapter.IsValid() || !subscription->can_loan_messages) {
+  auto *data =
+      static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  if (data == nullptr || !data->adapter.IsValid() ||
+      !subscription->can_loan_messages) {
     RMW_SET_ERROR_MSG("subscription does not support loaned messages");
     return RMW_RET_UNSUPPORTED;
   }
   bool attempted_bridge_loaned = false;
-  void * message = nullptr;
+  void *message = nullptr;
   rmw_ret_t ret = TryTakeBridgeLoanedMessage(
-    data, &message, taken, message_info, &attempted_bridge_loaned);
+      data, &message, taken, message_info, &attempted_bridge_loaned);
   if (attempted_bridge_loaned) {
     if (ret != RMW_RET_OK || !*taken) {
       if (message != nullptr) {
@@ -2680,21 +2867,22 @@ static rmw_ret_t TakeLoanedCommon(
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_take_loaned_message(
-  const rmw_subscription_t * subscription, void ** loaned_message, bool * taken,
-  rmw_subscription_allocation_t * allocation)
-{
+rmw_ret_t rmw_take_loaned_message(const rmw_subscription_t *subscription,
+                                  void **loaned_message, bool *taken,
+                                  rmw_subscription_allocation_t *allocation) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  return TakeLoanedCommon(subscription, loaned_message, taken, nullptr, allocation);
+  return TakeLoanedCommon(subscription, loaned_message, taken, nullptr,
+                          allocation);
 }
 
-rmw_ret_t rmw_take_loaned_message_with_info(
-  const rmw_subscription_t * subscription, void ** loaned_message, bool * taken,
-  rmw_message_info_t * message_info, rmw_subscription_allocation_t * allocation)
-{
+rmw_ret_t
+rmw_take_loaned_message_with_info(const rmw_subscription_t *subscription,
+                                  void **loaned_message, bool *taken,
+                                  rmw_message_info_t *message_info,
+                                  rmw_subscription_allocation_t *allocation) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -2703,18 +2891,20 @@ rmw_ret_t rmw_take_loaned_message_with_info(
     RMW_SET_ERROR_MSG("message info is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  return TakeLoanedCommon(subscription, loaned_message, taken, message_info, allocation);
+  return TakeLoanedCommon(subscription, loaned_message, taken, message_info,
+                          allocation);
 }
 
 rmw_ret_t rmw_return_loaned_message_from_subscription(
-  const rmw_subscription_t * subscription, void * loaned_message)
-{
+    const rmw_subscription_t *subscription, void *loaned_message) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  auto * data = static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
-  if (data == nullptr || !data->adapter.IsValid() || !subscription->can_loan_messages) {
+  auto *data =
+      static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  if (data == nullptr || !data->adapter.IsValid() ||
+      !subscription->can_loan_messages) {
     RMW_SET_ERROR_MSG("subscription does not support loaned messages");
     return RMW_RET_UNSUPPORTED;
   }
@@ -2735,15 +2925,17 @@ rmw_ret_t rmw_return_loaned_message_from_subscription(
   }
 
   rmw_ret_t bridge_ret = RMW_RET_OK;
-  const bool message_in_bridge_storage = has_bridge_loan && bridge_record.messageInBridgeStorage;
-  const bool raw_message_in_bridge_loan = has_bridge_loan && bridge_record.rawMessageInBridgeLoan;
+  const bool message_in_bridge_storage =
+      has_bridge_loan && bridge_record.messageInBridgeStorage;
+  const bool raw_message_in_bridge_loan =
+      has_bridge_loan && bridge_record.rawMessageInBridgeLoan;
   if (message_in_bridge_storage && !raw_message_in_bridge_loan) {
     data->adapter.DestroyMessageInPlace(loaned_message);
   }
   if (has_bridge_loan) {
     auto bridge_message = ToBridgeLoanedMessage(bridge_record);
     if (!rmw_mdds_cpp::BridgeBackend::Instance().SubscriberReturnLoaned(
-        data->bridge_subscription, &bridge_message)) {
+            data->bridge_subscription, &bridge_message)) {
       RMW_SET_ERROR_MSG("MddsBridgeSubscriberReturnLoaned failed");
       bridge_ret = RMW_RET_ERROR;
     }
@@ -2754,10 +2946,9 @@ rmw_ret_t rmw_return_loaned_message_from_subscription(
   return bridge_ret;
 }
 
-rmw_client_t * rmw_create_client(
-  const rmw_node_t * node, const rosidl_service_type_support_t * type_support,
-  const char * service_name, const rmw_qos_profile_t * qos_profile)
-{
+rmw_client_t *rmw_create_client(
+    const rmw_node_t *node, const rosidl_service_type_support_t *type_support,
+    const char *service_name, const rmw_qos_profile_t *qos_profile) {
   if (CheckNode(node) != RMW_RET_OK) {
     return nullptr;
   }
@@ -2771,7 +2962,7 @@ rmw_client_t * rmw_create_client(
   if (!ValidateQosProfile(qos_profile, "client")) {
     return nullptr;
   }
-  auto * data = new (std::nothrow) rmw_mdds_cpp::ClientData();
+  auto *data = new (std::nothrow) rmw_mdds_cpp::ClientData();
   if (data == nullptr) {
     return nullptr;
   }
@@ -2779,7 +2970,8 @@ rmw_client_t * rmw_create_client(
   if (!ServiceTypeInfoIsValid(type_info)) {
     rmw_reset_error();
     delete data;
-    RMW_SET_ERROR_MSG("service type support is not supported by rmw_mdds_cpp client");
+    RMW_SET_ERROR_MSG(
+        "service type support is not supported by rmw_mdds_cpp client");
     return nullptr;
   }
   data->context = node->context;
@@ -2787,58 +2979,62 @@ rmw_client_t * rmw_create_client(
   data->type_name = type_info.type_name;
   data->node_name = node->name == nullptr ? "" : node->name;
   data->node_namespace = node->namespace_ == nullptr ? "" : node->namespace_;
-  auto * node_data = static_cast<rmw_mdds_cpp::NodeData *>(node->data);
+  auto *node_data = static_cast<rmw_mdds_cpp::NodeData *>(node->data);
   data->node_enclave = node_data == nullptr ? "" : node_data->enclave;
   data->request_type = type_info.request_type;
   data->response_type = type_info.response_type;
   data->request_size = type_info.request_type.size;
   data->response_size = type_info.response_type.size;
   data->next_sequence_id = 1;
-  data->actual_qos = ResolveActualQosProfile(*qos_profile, rmw_qos_profile_services_default);
-  const bool allow_local_only =
-    AllowsLocalOnlyInternalService(service_name, node->name, node->namespace_);
-  auto & bridge_backend = rmw_mdds_cpp::BridgeBackend::Instance();
+  data->actual_qos =
+      ResolveActualQosProfile(*qos_profile, rmw_qos_profile_services_default);
+  const bool allow_local_only = AllowsLocalOnlyInternalService(
+      service_name, node->name, node->namespace_);
+  auto &bridge_backend = rmw_mdds_cpp::BridgeBackend::Instance();
   if (rmw_mdds_cpp::BrokerModeEnabled()) {
     std::string error;
     data->broker_client = rmw_mdds_cpp::CreateClientBrokerClient(
-      data, ClientResponseBrokerCallback, data, &error);
+        data, ClientResponseBrokerCallback, data, &error);
     if (data->broker_client == nullptr) {
       if (!allow_local_only) {
         delete data;
         RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
-          "MDDS broker client registration failed: %s", error.c_str());
+            "MDDS broker client registration failed: %s", error.c_str());
         return nullptr;
       }
       rmw_reset_error();
     }
   } else {
-    const std::string request_topic = MakeServiceBridgeTopic("rq/", data->service_name);
-    const std::string response_topic = MakeServiceBridgeTopic("rr/", data->service_name);
-    const std::string request_type = MakeServiceBridgeType(data->type_name, "_Request");
-    const std::string response_type = MakeServiceBridgeType(data->type_name, "_Response");
-    if (
-      !request_topic.empty() && !response_topic.empty() && !request_type.empty() &&
-      !response_type.empty()) {
+    const std::string request_topic =
+        MakeServiceBridgeTopic("rq/", data->service_name);
+    const std::string response_topic =
+        MakeServiceBridgeTopic("rr/", data->service_name);
+    const std::string request_type =
+        MakeServiceBridgeType(data->type_name, "_Request");
+    const std::string response_type =
+        MakeServiceBridgeType(data->type_name, "_Response");
+    if (!request_topic.empty() && !response_topic.empty() &&
+        !request_type.empty() && !response_type.empty()) {
       data->bridge_request_publisher = bridge_backend.CreatePublisher(
-        request_topic.c_str(), request_type.c_str(), &data->actual_qos);
+          request_topic.c_str(), request_type.c_str(), &data->actual_qos);
       data->bridge_response_subscription = bridge_backend.Subscribe(
-        response_topic.c_str(), response_type.c_str(), &data->actual_qos,
-        ClientResponseBridgeCallback, data);
+          response_topic.c_str(), response_type.c_str(), &data->actual_qos,
+          ClientResponseBridgeCallback, data);
     }
-    if (
-      bridge_backend.Required() &&
-      (data->bridge_request_publisher == nullptr ||
-       data->bridge_response_subscription == nullptr)) {
+    if (bridge_backend.Required() &&
+        (data->bridge_request_publisher == nullptr ||
+         data->bridge_response_subscription == nullptr)) {
       DestroyClientBridgeEndpoints(data);
       if (!allow_local_only) {
         delete data;
-        RMW_SET_ERROR_MSG("explicit MDDS bridge library is configured but client creation failed");
+        RMW_SET_ERROR_MSG("explicit MDDS bridge library is configured but "
+                          "client creation failed");
         return nullptr;
       }
       rmw_reset_error();
     }
   }
-  rmw_client_t * client = rmw_client_allocate();
+  rmw_client_t *client = rmw_client_allocate();
   if (client == nullptr) {
     DestroyClientBridgeEndpoints(data);
     DestroyClientBrokerEndpoint(data);
@@ -2860,8 +3056,7 @@ rmw_client_t * rmw_create_client(
   return client;
 }
 
-rmw_ret_t rmw_destroy_client(rmw_node_t * node, rmw_client_t * client)
-{
+rmw_ret_t rmw_destroy_client(rmw_node_t *node, rmw_client_t *client) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -2871,19 +3066,19 @@ rmw_ret_t rmw_destroy_client(rmw_node_t * node, rmw_client_t * client)
     return ret;
   }
   rcutils_allocator_t allocator = node->context->options.allocator;
-  auto * data = static_cast<rmw_mdds_cpp::ClientData *>(client->data);
+  auto *data = static_cast<rmw_mdds_cpp::ClientData *>(client->data);
   UnregisterClient(data);
   DestroyClientBridgeEndpoints(data);
   DestroyClientBrokerEndpoint(data);
-  allocator.deallocate(const_cast<char *>(client->service_name), allocator.state);
+  allocator.deallocate(const_cast<char *>(client->service_name),
+                       allocator.state);
   delete data;
   rmw_client_free(client);
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_send_request(
-  const rmw_client_t * client, const void * ros_request, int64_t * sequence_id)
-{
+rmw_ret_t rmw_send_request(const rmw_client_t *client, const void *ros_request,
+                           int64_t *sequence_id) {
   rmw_ret_t ret = CheckClient(client);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -2892,7 +3087,7 @@ rmw_ret_t rmw_send_request(
     RMW_SET_ERROR_MSG("send request argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  auto * data = static_cast<rmw_mdds_cpp::ClientData *>(client->data);
+  auto *data = static_cast<rmw_mdds_cpp::ClientData *>(client->data);
   if (data == nullptr || data->request_size == 0) {
     RMW_SET_ERROR_MSG("client request type support is invalid");
     return RMW_RET_ERROR;
@@ -2915,15 +3110,17 @@ rmw_ret_t rmw_send_request(
 
   if (data->broker_client != nullptr) {
     std::vector<uint8_t> wire_payload;
-    if (!EncodeServiceWirePayload(info.request_id, info.source_timestamp, payload, &wire_payload)) {
+    if (!EncodeServiceWirePayload(info.request_id, info.source_timestamp,
+                                  payload, &wire_payload)) {
       RMW_SET_ERROR_MSG("failed to encode broker service request");
       return RMW_RET_ERROR;
     }
     std::string error;
-    if (!rmw_mdds_cpp::BrokerClientPublish(
-        data->broker_client, wire_payload, static_cast<uint64_t>(*sequence_id), &error)) {
+    if (!rmw_mdds_cpp::BrokerClientPublish(data->broker_client, wire_payload,
+                                           static_cast<uint64_t>(*sequence_id),
+                                           &error)) {
       RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
-        "failed to publish broker service request: %s", error.c_str());
+          "failed to publish broker service request: %s", error.c_str());
       return RMW_RET_ERROR;
     }
     return RMW_RET_OK;
@@ -2931,7 +3128,8 @@ rmw_ret_t rmw_send_request(
 
   if (data->bridge_request_publisher != nullptr) {
     std::vector<uint8_t> wire_payload;
-    if (!EncodeServiceWirePayload(info.request_id, info.source_timestamp, payload, &wire_payload)) {
+    if (!EncodeServiceWirePayload(info.request_id, info.source_timestamp,
+                                  payload, &wire_payload)) {
       RMW_SET_ERROR_MSG("failed to encode bridge service request");
       return RMW_RET_ERROR;
     }
@@ -2939,36 +3137,35 @@ rmw_ret_t rmw_send_request(
       RMW_SET_ERROR_MSG("bridge service request is too large");
       return RMW_RET_ERROR;
     }
-    if (
-      rmw_mdds_cpp::BridgeBackend::Instance().Publish(
-        data->bridge_request_publisher, wire_payload.data(),
-        static_cast<uint32_t>(wire_payload.size())) != 0) {
+    if (rmw_mdds_cpp::BridgeBackend::Instance().Publish(
+            data->bridge_request_publisher, wire_payload.data(),
+            static_cast<uint32_t>(wire_payload.size())) != 0) {
       RMW_SET_ERROR_MSG("failed to publish bridge service request");
       return RMW_RET_ERROR;
     }
     return RMW_RET_OK;
   }
 
-  for (auto * service : GetMatchingServices(data)) {
+  for (auto *service : GetMatchingServices(data)) {
     rmw_mdds_cpp::ServiceRequestSample sample{info, payload};
     EnqueueServiceRequest(service, std::move(sample));
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_take_response(
-  const rmw_client_t * client, rmw_service_info_t * request_header, void * ros_response,
-  bool * taken)
-{
+rmw_ret_t rmw_take_response(const rmw_client_t *client,
+                            rmw_service_info_t *request_header,
+                            void *ros_response, bool *taken) {
   rmw_ret_t ret = CheckClient(client);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  if (request_header == nullptr || ros_response == nullptr || taken == nullptr) {
+  if (request_header == nullptr || ros_response == nullptr ||
+      taken == nullptr) {
     RMW_SET_ERROR_MSG("take response argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  auto * data = static_cast<rmw_mdds_cpp::ClientData *>(client->data);
+  auto *data = static_cast<rmw_mdds_cpp::ClientData *>(client->data);
   if (data == nullptr || data->response_size == 0) {
     RMW_SET_ERROR_MSG("client response type support is invalid");
     return RMW_RET_ERROR;
@@ -2990,9 +3187,9 @@ rmw_ret_t rmw_take_response(
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_client_request_publisher_get_actual_qos(
-  const rmw_client_t * client, rmw_qos_profile_t * qos)
-{
+rmw_ret_t
+rmw_client_request_publisher_get_actual_qos(const rmw_client_t *client,
+                                            rmw_qos_profile_t *qos) {
   rmw_ret_t ret = CheckClient(client);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3001,21 +3198,21 @@ rmw_ret_t rmw_client_request_publisher_get_actual_qos(
     RMW_SET_ERROR_MSG("client qos output is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  const auto * data = static_cast<const rmw_mdds_cpp::ClientData *>(client->data);
+  const auto *data =
+      static_cast<const rmw_mdds_cpp::ClientData *>(client->data);
   *qos = data == nullptr ? rmw_qos_profile_services_default : data->actual_qos;
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_client_response_subscription_get_actual_qos(
-  const rmw_client_t * client, rmw_qos_profile_t * qos)
-{
+rmw_ret_t
+rmw_client_response_subscription_get_actual_qos(const rmw_client_t *client,
+                                                rmw_qos_profile_t *qos) {
   return rmw_client_request_publisher_get_actual_qos(client, qos);
 }
 
-rmw_service_t * rmw_create_service(
-  const rmw_node_t * node, const rosidl_service_type_support_t * type_support,
-  const char * service_name, const rmw_qos_profile_t * qos_profile)
-{
+rmw_service_t *rmw_create_service(
+    const rmw_node_t *node, const rosidl_service_type_support_t *type_support,
+    const char *service_name, const rmw_qos_profile_t *qos_profile) {
   if (CheckNode(node) != RMW_RET_OK) {
     return nullptr;
   }
@@ -3029,7 +3226,7 @@ rmw_service_t * rmw_create_service(
   if (!ValidateQosProfile(qos_profile, "service")) {
     return nullptr;
   }
-  auto * data = new (std::nothrow) rmw_mdds_cpp::ServiceData();
+  auto *data = new (std::nothrow) rmw_mdds_cpp::ServiceData();
   if (data == nullptr) {
     return nullptr;
   }
@@ -3037,7 +3234,8 @@ rmw_service_t * rmw_create_service(
   if (!ServiceTypeInfoIsValid(type_info)) {
     rmw_reset_error();
     delete data;
-    RMW_SET_ERROR_MSG("service type support is not supported by rmw_mdds_cpp service");
+    RMW_SET_ERROR_MSG(
+        "service type support is not supported by rmw_mdds_cpp service");
     return nullptr;
   }
   data->context = node->context;
@@ -3045,57 +3243,61 @@ rmw_service_t * rmw_create_service(
   data->type_name = type_info.type_name;
   data->node_name = node->name == nullptr ? "" : node->name;
   data->node_namespace = node->namespace_ == nullptr ? "" : node->namespace_;
-  auto * node_data = static_cast<rmw_mdds_cpp::NodeData *>(node->data);
+  auto *node_data = static_cast<rmw_mdds_cpp::NodeData *>(node->data);
   data->node_enclave = node_data == nullptr ? "" : node_data->enclave;
   data->request_type = type_info.request_type;
   data->response_type = type_info.response_type;
   data->request_size = type_info.request_type.size;
   data->response_size = type_info.response_type.size;
-  data->actual_qos = ResolveActualQosProfile(*qos_profile, rmw_qos_profile_services_default);
-  const bool allow_local_only =
-    AllowsLocalOnlyInternalService(service_name, node->name, node->namespace_);
-  auto & bridge_backend = rmw_mdds_cpp::BridgeBackend::Instance();
+  data->actual_qos =
+      ResolveActualQosProfile(*qos_profile, rmw_qos_profile_services_default);
+  const bool allow_local_only = AllowsLocalOnlyInternalService(
+      service_name, node->name, node->namespace_);
+  auto &bridge_backend = rmw_mdds_cpp::BridgeBackend::Instance();
   if (rmw_mdds_cpp::BrokerModeEnabled()) {
     std::string error;
     data->broker_client = rmw_mdds_cpp::CreateServiceBrokerClient(
-      data, ServiceRequestBrokerCallback, data, &error);
+        data, ServiceRequestBrokerCallback, data, &error);
     if (data->broker_client == nullptr) {
       if (!allow_local_only) {
         delete data;
         RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
-          "MDDS broker service registration failed: %s", error.c_str());
+            "MDDS broker service registration failed: %s", error.c_str());
         return nullptr;
       }
       rmw_reset_error();
     }
   } else {
-    const std::string request_topic = MakeServiceBridgeTopic("rq/", data->service_name);
-    const std::string response_topic = MakeServiceBridgeTopic("rr/", data->service_name);
-    const std::string request_type = MakeServiceBridgeType(data->type_name, "_Request");
-    const std::string response_type = MakeServiceBridgeType(data->type_name, "_Response");
-    if (
-      !request_topic.empty() && !response_topic.empty() && !request_type.empty() &&
-      !response_type.empty()) {
+    const std::string request_topic =
+        MakeServiceBridgeTopic("rq/", data->service_name);
+    const std::string response_topic =
+        MakeServiceBridgeTopic("rr/", data->service_name);
+    const std::string request_type =
+        MakeServiceBridgeType(data->type_name, "_Request");
+    const std::string response_type =
+        MakeServiceBridgeType(data->type_name, "_Response");
+    if (!request_topic.empty() && !response_topic.empty() &&
+        !request_type.empty() && !response_type.empty()) {
       data->bridge_response_publisher = bridge_backend.CreatePublisher(
-        response_topic.c_str(), response_type.c_str(), &data->actual_qos);
+          response_topic.c_str(), response_type.c_str(), &data->actual_qos);
       data->bridge_request_subscription = bridge_backend.Subscribe(
-        request_topic.c_str(), request_type.c_str(), &data->actual_qos,
-        ServiceRequestBridgeCallback, data);
+          request_topic.c_str(), request_type.c_str(), &data->actual_qos,
+          ServiceRequestBridgeCallback, data);
     }
-    if (
-      bridge_backend.Required() &&
-      (data->bridge_response_publisher == nullptr ||
-       data->bridge_request_subscription == nullptr)) {
+    if (bridge_backend.Required() &&
+        (data->bridge_response_publisher == nullptr ||
+         data->bridge_request_subscription == nullptr)) {
       DestroyServiceBridgeEndpoints(data);
       if (!allow_local_only) {
         delete data;
-        RMW_SET_ERROR_MSG("explicit MDDS bridge library is configured but service creation failed");
+        RMW_SET_ERROR_MSG("explicit MDDS bridge library is configured but "
+                          "service creation failed");
         return nullptr;
       }
       rmw_reset_error();
     }
   }
-  rmw_service_t * service = rmw_service_allocate();
+  rmw_service_t *service = rmw_service_allocate();
   if (service == nullptr) {
     DestroyServiceBridgeEndpoints(data);
     DestroyServiceBrokerEndpoint(data);
@@ -3117,8 +3319,7 @@ rmw_service_t * rmw_create_service(
   return service;
 }
 
-rmw_ret_t rmw_destroy_service(rmw_node_t * node, rmw_service_t * service)
-{
+rmw_ret_t rmw_destroy_service(rmw_node_t *node, rmw_service_t *service) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3128,20 +3329,20 @@ rmw_ret_t rmw_destroy_service(rmw_node_t * node, rmw_service_t * service)
     return ret;
   }
   rcutils_allocator_t allocator = node->context->options.allocator;
-  auto * data = static_cast<rmw_mdds_cpp::ServiceData *>(service->data);
+  auto *data = static_cast<rmw_mdds_cpp::ServiceData *>(service->data);
   UnregisterService(data);
   DestroyServiceBridgeEndpoints(data);
   DestroyServiceBrokerEndpoint(data);
-  allocator.deallocate(const_cast<char *>(service->service_name), allocator.state);
+  allocator.deallocate(const_cast<char *>(service->service_name),
+                       allocator.state);
   delete data;
   rmw_service_free(service);
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_take_request(
-  const rmw_service_t * service, rmw_service_info_t * request_header, void * ros_request,
-  bool * taken)
-{
+rmw_ret_t rmw_take_request(const rmw_service_t *service,
+                           rmw_service_info_t *request_header,
+                           void *ros_request, bool *taken) {
   rmw_ret_t ret = CheckService(service);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3150,7 +3351,7 @@ rmw_ret_t rmw_take_request(
     RMW_SET_ERROR_MSG("take request argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  auto * data = static_cast<rmw_mdds_cpp::ServiceData *>(service->data);
+  auto *data = static_cast<rmw_mdds_cpp::ServiceData *>(service->data);
   if (data == nullptr || data->request_size == 0) {
     RMW_SET_ERROR_MSG("service request type support is invalid");
     return RMW_RET_ERROR;
@@ -3172,9 +3373,9 @@ rmw_ret_t rmw_take_request(
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_send_response(
-  const rmw_service_t * service, rmw_request_id_t * request_header, void * ros_response)
-{
+rmw_ret_t rmw_send_response(const rmw_service_t *service,
+                            rmw_request_id_t *request_header,
+                            void *ros_response) {
   rmw_ret_t ret = CheckService(service);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3183,7 +3384,8 @@ rmw_ret_t rmw_send_response(
     RMW_SET_ERROR_MSG("send response argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  const auto * data = static_cast<const rmw_mdds_cpp::ServiceData *>(service->data);
+  const auto *data =
+      static_cast<const rmw_mdds_cpp::ServiceData *>(service->data);
   if (data == nullptr || data->response_size == 0) {
     RMW_SET_ERROR_MSG("service response type support is invalid");
     return RMW_RET_ERROR;
@@ -3200,16 +3402,17 @@ rmw_ret_t rmw_send_response(
 
   if (data->broker_client != nullptr) {
     std::vector<uint8_t> wire_payload;
-    if (!EncodeServiceWirePayload(info.request_id, info.source_timestamp, payload, &wire_payload)) {
+    if (!EncodeServiceWirePayload(info.request_id, info.source_timestamp,
+                                  payload, &wire_payload)) {
       RMW_SET_ERROR_MSG("failed to encode broker service response");
       return RMW_RET_ERROR;
     }
     std::string error;
     if (!rmw_mdds_cpp::BrokerClientPublish(
-        data->broker_client, wire_payload,
-        static_cast<uint64_t>(request_header->sequence_number), &error)) {
+            data->broker_client, wire_payload,
+            static_cast<uint64_t>(request_header->sequence_number), &error)) {
       RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
-        "failed to publish broker service response: %s", error.c_str());
+          "failed to publish broker service response: %s", error.c_str());
       return RMW_RET_ERROR;
     }
     return RMW_RET_OK;
@@ -3217,7 +3420,8 @@ rmw_ret_t rmw_send_response(
 
   if (data->bridge_response_publisher != nullptr) {
     std::vector<uint8_t> wire_payload;
-    if (!EncodeServiceWirePayload(info.request_id, info.source_timestamp, payload, &wire_payload)) {
+    if (!EncodeServiceWirePayload(info.request_id, info.source_timestamp,
+                                  payload, &wire_payload)) {
       RMW_SET_ERROR_MSG("failed to encode bridge service response");
       return RMW_RET_ERROR;
     }
@@ -3225,17 +3429,16 @@ rmw_ret_t rmw_send_response(
       RMW_SET_ERROR_MSG("bridge service response is too large");
       return RMW_RET_ERROR;
     }
-    if (
-      rmw_mdds_cpp::BridgeBackend::Instance().Publish(
-        data->bridge_response_publisher, wire_payload.data(),
-        static_cast<uint32_t>(wire_payload.size())) != 0) {
+    if (rmw_mdds_cpp::BridgeBackend::Instance().Publish(
+            data->bridge_response_publisher, wire_payload.data(),
+            static_cast<uint32_t>(wire_payload.size())) != 0) {
       RMW_SET_ERROR_MSG("failed to publish bridge service response");
       return RMW_RET_ERROR;
     }
     return RMW_RET_OK;
   }
 
-  auto * client = FindClientByGuid(request_header->writer_guid);
+  auto *client = FindClientByGuid(request_header->writer_guid);
   if (client == nullptr) {
     return RMW_RET_TIMEOUT;
   }
@@ -3245,9 +3448,9 @@ rmw_ret_t rmw_send_response(
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_service_response_publisher_get_actual_qos(
-  const rmw_service_t * service, rmw_qos_profile_t * qos)
-{
+rmw_ret_t
+rmw_service_response_publisher_get_actual_qos(const rmw_service_t *service,
+                                              rmw_qos_profile_t *qos) {
   rmw_ret_t ret = CheckService(service);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3256,29 +3459,31 @@ rmw_ret_t rmw_service_response_publisher_get_actual_qos(
     RMW_SET_ERROR_MSG("service qos output is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  const auto * data = static_cast<const rmw_mdds_cpp::ServiceData *>(service->data);
+  const auto *data =
+      static_cast<const rmw_mdds_cpp::ServiceData *>(service->data);
   *qos = data == nullptr ? rmw_qos_profile_services_default : data->actual_qos;
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_service_request_subscription_get_actual_qos(
-  const rmw_service_t * service, rmw_qos_profile_t * qos)
-{
+rmw_ret_t
+rmw_service_request_subscription_get_actual_qos(const rmw_service_t *service,
+                                                rmw_qos_profile_t *qos) {
   return rmw_service_response_publisher_get_actual_qos(service, qos);
 }
 
-static size_t CurrentMatchedPublishersForSubscription(rmw_mdds_cpp::SubscriptionData * subscription)
-{
+static size_t CurrentMatchedPublishersForSubscription(
+    rmw_mdds_cpp::SubscriptionData *subscription) {
   if (subscription == nullptr) {
     return 0;
   }
-  return rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::CountBrokerGraphPublishersForSubscription(subscription) :
-    rmw_mdds_cpp::CountPublishersForSubscription(*subscription);
+  return rmw_mdds_cpp::BrokerModeEnabled()
+             ? rmw_mdds_cpp::CountBrokerGraphPublishersForSubscription(
+                   subscription)
+             : rmw_mdds_cpp::CountPublishersForSubscription(*subscription);
 }
 
-rmw_ret_t rmw_take_event(const rmw_event_t * event_handle, void * event_info, bool * taken)
-{
+rmw_ret_t rmw_take_event(const rmw_event_t *event_handle, void *event_info,
+                         bool *taken) {
   if (taken != nullptr) {
     *taken = false;
   }
@@ -3286,91 +3491,103 @@ rmw_ret_t rmw_take_event(const rmw_event_t * event_handle, void * event_info, bo
     RMW_SET_ERROR_MSG("take event argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (!rmw_mdds_cpp::IsMddsIdentifier(event_handle->implementation_identifier)) {
-    RMW_SET_ERROR_MSG("event implementation identifier does not match rmw_mdds_cpp");
+  if (!rmw_mdds_cpp::IsMddsIdentifier(
+          event_handle->implementation_identifier)) {
+    RMW_SET_ERROR_MSG(
+        "event implementation identifier does not match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   if (event_handle->data == nullptr) {
     RMW_SET_ERROR_MSG("event data is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  auto * status = static_cast<rmw_matched_status_t *>(event_info);
+  auto *status = static_cast<rmw_matched_status_t *>(event_info);
   bool ok = false;
   switch (event_handle->event_type) {
-    case RMW_EVENT_PUBLICATION_MATCHED:
-      ok = rmw_mdds_cpp::BrokerModeEnabled() ?
-        rmw_mdds_cpp::TakeBrokerGraphPublisherMatchedStatus(
-          static_cast<rmw_mdds_cpp::PublisherData *>(event_handle->data), status) :
-        rmw_mdds_cpp::TakePublisherMatchedStatus(
-          static_cast<rmw_mdds_cpp::PublisherData *>(event_handle->data), status);
-      break;
-    case RMW_EVENT_SUBSCRIPTION_MATCHED:
-      ok = rmw_mdds_cpp::BrokerModeEnabled() ?
-        rmw_mdds_cpp::TakeBrokerGraphSubscriptionMatchedStatus(
-          static_cast<rmw_mdds_cpp::SubscriptionData *>(event_handle->data), status) :
-        rmw_mdds_cpp::TakeSubscriptionMatchedStatus(
-          static_cast<rmw_mdds_cpp::SubscriptionData *>(event_handle->data), status);
-      break;
-    case RMW_EVENT_LIVELINESS_CHANGED: {
-      auto * subscription = static_cast<rmw_mdds_cpp::SubscriptionData *>(event_handle->data);
-      ok = rmw_mdds_cpp::TakeSubscriptionLivelinessStatus(
+  case RMW_EVENT_PUBLICATION_MATCHED:
+    ok = rmw_mdds_cpp::BrokerModeEnabled()
+             ? rmw_mdds_cpp::TakeBrokerGraphPublisherMatchedStatus(
+                   static_cast<rmw_mdds_cpp::PublisherData *>(
+                       event_handle->data),
+                   status)
+             : rmw_mdds_cpp::TakePublisherMatchedStatus(
+                   static_cast<rmw_mdds_cpp::PublisherData *>(
+                       event_handle->data),
+                   status);
+    break;
+  case RMW_EVENT_SUBSCRIPTION_MATCHED:
+    ok = rmw_mdds_cpp::BrokerModeEnabled()
+             ? rmw_mdds_cpp::TakeBrokerGraphSubscriptionMatchedStatus(
+                   static_cast<rmw_mdds_cpp::SubscriptionData *>(
+                       event_handle->data),
+                   status)
+             : rmw_mdds_cpp::TakeSubscriptionMatchedStatus(
+                   static_cast<rmw_mdds_cpp::SubscriptionData *>(
+                       event_handle->data),
+                   status);
+    break;
+  case RMW_EVENT_LIVELINESS_CHANGED: {
+    auto *subscription =
+        static_cast<rmw_mdds_cpp::SubscriptionData *>(event_handle->data);
+    ok = rmw_mdds_cpp::TakeSubscriptionLivelinessStatus(
         subscription, CurrentMatchedPublishersForSubscription(subscription),
         static_cast<rmw_liveliness_changed_status_t *>(event_info));
-      break;
-    }
-    case RMW_EVENT_REQUESTED_DEADLINE_MISSED: {
-      auto * subscription = static_cast<rmw_mdds_cpp::SubscriptionData *>(event_handle->data);
-      ok = rmw_mdds_cpp::TakeSubscriptionDeadlineStatus(
+    break;
+  }
+  case RMW_EVENT_REQUESTED_DEADLINE_MISSED: {
+    auto *subscription =
+        static_cast<rmw_mdds_cpp::SubscriptionData *>(event_handle->data);
+    ok = rmw_mdds_cpp::TakeSubscriptionDeadlineStatus(
         subscription, rmw_mdds_cpp::MddsNowNanoseconds(),
         CurrentMatchedPublishersForSubscription(subscription) > 0,
         static_cast<rmw_requested_deadline_missed_status_t *>(event_info));
-      break;
-    }
-    case RMW_EVENT_OFFERED_DEADLINE_MISSED:
-      ok = rmw_mdds_cpp::TakePublisherDeadlineStatus(
+    break;
+  }
+  case RMW_EVENT_OFFERED_DEADLINE_MISSED:
+    ok = rmw_mdds_cpp::TakePublisherDeadlineStatus(
         static_cast<rmw_mdds_cpp::PublisherData *>(event_handle->data),
         rmw_mdds_cpp::MddsNowNanoseconds(),
         static_cast<rmw_offered_deadline_missed_status_t *>(event_info));
-      break;
-    case RMW_EVENT_LIVELINESS_LOST:
-      ok = rmw_mdds_cpp::TakePublisherLivelinessLostStatus(
+    break;
+  case RMW_EVENT_LIVELINESS_LOST:
+    ok = rmw_mdds_cpp::TakePublisherLivelinessLostStatus(
         static_cast<rmw_mdds_cpp::PublisherData *>(event_handle->data),
         rmw_mdds_cpp::MddsNowNanoseconds(),
         static_cast<rmw_liveliness_lost_status_t *>(event_info));
-      break;
-    case RMW_EVENT_OFFERED_QOS_INCOMPATIBLE:
-      ok = rmw_mdds_cpp::TakePublisherQosIncompatibleStatus(
+    break;
+  case RMW_EVENT_OFFERED_QOS_INCOMPATIBLE:
+    ok = rmw_mdds_cpp::TakePublisherQosIncompatibleStatus(
         static_cast<rmw_mdds_cpp::PublisherData *>(event_handle->data),
         static_cast<rmw_qos_incompatible_event_status_t *>(event_info));
-      break;
-    case RMW_EVENT_REQUESTED_QOS_INCOMPATIBLE:
-      ok = rmw_mdds_cpp::TakeSubscriptionQosIncompatibleStatus(
+    break;
+  case RMW_EVENT_REQUESTED_QOS_INCOMPATIBLE:
+    ok = rmw_mdds_cpp::TakeSubscriptionQosIncompatibleStatus(
         static_cast<rmw_mdds_cpp::SubscriptionData *>(event_handle->data),
         static_cast<rmw_qos_incompatible_event_status_t *>(event_info));
-      break;
-    case RMW_EVENT_PUBLISHER_INCOMPATIBLE_TYPE:
-      ok = rmw_mdds_cpp::TakePublisherIncompatibleTypeStatus(
+    break;
+  case RMW_EVENT_PUBLISHER_INCOMPATIBLE_TYPE:
+    ok = rmw_mdds_cpp::TakePublisherIncompatibleTypeStatus(
         static_cast<rmw_mdds_cpp::PublisherData *>(event_handle->data),
         static_cast<rmw_incompatible_type_status_t *>(event_info));
-      break;
-    case RMW_EVENT_SUBSCRIPTION_INCOMPATIBLE_TYPE:
-      ok = rmw_mdds_cpp::TakeSubscriptionIncompatibleTypeStatus(
+    break;
+  case RMW_EVENT_SUBSCRIPTION_INCOMPATIBLE_TYPE:
+    ok = rmw_mdds_cpp::TakeSubscriptionIncompatibleTypeStatus(
         static_cast<rmw_mdds_cpp::SubscriptionData *>(event_handle->data),
         static_cast<rmw_incompatible_type_status_t *>(event_info));
-      break;
-    case RMW_EVENT_MESSAGE_LOST:
-      ok = rmw_mdds_cpp::TakeSubscriptionMessageLostStatus(
+    break;
+  case RMW_EVENT_MESSAGE_LOST:
+    ok = rmw_mdds_cpp::TakeSubscriptionMessageLostStatus(
         static_cast<rmw_mdds_cpp::SubscriptionData *>(event_handle->data),
         static_cast<rmw_message_lost_status_t *>(event_info));
-      break;
-    default:
-      if (IsNoOpPublisherEvent(event_handle->event_type) ||
+    break;
+  default:
+    if (IsNoOpPublisherEvent(event_handle->event_type) ||
         IsNoOpSubscriptionEvent(event_handle->event_type)) {
-        // No-op QoS event: rmw_mdds never raises it, so report nothing pending.
-        *taken = false;
-        return RMW_RET_OK;
-      }
-      return Unsupported("rmw_take_event");
+      // No-op QoS event: rmw_mdds never raises it, so report nothing pending.
+      *taken = false;
+      return RMW_RET_OK;
+    }
+    return Unsupported("rmw_take_event");
   }
   if (!ok) {
     RMW_SET_ERROR_MSG("failed to take event status");
@@ -3381,103 +3598,108 @@ rmw_ret_t rmw_take_event(const rmw_event_t * event_handle, void * event_info, bo
 }
 
 rmw_ret_t rmw_get_publisher_names_and_types_by_node(
-  const rmw_node_t * node, rcutils_allocator_t * allocator, const char * node_name,
-  const char * node_namespace, bool no_demangle, rmw_names_and_types_t * names_and_types)
-{
+    const rmw_node_t *node, rcutils_allocator_t *allocator,
+    const char *node_name, const char *node_namespace, bool no_demangle,
+    rmw_names_and_types_t *names_and_types) {
   (void)no_demangle;
-  rmw_ret_t ret =
-    ValidateNamesAndTypesByNodeQuery(node, allocator, node_name, node_namespace, names_and_types);
+  rmw_ret_t ret = ValidateNamesAndTypesByNodeQuery(
+      node, allocator, node_name, node_namespace, names_and_types);
   if (ret != RMW_RET_OK) {
     return ret;
   }
   return InitNamesAndTypes(
-    node, allocator, names_and_types,
-    rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::GetBrokerGraphPublisherNamesAndTypesByNode(node_name, node_namespace) :
-    rmw_mdds_cpp::GetPublisherNamesAndTypesByNode(node_name, node_namespace));
+      node, allocator, names_and_types,
+      rmw_mdds_cpp::BrokerModeEnabled()
+          ? rmw_mdds_cpp::GetBrokerGraphPublisherNamesAndTypesByNode(
+                node_name, node_namespace)
+          : rmw_mdds_cpp::GetPublisherNamesAndTypesByNode(node_name,
+                                                          node_namespace));
 }
 
 rmw_ret_t rmw_get_subscriber_names_and_types_by_node(
-  const rmw_node_t * node, rcutils_allocator_t * allocator, const char * node_name,
-  const char * node_namespace, bool no_demangle, rmw_names_and_types_t * names_and_types)
-{
+    const rmw_node_t *node, rcutils_allocator_t *allocator,
+    const char *node_name, const char *node_namespace, bool no_demangle,
+    rmw_names_and_types_t *names_and_types) {
   (void)no_demangle;
-  rmw_ret_t ret =
-    ValidateNamesAndTypesByNodeQuery(node, allocator, node_name, node_namespace, names_and_types);
+  rmw_ret_t ret = ValidateNamesAndTypesByNodeQuery(
+      node, allocator, node_name, node_namespace, names_and_types);
   if (ret != RMW_RET_OK) {
     return ret;
   }
   return InitNamesAndTypes(
-    node, allocator, names_and_types,
-    rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::GetBrokerGraphSubscriptionNamesAndTypesByNode(node_name, node_namespace) :
-    rmw_mdds_cpp::GetSubscriptionNamesAndTypesByNode(node_name, node_namespace));
+      node, allocator, names_and_types,
+      rmw_mdds_cpp::BrokerModeEnabled()
+          ? rmw_mdds_cpp::GetBrokerGraphSubscriptionNamesAndTypesByNode(
+                node_name, node_namespace)
+          : rmw_mdds_cpp::GetSubscriptionNamesAndTypesByNode(node_name,
+                                                             node_namespace));
 }
 
 rmw_ret_t rmw_get_service_names_and_types_by_node(
-  const rmw_node_t * node, rcutils_allocator_t * allocator, const char * node_name,
-  const char * node_namespace, rmw_names_and_types_t * names_and_types)
-{
-  rmw_ret_t ret =
-    ValidateNamesAndTypesByNodeQuery(node, allocator, node_name, node_namespace, names_and_types);
+    const rmw_node_t *node, rcutils_allocator_t *allocator,
+    const char *node_name, const char *node_namespace,
+    rmw_names_and_types_t *names_and_types) {
+  rmw_ret_t ret = ValidateNamesAndTypesByNodeQuery(
+      node, allocator, node_name, node_namespace, names_and_types);
   if (ret != RMW_RET_OK) {
     return ret;
   }
   return InitNamesAndTypes(
-    node, allocator, names_and_types,
-    rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::GetBrokerGraphServiceNamesAndTypesByNode(node_name, node_namespace) :
-    GetServiceNamesAndTypesByNode(node_name, node_namespace));
+      node, allocator, names_and_types,
+      rmw_mdds_cpp::BrokerModeEnabled()
+          ? rmw_mdds_cpp::GetBrokerGraphServiceNamesAndTypesByNode(
+                node_name, node_namespace)
+          : GetServiceNamesAndTypesByNode(node_name, node_namespace));
 }
 
 rmw_ret_t rmw_get_client_names_and_types_by_node(
-  const rmw_node_t * node, rcutils_allocator_t * allocator, const char * node_name,
-  const char * node_namespace, rmw_names_and_types_t * names_and_types)
-{
-  rmw_ret_t ret =
-    ValidateNamesAndTypesByNodeQuery(node, allocator, node_name, node_namespace, names_and_types);
+    const rmw_node_t *node, rcutils_allocator_t *allocator,
+    const char *node_name, const char *node_namespace,
+    rmw_names_and_types_t *names_and_types) {
+  rmw_ret_t ret = ValidateNamesAndTypesByNodeQuery(
+      node, allocator, node_name, node_namespace, names_and_types);
   if (ret != RMW_RET_OK) {
     return ret;
   }
   return InitNamesAndTypes(
-    node, allocator, names_and_types,
-    rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::GetBrokerGraphClientNamesAndTypesByNode(node_name, node_namespace) :
-    GetClientNamesAndTypesByNode(node_name, node_namespace));
+      node, allocator, names_and_types,
+      rmw_mdds_cpp::BrokerModeEnabled()
+          ? rmw_mdds_cpp::GetBrokerGraphClientNamesAndTypesByNode(
+                node_name, node_namespace)
+          : GetClientNamesAndTypesByNode(node_name, node_namespace));
 }
 
-rmw_ret_t rmw_get_topic_names_and_types(
-  const rmw_node_t * node, rcutils_allocator_t * allocator, bool no_demangle,
-  rmw_names_and_types_t * topic_names_and_types)
-{
+rmw_ret_t
+rmw_get_topic_names_and_types(const rmw_node_t *node,
+                              rcutils_allocator_t *allocator, bool no_demangle,
+                              rmw_names_and_types_t *topic_names_and_types) {
   (void)no_demangle;
   return InitNamesAndTypes(
-    node, allocator, topic_names_and_types,
-    rmw_mdds_cpp::BrokerModeEnabled() ? rmw_mdds_cpp::GetBrokerGraphTopicNamesAndTypes() :
-                                        rmw_mdds_cpp::GetTopicNamesAndTypes());
+      node, allocator, topic_names_and_types,
+      rmw_mdds_cpp::BrokerModeEnabled()
+          ? rmw_mdds_cpp::GetBrokerGraphTopicNamesAndTypes()
+          : rmw_mdds_cpp::GetTopicNamesAndTypes());
 }
 
 rmw_ret_t rmw_get_service_names_and_types(
-  const rmw_node_t * node, rcutils_allocator_t * allocator,
-  rmw_names_and_types_t * service_names_and_types)
-{
+    const rmw_node_t *node, rcutils_allocator_t *allocator,
+    rmw_names_and_types_t *service_names_and_types) {
   return InitNamesAndTypes(
-    node, allocator, service_names_and_types,
-    rmw_mdds_cpp::BrokerModeEnabled() ? rmw_mdds_cpp::GetBrokerGraphServiceNamesAndTypes() :
-                                        GetServiceNamesAndTypes());
+      node, allocator, service_names_and_types,
+      rmw_mdds_cpp::BrokerModeEnabled()
+          ? rmw_mdds_cpp::GetBrokerGraphServiceNamesAndTypes()
+          : GetServiceNamesAndTypes());
 }
 
-rmw_ret_t rmw_get_node_names(
-  const rmw_node_t * node, rcutils_string_array_t * node_names,
-  rcutils_string_array_t * node_namespaces)
-{
+rmw_ret_t rmw_get_node_names(const rmw_node_t *node,
+                             rcutils_string_array_t *node_names,
+                             rcutils_string_array_t *node_namespaces) {
   return InitNodeGraphStringArrays(node, node_names, node_namespaces, nullptr);
 }
 
 rmw_ret_t rmw_get_node_names_with_enclaves(
-  const rmw_node_t * node, rcutils_string_array_t * node_names,
-  rcutils_string_array_t * node_namespaces, rcutils_string_array_t * enclaves)
-{
+    const rmw_node_t *node, rcutils_string_array_t *node_names,
+    rcutils_string_array_t *node_namespaces, rcutils_string_array_t *enclaves) {
   if (enclaves == nullptr) {
     RMW_SET_ERROR_MSG("enclaves argument is null");
     return RMW_RET_INVALID_ARGUMENT;
@@ -3485,8 +3707,8 @@ rmw_ret_t rmw_get_node_names_with_enclaves(
   return InitNodeGraphStringArrays(node, node_names, node_namespaces, enclaves);
 }
 
-rmw_ret_t rmw_count_publishers(const rmw_node_t * node, const char * topic_name, size_t * count)
-{
+rmw_ret_t rmw_count_publishers(const rmw_node_t *node, const char *topic_name,
+                               size_t *count) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3499,14 +3721,14 @@ rmw_ret_t rmw_count_publishers(const rmw_node_t * node, const char * topic_name,
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  *count = rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::CountBrokerGraphPublishersByTopic(topic_name) :
-    rmw_mdds_cpp::CountPublishersByTopic(topic_name);
+  *count = rmw_mdds_cpp::BrokerModeEnabled()
+               ? rmw_mdds_cpp::CountBrokerGraphPublishersByTopic(topic_name)
+               : rmw_mdds_cpp::CountPublishersByTopic(topic_name);
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_count_subscribers(const rmw_node_t * node, const char * topic_name, size_t * count)
-{
+rmw_ret_t rmw_count_subscribers(const rmw_node_t *node, const char *topic_name,
+                                size_t *count) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3519,14 +3741,14 @@ rmw_ret_t rmw_count_subscribers(const rmw_node_t * node, const char * topic_name
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  *count = rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::CountBrokerGraphSubscriptionsByTopic(topic_name) :
-    rmw_mdds_cpp::CountSubscriptionsByTopic(topic_name);
+  *count = rmw_mdds_cpp::BrokerModeEnabled()
+               ? rmw_mdds_cpp::CountBrokerGraphSubscriptionsByTopic(topic_name)
+               : rmw_mdds_cpp::CountSubscriptionsByTopic(topic_name);
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_count_clients(const rmw_node_t * node, const char * service_name, size_t * count)
-{
+rmw_ret_t rmw_count_clients(const rmw_node_t *node, const char *service_name,
+                            size_t *count) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3539,14 +3761,14 @@ rmw_ret_t rmw_count_clients(const rmw_node_t * node, const char * service_name, 
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  *count = rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::CountBrokerGraphClientsByName(service_name) :
-    CountClientsByName(service_name);
+  *count = rmw_mdds_cpp::BrokerModeEnabled()
+               ? rmw_mdds_cpp::CountBrokerGraphClientsByName(service_name)
+               : CountClientsByName(service_name);
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_count_services(const rmw_node_t * node, const char * service_name, size_t * count)
-{
+rmw_ret_t rmw_count_services(const rmw_node_t *node, const char *service_name,
+                             size_t *count) {
   rmw_ret_t ret = CheckNode(node);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3559,14 +3781,13 @@ rmw_ret_t rmw_count_services(const rmw_node_t * node, const char * service_name,
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  *count = rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::CountBrokerGraphServicesByName(service_name) :
-    CountServicesByName(service_name);
+  *count = rmw_mdds_cpp::BrokerModeEnabled()
+               ? rmw_mdds_cpp::CountBrokerGraphServicesByName(service_name)
+               : CountServicesByName(service_name);
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_get_gid_for_client(const rmw_client_t * client, rmw_gid_t * gid)
-{
+rmw_ret_t rmw_get_gid_for_client(const rmw_client_t *client, rmw_gid_t *gid) {
   rmw_ret_t ret = CheckClient(client);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3575,12 +3796,13 @@ rmw_ret_t rmw_get_gid_for_client(const rmw_client_t * client, rmw_gid_t * gid)
     RMW_SET_ERROR_MSG("gid output is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  FillClientGid(static_cast<const rmw_mdds_cpp::ClientData *>(client->data), gid);
+  FillClientGid(static_cast<const rmw_mdds_cpp::ClientData *>(client->data),
+                gid);
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_get_gid_for_publisher(const rmw_publisher_t * publisher, rmw_gid_t * gid)
-{
+rmw_ret_t rmw_get_gid_for_publisher(const rmw_publisher_t *publisher,
+                                    rmw_gid_t *gid) {
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3593,25 +3815,25 @@ rmw_ret_t rmw_get_gid_for_publisher(const rmw_publisher_t * publisher, rmw_gid_t
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_compare_gids_equal(const rmw_gid_t * gid1, const rmw_gid_t * gid2, bool * result)
-{
+rmw_ret_t rmw_compare_gids_equal(const rmw_gid_t *gid1, const rmw_gid_t *gid2,
+                                 bool *result) {
   if (gid1 == nullptr || gid2 == nullptr || result == nullptr) {
     RMW_SET_ERROR_MSG("gid compare argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (
-    !rmw_mdds_cpp::IsMddsIdentifier(gid1->implementation_identifier) ||
-    !rmw_mdds_cpp::IsMddsIdentifier(gid2->implementation_identifier)) {
-    RMW_SET_ERROR_MSG("gid implementation identifier does not match rmw_mdds_cpp");
+  if (!rmw_mdds_cpp::IsMddsIdentifier(gid1->implementation_identifier) ||
+      !rmw_mdds_cpp::IsMddsIdentifier(gid2->implementation_identifier)) {
+    RMW_SET_ERROR_MSG(
+        "gid implementation identifier does not match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   *result = std::memcmp(gid1->data, gid2->data, sizeof(gid1->data)) == 0;
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_service_server_is_available(
-  const rmw_node_t * node, const rmw_client_t * client, bool * is_available)
-{
+rmw_ret_t rmw_service_server_is_available(const rmw_node_t *node,
+                                          const rmw_client_t *client,
+                                          bool *is_available) {
   if (node == nullptr) {
     RMW_SET_ERROR_MSG("node is null");
     return RMW_RET_ERROR;
@@ -3632,32 +3854,32 @@ rmw_ret_t rmw_service_server_is_available(
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  const auto * client_data = static_cast<const rmw_mdds_cpp::ClientData *>(client->data);
+  const auto *client_data =
+      static_cast<const rmw_mdds_cpp::ClientData *>(client->data);
   *is_available = HasMatchingService(client_data) ||
                   (rmw_mdds_cpp::BrokerModeEnabled() &&
                    rmw_mdds_cpp::BrokerGraphHasMatchingService(client_data));
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_set_log_severity(rmw_log_severity_t severity)
-{
+rmw_ret_t rmw_set_log_severity(rmw_log_severity_t severity) {
   switch (severity) {
-    case RMW_LOG_SEVERITY_DEBUG:
-    case RMW_LOG_SEVERITY_INFO:
-    case RMW_LOG_SEVERITY_WARN:
-    case RMW_LOG_SEVERITY_ERROR:
-    case RMW_LOG_SEVERITY_FATAL:
-      return RMW_RET_OK;
-    default:
-      RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("invalid log severity: %d", severity);
-      return RMW_RET_INVALID_ARGUMENT;
+  case RMW_LOG_SEVERITY_DEBUG:
+  case RMW_LOG_SEVERITY_INFO:
+  case RMW_LOG_SEVERITY_WARN:
+  case RMW_LOG_SEVERITY_ERROR:
+  case RMW_LOG_SEVERITY_FATAL:
+    return RMW_RET_OK;
+  default:
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("invalid log severity: %d", severity);
+    return RMW_RET_INVALID_ARGUMENT;
   }
 }
 
 rmw_ret_t rmw_get_publishers_info_by_topic(
-  const rmw_node_t * node, rcutils_allocator_t * allocator, const char * topic_name, bool no_mangle,
-  rmw_topic_endpoint_info_array_t * publishers_info)
-{
+    const rmw_node_t *node, rcutils_allocator_t *allocator,
+    const char *topic_name, bool no_mangle,
+    rmw_topic_endpoint_info_array_t *publishers_info) {
   (void)no_mangle;
   if (topic_name == nullptr) {
     RMW_SET_ERROR_MSG("topic name is null");
@@ -3668,17 +3890,18 @@ rmw_ret_t rmw_get_publishers_info_by_topic(
     return ret;
   }
   return InitTopicEndpointInfoArray(
-    node, allocator,
-    rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::GetBrokerGraphPublisherEndpointInfosByTopic(topic_name) :
-    rmw_mdds_cpp::GetPublisherEndpointInfosByTopic(topic_name),
-    publishers_info);
+      node, allocator,
+      rmw_mdds_cpp::BrokerModeEnabled()
+          ? rmw_mdds_cpp::GetBrokerGraphPublisherEndpointInfosByTopic(
+                topic_name)
+          : rmw_mdds_cpp::GetPublisherEndpointInfosByTopic(topic_name),
+      publishers_info);
 }
 
 rmw_ret_t rmw_get_subscriptions_info_by_topic(
-  const rmw_node_t * node, rcutils_allocator_t * allocator, const char * topic_name, bool no_mangle,
-  rmw_topic_endpoint_info_array_t * subscriptions_info)
-{
+    const rmw_node_t *node, rcutils_allocator_t *allocator,
+    const char *topic_name, bool no_mangle,
+    rmw_topic_endpoint_info_array_t *subscriptions_info) {
   (void)no_mangle;
   if (topic_name == nullptr) {
     RMW_SET_ERROR_MSG("topic name is null");
@@ -3689,25 +3912,27 @@ rmw_ret_t rmw_get_subscriptions_info_by_topic(
     return ret;
   }
   return InitTopicEndpointInfoArray(
-    node, allocator,
-    rmw_mdds_cpp::BrokerModeEnabled() ?
-    rmw_mdds_cpp::GetBrokerGraphSubscriptionEndpointInfosByTopic(topic_name) :
-    rmw_mdds_cpp::GetSubscriptionEndpointInfosByTopic(topic_name),
-    subscriptions_info);
+      node, allocator,
+      rmw_mdds_cpp::BrokerModeEnabled()
+          ? rmw_mdds_cpp::GetBrokerGraphSubscriptionEndpointInfosByTopic(
+                topic_name)
+          : rmw_mdds_cpp::GetSubscriptionEndpointInfosByTopic(topic_name),
+      subscriptions_info);
 }
 
-rmw_ret_t rmw_qos_profile_check_compatible(
-  const rmw_qos_profile_t publisher_profile, const rmw_qos_profile_t subscription_profile,
-  rmw_qos_compatibility_type_t * compatibility, char * reason, size_t reason_size)
-{
+rmw_ret_t
+rmw_qos_profile_check_compatible(const rmw_qos_profile_t publisher_profile,
+                                 const rmw_qos_profile_t subscription_profile,
+                                 rmw_qos_compatibility_type_t *compatibility,
+                                 char *reason, size_t reason_size) {
   return rmw_dds_common::qos_profile_check_compatible(
-    publisher_profile, subscription_profile, compatibility, reason, reason_size);
+      publisher_profile, subscription_profile, compatibility, reason,
+      reason_size);
 }
 
 rmw_ret_t rmw_publisher_get_network_flow_endpoints(
-  const rmw_publisher_t * publisher, rcutils_allocator_t * allocator,
-  rmw_network_flow_endpoint_array_t * network_flow_endpoint_array)
-{
+    const rmw_publisher_t *publisher, rcutils_allocator_t *allocator,
+    rmw_network_flow_endpoint_array_t *network_flow_endpoint_array) {
   rmw_ret_t ret = CheckPublisher(publisher);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3716,19 +3941,19 @@ rmw_ret_t rmw_publisher_get_network_flow_endpoints(
     RMW_SET_ERROR_MSG("network flow endpoint argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  const auto * data = static_cast<const rmw_mdds_cpp::PublisherData *>(publisher->data);
+  const auto *data =
+      static_cast<const rmw_mdds_cpp::PublisherData *>(publisher->data);
   if (data == nullptr) {
     RMW_SET_ERROR_MSG("publisher data is null");
     return RMW_RET_ERROR;
   }
-  return InitRtpsUserDataNetworkFlowEndpoints(
-    data->context, allocator, network_flow_endpoint_array);
+  return InitRtpsUserDataNetworkFlowEndpoints(data->context, allocator,
+                                              network_flow_endpoint_array);
 }
 
 rmw_ret_t rmw_subscription_get_network_flow_endpoints(
-  const rmw_subscription_t * subscription, rcutils_allocator_t * allocator,
-  rmw_network_flow_endpoint_array_t * network_flow_endpoint_array)
-{
+    const rmw_subscription_t *subscription, rcutils_allocator_t *allocator,
+    rmw_network_flow_endpoint_array_t *network_flow_endpoint_array) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3737,71 +3962,76 @@ rmw_ret_t rmw_subscription_get_network_flow_endpoints(
     RMW_SET_ERROR_MSG("network flow endpoint argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  const auto * data = static_cast<const rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  const auto *data =
+      static_cast<const rmw_mdds_cpp::SubscriptionData *>(subscription->data);
   if (data == nullptr) {
     RMW_SET_ERROR_MSG("subscription data is null");
     return RMW_RET_ERROR;
   }
-  return InitRtpsUserDataNetworkFlowEndpoints(
-    data->context, allocator, network_flow_endpoint_array);
+  return InitRtpsUserDataNetworkFlowEndpoints(data->context, allocator,
+                                              network_flow_endpoint_array);
 }
 
-rmw_ret_t rmw_subscription_set_on_new_message_callback(
-  rmw_subscription_t * subscription, rmw_event_callback_t callback, const void * user_data)
-{
+rmw_ret_t
+rmw_subscription_set_on_new_message_callback(rmw_subscription_t *subscription,
+                                             rmw_event_callback_t callback,
+                                             const void *user_data) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  const size_t pending_message_count = rmw_mdds_cpp::SetSubscriptionNewMessageCallback(
-    static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data), callback, user_data);
+  const size_t pending_message_count =
+      rmw_mdds_cpp::SetSubscriptionNewMessageCallback(
+          static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data),
+          callback, user_data);
   if (callback != nullptr && pending_message_count > 0) {
     callback(user_data, pending_message_count);
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_service_set_on_new_request_callback(
-  rmw_service_t * service, rmw_event_callback_t callback, const void * user_data)
-{
+rmw_ret_t rmw_service_set_on_new_request_callback(rmw_service_t *service,
+                                                  rmw_event_callback_t callback,
+                                                  const void *user_data) {
   rmw_ret_t ret = CheckService(service);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  const size_t pending_request_count =
-    SetServiceRequestCallback(
-      static_cast<rmw_mdds_cpp::ServiceData *>(service->data), callback, user_data);
+  const size_t pending_request_count = SetServiceRequestCallback(
+      static_cast<rmw_mdds_cpp::ServiceData *>(service->data), callback,
+      user_data);
   if (callback != nullptr && pending_request_count > 0) {
     callback(user_data, pending_request_count);
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_client_set_on_new_response_callback(
-  rmw_client_t * client, rmw_event_callback_t callback, const void * user_data)
-{
+rmw_ret_t rmw_client_set_on_new_response_callback(rmw_client_t *client,
+                                                  rmw_event_callback_t callback,
+                                                  const void *user_data) {
   rmw_ret_t ret = CheckClient(client);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  const size_t pending_response_count =
-    SetClientResponseCallback(
-      static_cast<rmw_mdds_cpp::ClientData *>(client->data), callback, user_data);
+  const size_t pending_response_count = SetClientResponseCallback(
+      static_cast<rmw_mdds_cpp::ClientData *>(client->data), callback,
+      user_data);
   if (callback != nullptr && pending_response_count > 0) {
     callback(user_data, pending_response_count);
   }
   return RMW_RET_OK;
 }
 
-rmw_ret_t rmw_event_set_callback(
-  rmw_event_t * event, rmw_event_callback_t callback, const void * user_data)
-{
+rmw_ret_t rmw_event_set_callback(rmw_event_t *event,
+                                 rmw_event_callback_t callback,
+                                 const void *user_data) {
   if (event == nullptr) {
     RMW_SET_ERROR_MSG("event callback handle is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   if (!rmw_mdds_cpp::IsMddsIdentifier(event->implementation_identifier)) {
-    RMW_SET_ERROR_MSG("event callback implementation identifier does not match rmw_mdds_cpp");
+    RMW_SET_ERROR_MSG(
+        "event callback implementation identifier does not match rmw_mdds_cpp");
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION;
   }
   if (event->data == nullptr) {
@@ -3810,63 +4040,75 @@ rmw_ret_t rmw_event_set_callback(
   }
   size_t pending_event_count = 0;
   switch (event->event_type) {
-    case RMW_EVENT_PUBLICATION_MATCHED:
-      pending_event_count = rmw_mdds_cpp::SetPublisherMatchedCallback(
-        static_cast<rmw_mdds_cpp::PublisherData *>(event->data), callback, user_data);
-      break;
-    case RMW_EVENT_SUBSCRIPTION_MATCHED:
-      pending_event_count = rmw_mdds_cpp::SetSubscriptionMatchedCallback(
-        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data), callback, user_data);
-      break;
-    case RMW_EVENT_LIVELINESS_CHANGED: {
-      auto * subscription = static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data);
-      pending_event_count = rmw_mdds_cpp::SetSubscriptionLivelinessCallback(
-        subscription, CurrentMatchedPublishersForSubscription(subscription), callback, user_data);
-      break;
-    }
-    case RMW_EVENT_REQUESTED_DEADLINE_MISSED: {
-      auto * subscription = static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data);
-      pending_event_count = rmw_mdds_cpp::SetSubscriptionDeadlineCallback(
+  case RMW_EVENT_PUBLICATION_MATCHED:
+    pending_event_count = rmw_mdds_cpp::SetPublisherMatchedCallback(
+        static_cast<rmw_mdds_cpp::PublisherData *>(event->data), callback,
+        user_data);
+    break;
+  case RMW_EVENT_SUBSCRIPTION_MATCHED:
+    pending_event_count = rmw_mdds_cpp::SetSubscriptionMatchedCallback(
+        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data), callback,
+        user_data);
+    break;
+  case RMW_EVENT_LIVELINESS_CHANGED: {
+    auto *subscription =
+        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data);
+    pending_event_count = rmw_mdds_cpp::SetSubscriptionLivelinessCallback(
+        subscription, CurrentMatchedPublishersForSubscription(subscription),
+        callback, user_data);
+    break;
+  }
+  case RMW_EVENT_REQUESTED_DEADLINE_MISSED: {
+    auto *subscription =
+        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data);
+    pending_event_count = rmw_mdds_cpp::SetSubscriptionDeadlineCallback(
         subscription, rmw_mdds_cpp::MddsNowNanoseconds(),
-        CurrentMatchedPublishersForSubscription(subscription) > 0, callback, user_data);
-      break;
+        CurrentMatchedPublishersForSubscription(subscription) > 0, callback,
+        user_data);
+    break;
+  }
+  case RMW_EVENT_OFFERED_DEADLINE_MISSED:
+    pending_event_count = rmw_mdds_cpp::SetPublisherDeadlineCallback(
+        static_cast<rmw_mdds_cpp::PublisherData *>(event->data),
+        rmw_mdds_cpp::MddsNowNanoseconds(), callback, user_data);
+    break;
+  case RMW_EVENT_LIVELINESS_LOST:
+    pending_event_count = rmw_mdds_cpp::SetPublisherLivelinessLostCallback(
+        static_cast<rmw_mdds_cpp::PublisherData *>(event->data),
+        rmw_mdds_cpp::MddsNowNanoseconds(), callback, user_data);
+    break;
+  case RMW_EVENT_OFFERED_QOS_INCOMPATIBLE:
+    pending_event_count = rmw_mdds_cpp::SetPublisherQosIncompatibleCallback(
+        static_cast<rmw_mdds_cpp::PublisherData *>(event->data), callback,
+        user_data);
+    break;
+  case RMW_EVENT_REQUESTED_QOS_INCOMPATIBLE:
+    pending_event_count = rmw_mdds_cpp::SetSubscriptionQosIncompatibleCallback(
+        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data), callback,
+        user_data);
+    break;
+  case RMW_EVENT_PUBLISHER_INCOMPATIBLE_TYPE:
+    pending_event_count = rmw_mdds_cpp::SetPublisherIncompatibleTypeCallback(
+        static_cast<rmw_mdds_cpp::PublisherData *>(event->data), callback,
+        user_data);
+    break;
+  case RMW_EVENT_SUBSCRIPTION_INCOMPATIBLE_TYPE:
+    pending_event_count = rmw_mdds_cpp::SetSubscriptionIncompatibleTypeCallback(
+        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data), callback,
+        user_data);
+    break;
+  case RMW_EVENT_MESSAGE_LOST:
+    pending_event_count = rmw_mdds_cpp::SetSubscriptionMessageLostCallback(
+        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data), callback,
+        user_data);
+    break;
+  default:
+    if (IsNoOpPublisherEvent(event->event_type) ||
+        IsNoOpSubscriptionEvent(event->event_type)) {
+      // No-op QoS event: accept the callback registration but never invoke it.
+      return RMW_RET_OK;
     }
-    case RMW_EVENT_OFFERED_DEADLINE_MISSED:
-      pending_event_count = rmw_mdds_cpp::SetPublisherDeadlineCallback(
-        static_cast<rmw_mdds_cpp::PublisherData *>(event->data),
-        rmw_mdds_cpp::MddsNowNanoseconds(), callback, user_data);
-      break;
-    case RMW_EVENT_LIVELINESS_LOST:
-      pending_event_count = rmw_mdds_cpp::SetPublisherLivelinessLostCallback(
-        static_cast<rmw_mdds_cpp::PublisherData *>(event->data),
-        rmw_mdds_cpp::MddsNowNanoseconds(), callback, user_data);
-      break;
-    case RMW_EVENT_OFFERED_QOS_INCOMPATIBLE:
-      pending_event_count = rmw_mdds_cpp::SetPublisherQosIncompatibleCallback(
-        static_cast<rmw_mdds_cpp::PublisherData *>(event->data), callback, user_data);
-      break;
-    case RMW_EVENT_REQUESTED_QOS_INCOMPATIBLE:
-      pending_event_count = rmw_mdds_cpp::SetSubscriptionQosIncompatibleCallback(
-        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data), callback, user_data);
-      break;
-    case RMW_EVENT_PUBLISHER_INCOMPATIBLE_TYPE:
-      pending_event_count = rmw_mdds_cpp::SetPublisherIncompatibleTypeCallback(
-        static_cast<rmw_mdds_cpp::PublisherData *>(event->data), callback, user_data);
-      break;
-    case RMW_EVENT_SUBSCRIPTION_INCOMPATIBLE_TYPE:
-      pending_event_count = rmw_mdds_cpp::SetSubscriptionIncompatibleTypeCallback(
-        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data), callback, user_data);
-      break;
-    case RMW_EVENT_MESSAGE_LOST:
-      pending_event_count = rmw_mdds_cpp::SetSubscriptionMessageLostCallback(
-        static_cast<rmw_mdds_cpp::SubscriptionData *>(event->data), callback, user_data);
-      break;
-    default:
-      if (IsNoOpPublisherEvent(event->event_type) || IsNoOpSubscriptionEvent(event->event_type)) {
-        // No-op QoS event: accept the callback registration but never invoke it.
-        return RMW_RET_OK;
-      }
-      return Unsupported("rmw_event_set_callback");
+    return Unsupported("rmw_event_set_callback");
   }
   if (callback != nullptr && pending_event_count > 0) {
     callback(user_data, pending_event_count);
@@ -3874,8 +4116,7 @@ rmw_ret_t rmw_event_set_callback(
   return RMW_RET_OK;
 }
 
-bool rmw_event_type_is_supported(rmw_event_type_t rmw_event_type)
-{
+bool rmw_event_type_is_supported(rmw_event_type_t rmw_event_type) {
   return IsSupportedMatchedEvent(rmw_event_type) ||
          IsEnforcedPublisherEvent(rmw_event_type) ||
          IsEnforcedSubscriptionEvent(rmw_event_type) ||
@@ -3883,39 +4124,45 @@ bool rmw_event_type_is_supported(rmw_event_type_t rmw_event_type)
          IsNoOpSubscriptionEvent(rmw_event_type);
 }
 
-static rmw_ret_t TakeDynamicCommon(
-  const rmw_subscription_t * subscription, rosidl_dynamic_typesupport_dynamic_data_t * dynamic_data,
-  bool * taken, rmw_message_info_t * message_info, rmw_subscription_allocation_t * allocation)
-{
+static rmw_ret_t
+TakeDynamicCommon(const rmw_subscription_t *subscription,
+                  rosidl_dynamic_typesupport_dynamic_data_t *dynamic_data,
+                  bool *taken, rmw_message_info_t *message_info,
+                  rmw_subscription_allocation_t *allocation) {
   if (dynamic_data == nullptr || taken == nullptr) {
     RMW_SET_ERROR_MSG("take dynamic message argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
   *taken = false;
-  if (
-    dynamic_data->serialization_support == nullptr ||
-    dynamic_data->serialization_support->methods.dynamic_data_deserialize == nullptr) {
+  if (dynamic_data->serialization_support == nullptr ||
+      dynamic_data->serialization_support->methods.dynamic_data_deserialize ==
+          nullptr) {
     RMW_SET_ERROR_MSG("dynamic data has no deserialize support");
     return RMW_RET_INVALID_ARGUMENT;
   }
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
-  rmw_serialized_message_t serialized = rmw_get_zero_initialized_serialized_message();
-  if (rmw_serialized_message_init(&serialized, 0, &allocator) != RCUTILS_RET_OK) {
+  rmw_serialized_message_t serialized =
+      rmw_get_zero_initialized_serialized_message();
+  if (rmw_serialized_message_init(&serialized, 0, &allocator) !=
+      RCUTILS_RET_OK) {
     RMW_SET_ERROR_MSG("failed to initialize dynamic take serialized buffer");
     return RMW_RET_ERROR;
   }
 
-  rmw_ret_t ret = message_info != nullptr ?
-    rmw_take_serialized_message_with_info(subscription, &serialized, taken, message_info, allocation) :
-    rmw_take_serialized_message(subscription, &serialized, taken, allocation);
+  rmw_ret_t ret =
+      message_info != nullptr
+          ? rmw_take_serialized_message_with_info(
+                subscription, &serialized, taken, message_info, allocation)
+          : rmw_take_serialized_message(subscription, &serialized, taken,
+                                        allocation);
   if (ret != RMW_RET_OK || !*taken) {
     (void)rmw_serialized_message_fini(&serialized);
     return ret;
   }
 
-  rcutils_ret_t dyn_ret =
-    rosidl_dynamic_typesupport_dynamic_data_deserialize(dynamic_data, &serialized);
+  rcutils_ret_t dyn_ret = rosidl_dynamic_typesupport_dynamic_data_deserialize(
+      dynamic_data, &serialized);
   (void)rmw_serialized_message_fini(&serialized);
   if (dyn_ret != RCUTILS_RET_OK) {
     *taken = false;
@@ -3925,20 +4172,22 @@ static rmw_ret_t TakeDynamicCommon(
 }
 
 rmw_ret_t rmw_take_dynamic_message(
-  const rmw_subscription_t * subscription, rosidl_dynamic_typesupport_dynamic_data_t * dynamic_data,
-  bool * taken, rmw_subscription_allocation_t * allocation)
-{
+    const rmw_subscription_t *subscription,
+    rosidl_dynamic_typesupport_dynamic_data_t *dynamic_data, bool *taken,
+    rmw_subscription_allocation_t *allocation) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
   }
-  return TakeDynamicCommon(subscription, dynamic_data, taken, nullptr, allocation);
+  return TakeDynamicCommon(subscription, dynamic_data, taken, nullptr,
+                           allocation);
 }
 
 rmw_ret_t rmw_take_dynamic_message_with_info(
-  const rmw_subscription_t * subscription, rosidl_dynamic_typesupport_dynamic_data_t * dynamic_data,
-  bool * taken, rmw_message_info_t * message_info, rmw_subscription_allocation_t * allocation)
-{
+    const rmw_subscription_t *subscription,
+    rosidl_dynamic_typesupport_dynamic_data_t *dynamic_data, bool *taken,
+    rmw_message_info_t *message_info,
+    rmw_subscription_allocation_t *allocation) {
   rmw_ret_t ret = CheckSubscription(subscription);
   if (ret != RMW_RET_OK) {
     return ret;
@@ -3948,14 +4197,15 @@ rmw_ret_t rmw_take_dynamic_message_with_info(
     return RMW_RET_INVALID_ARGUMENT;
   }
   *message_info = rmw_get_zero_initialized_message_info();
-  return TakeDynamicCommon(subscription, dynamic_data, taken, message_info, allocation);
+  return TakeDynamicCommon(subscription, dynamic_data, taken, message_info,
+                           allocation);
 }
 
 rmw_ret_t rmw_serialization_support_init(
-  const char * serialization_lib_name, rcutils_allocator_t * allocator,
-  rosidl_dynamic_typesupport_serialization_support_t * serialization_support)
-{
-  if (serialization_lib_name == nullptr || allocator == nullptr || serialization_support == nullptr) {
+    const char *serialization_lib_name, rcutils_allocator_t *allocator,
+    rosidl_dynamic_typesupport_serialization_support_t *serialization_support) {
+  if (serialization_lib_name == nullptr || allocator == nullptr ||
+      serialization_support == nullptr) {
     RMW_SET_ERROR_MSG("serialization support init argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
@@ -3967,31 +4217,37 @@ rmw_ret_t rmw_serialization_support_init(
     return Unsupported("rmw_serialization_support_init");
   }
 
-  void * handle = OpenFastRtpsDynamicTypesupport();
+  void *handle = OpenFastRtpsDynamicTypesupport();
   if (handle == nullptr) {
     return RMW_RET_UNSUPPORTED;
   }
-  auto init_impl = ResolveDynamicTypesupportSymbol<DynamicSerializationImplInit>(
-    handle, "rosidl_dynamic_typesupport_fastrtps_init_serialization_support_impl");
-  auto init_interface = ResolveDynamicTypesupportSymbol<DynamicSerializationInterfaceInit>(
-    handle, "rosidl_dynamic_typesupport_fastrtps_init_serialization_support_interface");
+  auto init_impl = ResolveDynamicTypesupportSymbol<
+      DynamicSerializationImplInit>(
+      handle,
+      "rosidl_dynamic_typesupport_fastrtps_init_serialization_support_impl");
+  auto init_interface =
+      ResolveDynamicTypesupportSymbol<DynamicSerializationInterfaceInit>(
+          handle, "rosidl_dynamic_typesupport_fastrtps_init_serialization_"
+                  "support_interface");
   if (init_impl == nullptr || init_interface == nullptr) {
     dlclose(handle);
     return RMW_RET_UNSUPPORTED;
   }
 
   rosidl_dynamic_typesupport_serialization_support_impl_t impl =
-    rosidl_dynamic_typesupport_get_zero_initialized_serialization_support_impl();
+      rosidl_dynamic_typesupport_get_zero_initialized_serialization_support_impl();
   rosidl_dynamic_typesupport_serialization_support_interface_t methods =
-    rosidl_dynamic_typesupport_get_zero_initialized_serialization_support_interface();
+      rosidl_dynamic_typesupport_get_zero_initialized_serialization_support_interface();
   rcutils_ret_t ret = init_impl(allocator, &impl);
-  rmw_ret_t rmw_ret = DynamicSupportRcutilsError(ret, "FastRTPS dynamic serialization impl init");
+  rmw_ret_t rmw_ret = DynamicSupportRcutilsError(
+      ret, "FastRTPS dynamic serialization impl init");
   if (rmw_ret != RMW_RET_OK) {
     dlclose(handle);
     return rmw_ret;
   }
   ret = init_interface(allocator, &methods);
-  rmw_ret = DynamicSupportRcutilsError(ret, "FastRTPS dynamic serialization interface init");
+  rmw_ret = DynamicSupportRcutilsError(
+      ret, "FastRTPS dynamic serialization interface init");
   if (rmw_ret != RMW_RET_OK) {
     if (methods.serialization_support_impl_fini != nullptr) {
       (void)methods.serialization_support_impl_fini(&impl);
@@ -4000,8 +4256,9 @@ rmw_ret_t rmw_serialization_support_init(
     return rmw_ret;
   }
   ret = rosidl_dynamic_typesupport_serialization_support_init(
-    &impl, &methods, allocator, serialization_support);
-  rmw_ret = DynamicSupportRcutilsError(ret, "dynamic serialization support init");
+      &impl, &methods, allocator, serialization_support);
+  rmw_ret =
+      DynamicSupportRcutilsError(ret, "dynamic serialization support init");
   if (rmw_ret != RMW_RET_OK) {
     if (methods.serialization_support_impl_fini != nullptr) {
       (void)methods.serialization_support_impl_fini(&impl);
@@ -4014,4 +4271,4 @@ rmw_ret_t rmw_serialization_support_init(
   }
   return RMW_RET_OK;
 }
-}  // extern "C"
+} // extern "C"

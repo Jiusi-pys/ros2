@@ -23,9 +23,18 @@
 namespace rmw_mdds_cpp {
 
 namespace {
+constexpr uint32_t kProtectedTransportAuthenticated = 0x1u;
+constexpr uint32_t kProtectedTransportEncrypted = 0x2u;
+
 uint32_t TimeToMs(const rmw_time_t &time) {
   uint64_t ms = time.sec * 1000u + time.nsec / 1000000u;
   return ms > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(ms);
+}
+
+void SetError(std::string *error, const char *message) {
+  if (error != nullptr) {
+    *error = message;
+  }
 }
 
 bool EnvValueDisabled(const char *value) {
@@ -53,8 +62,15 @@ bool BridgeBackend::Required() const {
 
 bool BridgeBackend::Load() {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  const char *configured = std::getenv("RMW_MDDS_BRIDGE_LIBRARY");
   if (load_attempted_) {
-    return available_;
+    if (available_ || configured == nullptr || configured[0] == '\0') {
+      return available_;
+    }
+    if (library_ != nullptr) {
+      dlclose(library_);
+      library_ = nullptr;
+    }
   }
   load_attempted_ = true;
 
@@ -62,7 +78,6 @@ bool BridgeBackend::Load() {
     return false;
   }
 
-  const char *configured = std::getenv("RMW_MDDS_BRIDGE_LIBRARY");
   const char *library_name = (configured != nullptr && configured[0] != '\0')
                                  ? configured
                                  : "libmdds_bridge_shared.z.so";
@@ -123,6 +138,8 @@ bool BridgeBackend::Load() {
   subscriber_set_on_matched_ =
       reinterpret_cast<int32_t (*)(void *, void (*)(uint32_t, void *), void *)>(
           Symbol("MddsBridgeSubscriberSetOnMatchedCallback"));
+  activate_protected_transport_ = reinterpret_cast<int32_t (*)(uint32_t)>(
+      Symbol("MddsBridgeActivateProtectedTransport"));
 
   available_ = init_ != nullptr && shutdown_ != nullptr &&
                stop_spin_ != nullptr && create_publisher_qos_ != nullptr &&
@@ -182,6 +199,43 @@ bool BridgeBackend::ReturnLoanedSample(void *publisher, void *loan) {
 bool BridgeBackend::SupportsPublisherLoanedMessages(void *publisher) {
   return Available() && publisher != nullptr && borrow_loaned_sample_ != nullptr &&
          publish_loaned_ != nullptr && return_loaned_sample_ != nullptr;
+}
+
+bool BridgeBackend::ActivateProtectedTransport(
+    bool require_authenticated, bool require_encrypted, std::string *error) {
+  if (!require_authenticated && !require_encrypted) {
+    return true;
+  }
+  if (!Available()) {
+    SetError(
+        error,
+        "authenticated encrypted MDDS/DSoftBus transport is required for protected SROS2 "
+        "governance but the MDDS bridge is not available");
+    return false;
+  }
+  if (activate_protected_transport_ == nullptr) {
+    SetError(
+        error,
+        "authenticated encrypted MDDS/DSoftBus transport is required for protected SROS2 "
+        "governance but the MDDS bridge cannot activate a protected transport lane");
+    return false;
+  }
+
+  uint32_t flags = 0u;
+  if (require_authenticated) {
+    flags |= kProtectedTransportAuthenticated;
+  }
+  if (require_encrypted) {
+    flags |= kProtectedTransportEncrypted;
+  }
+  if (activate_protected_transport_(flags) != 0) {
+    SetError(
+        error,
+        "authenticated encrypted MDDS/DSoftBus transport is required for protected SROS2 "
+        "governance but protected transport activation failed");
+    return false;
+  }
+  return true;
 }
 
 void BridgeBackend::DestroyPublisher(void *publisher) {
@@ -351,6 +405,7 @@ void BridgeBackend::ResetForTesting() {
   publisher_set_on_matched_ = nullptr;
   subscriber_pub_count_ = nullptr;
   subscriber_set_on_matched_ = nullptr;
+  activate_protected_transport_ = nullptr;
 }
 
 BridgeQos ToBridgeQos(const rmw_qos_profile_t *qos) {

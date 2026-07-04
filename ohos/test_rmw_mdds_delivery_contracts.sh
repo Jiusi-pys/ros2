@@ -114,6 +114,7 @@ HOST_CONFORMANCE_SCRIPT="${ROOT_DIR}/ohos/tools/run_rmw_mdds_host_conformance.sh
 SECURITY_CONTRACT_SCRIPT="${ROOT_DIR}/ohos/test_rmw_mdds_security_contracts.sh"
 SROS2_POLICY_CONTRACT_SCRIPT="${ROOT_DIR}/ohos/test_rmw_mdds_sros2_policy_contracts.sh"
 BOARD_SROS2_POLICY_PROBE="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_sros2_policy.sh"
+BOARD_SROS2_PROTECTED_PROBE="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_sros2_protected.sh"
 ZERO_COPY_CONTRACT_SCRIPT="${ROOT_DIR}/ohos/test_rmw_mdds_zero_copy_contracts.sh"
 TYPE_DESCRIPTION_PROBE="${ROOT_DIR}/ohos/tools/run_rmw_mdds_type_description_probe.sh"
 HOST_CLI_PUBSUB_PROBE="${ROOT_DIR}/ohos/tools/run_rmw_mdds_host_cli_pubsub.sh"
@@ -152,6 +153,11 @@ require_contains "${SROS2_POLICY_CONTRACT_SCRIPT}" 'RESULT\|rmw_mdds_sros2_polic
 require_file "${BOARD_SROS2_POLICY_PROBE}"
 require_contains "${BOARD_SROS2_POLICY_PROBE}" 'RESULT\|board_sros2_authorized_pubsub\|PASS'
 require_contains "${BOARD_SROS2_POLICY_PROBE}" 'RESULT\|board_sros2_unauthorized_publish\|PASS'
+require_file "${BOARD_SROS2_PROTECTED_PROBE}"
+require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'RESULT\|board_sros2_signed_policy\|PASS'
+require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'RESULT\|board_sros2_protected_authorized_pubsub\|PASS'
+require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'RESULT\|board_sros2_protected_unauthorized_publish\|PASS'
+require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'RESULT\|board_sros2_protected_transport\|PASS'
 require_file "${ZERO_COPY_CONTRACT_SCRIPT}"
 require_contains "${ZERO_COPY_CONTRACT_SCRIPT}" 'RESULT\|rmw_mdds_zero_copy_contracts\|PASS'
 require_file "${ARTIFACT_CONTRACT_SCRIPT}"

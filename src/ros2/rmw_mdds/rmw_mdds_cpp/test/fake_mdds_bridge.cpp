@@ -105,6 +105,9 @@ static int g_return_loaned_count = 0;
 static int g_subscriber_take_loaned_count = 0;
 static int g_subscriber_take_loaned_with_storage_count = 0;
 static int g_subscriber_return_loaned_count = 0;
+static int g_protected_transport_activate_count = 0;
+static int g_protected_transport_authenticated = 0;
+static int g_protected_transport_encrypted = 0;
 static void *g_last_borrowed_data = nullptr;
 static uint32_t g_last_borrowed_size = 0;
 static void *g_last_subscriber_typed_storage = nullptr;
@@ -178,6 +181,9 @@ void FakeMddsBridgeReset(void) {
   g_subscriber_take_loaned_count = 0;
   g_subscriber_take_loaned_with_storage_count = 0;
   g_subscriber_return_loaned_count = 0;
+  g_protected_transport_activate_count = 0;
+  g_protected_transport_authenticated = 0;
+  g_protected_transport_encrypted = 0;
   g_last_borrowed_data = nullptr;
   g_last_borrowed_size = 0;
   g_last_subscriber_typed_storage = nullptr;
@@ -208,6 +214,18 @@ int FakeMddsBridgeSubscriberTakeLoanedWithStorageCount(void) {
 
 int FakeMddsBridgeSubscriberReturnLoanedCount(void) {
   return g_subscriber_return_loaned_count;
+}
+
+int FakeMddsBridgeProtectedTransportActivateCount(void) {
+  return g_protected_transport_activate_count;
+}
+
+int FakeMddsBridgeProtectedTransportAuthenticated(void) {
+  return g_protected_transport_authenticated;
+}
+
+int FakeMddsBridgeProtectedTransportEncrypted(void) {
+  return g_protected_transport_encrypted;
 }
 
 void *FakeMddsBridgeLastSubscriberTypedStorage(void) {
@@ -406,6 +424,16 @@ int32_t MddsBridgeInit(void) {
 
 void MddsBridgeShutdown(void) {}
 void MddsBridgeStopSpin(void) {}
+
+int32_t MddsBridgeActivateProtectedTransport(uint32_t flags) {
+  ++g_protected_transport_activate_count;
+  g_protected_transport_authenticated = (flags & 0x1u) != 0u ? 1 : 0;
+  g_protected_transport_encrypted = (flags & 0x2u) != 0u ? 1 : 0;
+  return g_protected_transport_authenticated != 0 &&
+         g_protected_transport_encrypted != 0
+           ? 0
+           : -1;
+}
 
 MddsBridgePublisher *MddsBridgeCreatePublisherQos(const char *topicName,
                                                   const char *typeName,

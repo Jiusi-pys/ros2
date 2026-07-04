@@ -18,33 +18,36 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace rmw_mdds_cpp
-{
+namespace rmw_mdds_cpp {
 
-class MddsLoanArena
-{
+class MddsLoanArena {
 public:
   MddsLoanArena() = default;
-  MddsLoanArena(void * storage, size_t capacity);
+  MddsLoanArena(void *storage, size_t capacity);
 
-  void Reset(void * storage, size_t capacity);
+  void Reset(void *storage, size_t capacity);
   void Reset();
 
-  void * Allocate(size_t size, size_t alignment);
-  bool Contains(const void * data, size_t size) const;
+  void *Allocate(size_t size, size_t alignment);
+  bool Contains(const void *data, size_t size) const;
 
   size_t BytesUsed() const;
   size_t SegmentCount() const;
-  void * Data() const;
+  void *Data() const;
   size_t Capacity() const;
 
 private:
-  uint8_t * begin_ = nullptr;
+  uint8_t *begin_ = nullptr;
   size_t capacity_ = 0;
   size_t offset_ = 0;
   size_t segment_count_ = 0;
 };
 
-}  // namespace rmw_mdds_cpp
+void ArmLoanArenaForNextAllocation(
+    MddsLoanArena *arena, size_t allocation_count = 1u,
+    size_t alignment = alignof(std::max_align_t));
+void DisarmLoanArenaAllocation(const MddsLoanArena *arena);
 
-#endif  // RMW_MDDS_CPP_SRC__LOAN_ARENA_HPP_
+} // namespace rmw_mdds_cpp
+
+#endif // RMW_MDDS_CPP_SRC__LOAN_ARENA_HPP_

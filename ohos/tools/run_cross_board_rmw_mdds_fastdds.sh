@@ -37,7 +37,7 @@ if ! [[ "${DOMAIN_ID}" =~ ^[0-9]+$ ]] || (( DOMAIN_ID > 232 )); then
 fi
 HDC_BIN="${HDC_BIN:-hdc}"
 REMOTE_PREFIX="${ROS2_OHOS_REMOTE_PREFIX:-/data/local/tmp/ohos-colcon-rk3588a}"
-BRIDGE_LIBRARY="${RMW_MDDS_BRIDGE_LIBRARY:-/data/local/tmp/libmdds_bridge_shared.z.so}"
+BRIDGE_LIBRARY="${RMW_MDDS_BRIDGE_LIBRARY:-${REMOTE_PREFIX}/lib/libmdds_bridge_shared.z.so}"
 GATEWAY_ENV="${MDDS_GATEWAY_ENV:-/data/local/tmp/device_gateway_env.sh}"
 GATEWAY_BIN="${MDDS_GATEWAY_BIN:-/data/local/tmp/mdds_dds_gateway}"
 GATEWAY_CONFIG="${MDDS_GATEWAY_CONFIG:-/data/local/tmp/gateway_rmw_mdds_rt.yaml}"

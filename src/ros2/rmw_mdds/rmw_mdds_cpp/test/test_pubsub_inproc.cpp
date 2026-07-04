@@ -61,6 +61,11 @@
 #include "rosidl_typesupport_cpp/message_type_support.hpp"
 #include "std_msgs/msg/detail/string__rosidl_typesupport_fastrtps_cpp.hpp"
 
+extern "C" void FakeMddsBridgeReset(void);
+extern "C" int FakeMddsBridgeProtectedTransportActivateCount(void);
+extern "C" int FakeMddsBridgeProtectedTransportAuthenticated(void);
+extern "C" int FakeMddsBridgeProtectedTransportEncrypted(void);
+
 namespace
 {
 class LocalOnlyTransportEnvironment : public testing::Environment
@@ -681,6 +686,44 @@ TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsSignedPolicyWithoutAuthentica
   rmw_reset_error();
 
   EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  std::filesystem::remove_all(security_root);
+}
+
+TEST(RmwMddsPubSub, DISABLED_FullParitySros2ActivatesBridgeProtectedTransport)
+{
+  const std::string security_root = CreateSignedProtectedSros2PolicyContractRoot("bridge_transport");
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  FakeMddsBridgeReset();
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_sros2_signed_bridge_transport");
+  SetSecurityRoot(&options, security_root);
+  options.security_options.enforce_security = RMW_SECURITY_ENFORCEMENT_ENFORCE;
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  const rmw_ret_t init_ret = rmw_init(&options, &context);
+  EXPECT_EQ(RMW_RET_OK, init_ret)
+    << "signed protected policy must activate authenticated/encrypted bridge transport: "
+    << rmw_get_error_string().str;
+  if (init_ret == RMW_RET_OK) {
+    EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+    EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  } else {
+    rmw_reset_error();
+  }
+
+  EXPECT_EQ(1, FakeMddsBridgeProtectedTransportActivateCount())
+    << "protected policy should activate the MDDS bridge protected transport lane";
+  EXPECT_EQ(1, FakeMddsBridgeProtectedTransportAuthenticated());
+  EXPECT_EQ(1, FakeMddsBridgeProtectedTransportEncrypted());
+
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  FakeMddsBridgeReset();
+  unsetenv("RMW_MDDS_BRIDGE_LIBRARY");
   std::filesystem::remove_all(security_root);
 }
 

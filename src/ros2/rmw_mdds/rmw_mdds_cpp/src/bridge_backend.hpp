@@ -21,25 +21,28 @@
 
 #include "rmw/types.h"
 
-namespace rmw_mdds_cpp {
+extern "C" {
+typedef struct MddsBridgePublisher MddsBridgePublisher;
+typedef struct MddsBridgeSubscriber MddsBridgeSubscriber;
+typedef struct MddsBridgeLoanedSample MddsBridgeLoanedSample;
 
-struct BridgeQos {
+typedef struct {
   int reliability;
   int durability;
   int historyKind;
   uint32_t historyDepth;
   uint32_t deadlineMs;
   uint32_t lifespanMs;
-};
+} MddsBridgeQos;
 
-struct BridgeSample {
+typedef struct {
   const void *data;
   uint32_t len;
   uint64_t sequenceNumber;
   uint8_t senderGuid[16];
-};
+} MddsBridgeSample;
 
-struct BridgeLoanedMessage {
+typedef struct {
   const void *data;
   uint32_t len;
   uint64_t timestamp;
@@ -47,9 +50,18 @@ struct BridgeLoanedMessage {
   uint8_t senderGuid[16];
   void *loanHandle;
   uint8_t loanKind;
-};
+} MddsBridgeLoanedMessage;
 
-using BridgeDataCallback = void (*)(const BridgeSample *sample, void *userData);
+typedef void (*MddsBridgeDataCallback)(const MddsBridgeSample *sample,
+                                       void *userData);
+} // extern "C"
+
+namespace rmw_mdds_cpp {
+
+using BridgeQos = ::MddsBridgeQos;
+using BridgeSample = ::MddsBridgeSample;
+using BridgeLoanedMessage = ::MddsBridgeLoanedMessage;
+using BridgeDataCallback = ::MddsBridgeDataCallback;
 
 class BridgeBackend {
 public:
@@ -70,9 +82,10 @@ public:
                   const rmw_qos_profile_t *qos, BridgeDataCallback callback,
                   void *user_data);
   bool SubscriberTakeLoaned(void *subscription, BridgeLoanedMessage *message);
-  bool SubscriberTakeLoanedWithStorage(
-      void *subscription, BridgeLoanedMessage *message, uint32_t storage_size,
-      void **storage, uint32_t *storage_capacity);
+  bool SubscriberTakeLoanedWithStorage(void *subscription,
+                                       BridgeLoanedMessage *message,
+                                       uint32_t storage_size, void **storage,
+                                       uint32_t *storage_capacity);
   bool SubscriberReturnLoaned(void *subscription, BridgeLoanedMessage *message);
   bool SupportsSubscriberLoanedMessages(void *subscription);
   void Unsubscribe(void *subscription);
@@ -116,31 +129,42 @@ private:
   bool load_attempted_ = false;
   bool available_ = false;
 
-  int32_t (*init_)() = nullptr;
-  void (*shutdown_)() = nullptr;
-  void (*stop_spin_)() = nullptr;
-  void *(*create_publisher_qos_)(const char *, const char *,
-                                 const BridgeQos *) = nullptr;
-  int32_t (*publish_)(void *, const void *, uint32_t) = nullptr;
-  int32_t (*borrow_loaned_sample_)(void *, uint32_t, void **,
+  int32_t (*init_)(void) = nullptr;
+  void (*shutdown_)(void) = nullptr;
+  void (*stop_spin_)(void) = nullptr;
+  MddsBridgePublisher *(*create_publisher_qos_)(
+      const char *, const char *, const MddsBridgeQos *) = nullptr;
+  int32_t (*publish_)(MddsBridgePublisher *, const void *, uint32_t) = nullptr;
+  int32_t (*borrow_loaned_sample_)(MddsBridgePublisher *, uint32_t,
+                                   MddsBridgeLoanedSample **,
                                    void **) = nullptr;
-  int32_t (*publish_loaned_)(void *, void *, uint32_t) = nullptr;
-  int32_t (*return_loaned_sample_)(void *, void *) = nullptr;
-  void (*destroy_publisher_)(void *) = nullptr;
-  void *(*subscribe_qos_)(const char *, const char *, const BridgeQos *,
-                          BridgeDataCallback, void *) = nullptr;
-  int32_t (*subscriber_take_loaned_)(void *, BridgeLoanedMessage *) = nullptr;
-  int32_t (*subscriber_take_loaned_with_storage_)(
-      void *, BridgeLoanedMessage *, uint32_t, void **, uint32_t *) = nullptr;
-  int32_t (*subscriber_return_loaned_)(void *, BridgeLoanedMessage *) = nullptr;
-  void (*unsubscribe_)(void *) = nullptr;
+  int32_t (*publish_loaned_)(MddsBridgePublisher *, MddsBridgeLoanedSample *,
+                             uint32_t) = nullptr;
+  int32_t (*return_loaned_sample_)(MddsBridgePublisher *,
+                                   MddsBridgeLoanedSample *) = nullptr;
+  void (*destroy_publisher_)(MddsBridgePublisher *) = nullptr;
+  MddsBridgeSubscriber *(*subscribe_qos_)(const char *, const char *,
+                                          const MddsBridgeQos *,
+                                          MddsBridgeDataCallback,
+                                          void *) = nullptr;
+  int32_t (*subscriber_take_loaned_)(MddsBridgeSubscriber *,
+                                     MddsBridgeLoanedMessage *) = nullptr;
+  int32_t (*subscriber_take_loaned_with_storage_)(MddsBridgeSubscriber *,
+                                                  MddsBridgeLoanedMessage *,
+                                                  uint32_t, void **,
+                                                  uint32_t *) = nullptr;
+  int32_t (*subscriber_return_loaned_)(MddsBridgeSubscriber *,
+                                       MddsBridgeLoanedMessage *) = nullptr;
+  void (*unsubscribe_)(MddsBridgeSubscriber *) = nullptr;
   /* Optional (newer bridge libs): matched-count query + listener. */
-  uint32_t (*publisher_sub_count_)(void *) = nullptr;
-  uint32_t (*publisher_unacked_count_)(void *) = nullptr;
-  int32_t (*publisher_set_on_matched_)(void *, void (*)(uint32_t, void *),
+  uint32_t (*publisher_sub_count_)(MddsBridgePublisher *) = nullptr;
+  uint32_t (*publisher_unacked_count_)(MddsBridgePublisher *) = nullptr;
+  int32_t (*publisher_set_on_matched_)(MddsBridgePublisher *,
+                                       void (*)(uint32_t, void *),
                                        void *) = nullptr;
-  uint32_t (*subscriber_pub_count_)(void *) = nullptr;
-  int32_t (*subscriber_set_on_matched_)(void *, void (*)(uint32_t, void *),
+  uint32_t (*subscriber_pub_count_)(MddsBridgeSubscriber *) = nullptr;
+  int32_t (*subscriber_set_on_matched_)(MddsBridgeSubscriber *,
+                                        void (*)(uint32_t, void *),
                                         void *) = nullptr;
   int32_t (*activate_protected_transport_)(uint32_t) = nullptr;
 };

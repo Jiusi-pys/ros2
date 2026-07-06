@@ -28,51 +28,49 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/detail/trigger__functions.h>
 #include <std_srvs/srv/detail/trigger__type_support.h>
 
+#include "ipc_protocol.hpp"
 #include "ipc_transport.hpp"
 #include "rcutils/allocator.h"
 #include "rcutils/strdup.h"
+#include "rcutils/types/string_array.h"
 #include "rmw/error_handling.h"
 #include "rmw/event.h"
 #include "rmw/events_statuses/matched.h"
-#include "rmw/init.h"
-#include "rmw/init_options.h"
 #include "rmw/get_node_info_and_types.h"
 #include "rmw/get_service_names_and_types.h"
 #include "rmw/get_topic_endpoint_info.h"
 #include "rmw/get_topic_names_and_types.h"
+#include "rmw/init.h"
+#include "rmw/init_options.h"
 #include "rmw/names_and_types.h"
 #include "rmw/publisher_options.h"
 #include "rmw/qos_profiles.h"
 #include "rmw/rmw.h"
 #include "rmw/subscription_options.h"
 #include "rmw/topic_endpoint_info_array.h"
-#include "rcutils/types/string_array.h"
 #include "rosidl_runtime_c/string_functions.h"
 #include "rosidl_typesupport_cpp/message_type_support.hpp"
 #include "rosidl_typesupport_interface/macros.h"
 
-namespace
-{
+namespace {
 using namespace std::chrono_literals;
 
-class TempDirectory
-{
+class TempDirectory {
 public:
-  TempDirectory()
-  {
+  TempDirectory() {
     char templ[] = "/tmp/rmw_mdds_broker_process_XXXXXX";
-    char * dir = mkdtemp(templ);
+    char *dir = mkdtemp(templ);
     if (dir != nullptr) {
       path_ = dir;
     }
   }
 
-  ~TempDirectory()
-  {
+  ~TempDirectory() {
     if (path_.empty()) {
       return;
     }
@@ -85,82 +83,50 @@ public:
     rmdir(path_.c_str());
   }
 
-  const std::string & path() const
-  {
-    return path_;
-  }
+  const std::string &path() const { return path_; }
 
-  std::string SocketPath() const
-  {
-    return path_ + "/broker.sock";
-  }
+  std::string SocketPath() const { return path_ + "/broker.sock"; }
 
-  std::string ReadyPath() const
-  {
-    return path_ + "/subscriber.ready";
-  }
+  std::string ReadyPath() const { return path_ + "/subscriber.ready"; }
 
-  std::string ResultPath() const
-  {
-    return path_ + "/subscriber.result";
-  }
+  std::string ResultPath() const { return path_ + "/subscriber.result"; }
 
-  std::string ServiceReadyPath() const
-  {
-    return path_ + "/service.ready";
-  }
+  std::string ServiceReadyPath() const { return path_ + "/service.ready"; }
 
-  std::string ClientReadyPath() const
-  {
-    return path_ + "/client.ready";
-  }
+  std::string ClientReadyPath() const { return path_ + "/client.ready"; }
 
-  std::string ClientResultPath() const
-  {
-    return path_ + "/client.result";
-  }
+  std::string ClientResultPath() const { return path_ + "/client.result"; }
 
 private:
   std::string path_;
 };
 
-void SetBrokerEnvironment(const std::string & socket_path)
-{
+void SetBrokerEnvironment(const std::string &socket_path) {
   setenv("RMW_MDDS_BROKER", "1", 1);
   setenv("RMW_MDDS_BROKER_SOCKET", socket_path.c_str(), 1);
   setenv("RMW_MDDS_BRIDGE_LIBRARY", "/no/such/libmdds_bridge_shared.z.so", 1);
 }
 
-void SetDefaultBrokerEnvironment(const std::string & socket_path)
-{
+void SetDefaultBrokerEnvironment(const std::string &socket_path) {
   unsetenv("RMW_MDDS_BROKER");
   setenv("RMW_MDDS_BROKER_SOCKET", socket_path.c_str(), 1);
   unsetenv("RMW_MDDS_BRIDGE_LIBRARY");
 }
 
-void SetEnclave(rmw_init_options_t * options, const char * enclave)
-{
+void SetEnclave(rmw_init_options_t *options, const char *enclave) {
   options->allocator.deallocate(options->enclave, options->allocator.state);
   options->enclave = rcutils_strdup(enclave, options->allocator);
 }
 
-void IgnoreRmwRet(rmw_ret_t ret)
-{
-  (void)ret;
-}
+void IgnoreRmwRet(rmw_ret_t ret) { (void)ret; }
 
-void IgnoreRcutilsRet(rcutils_ret_t ret)
-{
-  (void)ret;
-}
+void IgnoreRcutilsRet(rcutils_ret_t ret) { (void)ret; }
 
-bool FileExists(const std::string & path)
-{
+bool FileExists(const std::string &path) {
   return access(path.c_str(), F_OK) == 0;
 }
 
-std::string CurrentExecutablePath(const char * fallback)
-{
+std::string CurrentExecutablePath(const char *fallback) {
   std::vector<char> path(4096);
   const ssize_t len = readlink("/proc/self/exe", path.data(), path.size() - 1u);
   if (len > 0) {
@@ -170,8 +136,7 @@ std::string CurrentExecutablePath(const char * fallback)
   return fallback == nullptr ? std::string() : fallback;
 }
 
-std::string DirectoryName(const std::string & path)
-{
+std::string DirectoryName(const std::string &path) {
   const size_t slash = path.find_last_of('/');
   if (slash == std::string::npos) {
     return ".";
@@ -182,8 +147,8 @@ std::string DirectoryName(const std::string & path)
   return path.substr(0, slash);
 }
 
-pid_t SpawnProcess(const std::string & executable, const std::vector<std::string> & args)
-{
+pid_t SpawnProcess(const std::string &executable,
+                   const std::vector<std::string> &args) {
   const pid_t pid = fork();
   if (pid != 0) {
     return pid;
@@ -192,7 +157,7 @@ pid_t SpawnProcess(const std::string & executable, const std::vector<std::string
   std::vector<char *> argv;
   argv.reserve(args.size() + 2u);
   argv.push_back(const_cast<char *>(executable.c_str()));
-  for (const auto & arg : args) {
+  for (const auto &arg : args) {
     argv.push_back(const_cast<char *>(arg.c_str()));
   }
   argv.push_back(nullptr);
@@ -200,8 +165,7 @@ pid_t SpawnProcess(const std::string & executable, const std::vector<std::string
   _exit(127);
 }
 
-int WaitForExit(pid_t pid, std::chrono::milliseconds timeout)
-{
+int WaitForExit(pid_t pid, std::chrono::milliseconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   int status = 0;
   while (std::chrono::steady_clock::now() < deadline) {
@@ -219,18 +183,17 @@ int WaitForExit(pid_t pid, std::chrono::milliseconds timeout)
   return -1;
 }
 
-bool ExitedWithZero(int status)
-{
+bool ExitedWithZero(int status) {
   return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
-bool WaitForBrokerSocket(const std::string & socket_path, std::chrono::milliseconds timeout)
-{
+bool WaitForBrokerSocket(const std::string &socket_path,
+                         std::chrono::milliseconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     std::string error;
     rmw_mdds_cpp::ipc::UniqueFd fd =
-      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path, &error);
+        rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path, &error);
     if (fd) {
       return true;
     }
@@ -239,8 +202,71 @@ bool WaitForBrokerSocket(const std::string & socket_path, std::chrono::milliseco
   return false;
 }
 
-bool WaitForFile(const std::string & path, std::chrono::milliseconds timeout)
-{
+bool RawBrokerGraphContainsPublisher(const std::string &socket_path,
+                                     const std::string &topic,
+                                     const std::string &type) {
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd observer =
+      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path, &error);
+  if (!observer) {
+    return false;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + 1s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    rmw_mdds_cpp::ipc::Frame frame;
+    if (rmw_mdds_cpp::ipc::ReadFrame(observer.get(), &frame, &error) !=
+        rmw_mdds_cpp::ipc::ReadFrameStatus::kOk) {
+      return false;
+    }
+    if (frame.kind != rmw_mdds_cpp::ipc::MessageKind::kGraphUpdate) {
+      continue;
+    }
+    std::vector<rmw_mdds_cpp::ipc::EndpointDescriptor> endpoints;
+    if (!rmw_mdds_cpp::ipc::DecodeEndpointList(
+            frame.payload.data(), frame.payload.size(), &endpoints, &error)) {
+      return false;
+    }
+    for (const auto &endpoint : endpoints) {
+      if (endpoint.kind == rmw_mdds_cpp::ipc::EndpointKind::kPublisher &&
+          endpoint.topic_name == topic && endpoint.type_name == type) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+rmw_mdds_cpp::ipc::EndpointDescriptor
+MakeGraphEndpoint(uint64_t entity_id, rmw_mdds_cpp::ipc::EndpointKind kind,
+                  const std::string &node_name,
+                  const std::string &topic_name,
+                  const std::string &type_name) {
+  rmw_mdds_cpp::ipc::EndpointDescriptor endpoint;
+  endpoint.entity_id = entity_id;
+  endpoint.kind = kind;
+  endpoint.node_name = node_name;
+  endpoint.node_namespace = "/mdds";
+  endpoint.node_enclave = "/mdds_test";
+  endpoint.topic_name = topic_name;
+  endpoint.type_name = type_name;
+  endpoint.mdds_type_name = type_name;
+  endpoint.qos = rmw_qos_profile_default;
+  return endpoint;
+}
+
+bool WriteGraphUpdateFrame(
+    int fd,
+    const std::vector<rmw_mdds_cpp::ipc::EndpointDescriptor> &endpoints) {
+  std::string error;
+  return rmw_mdds_cpp::ipc::WriteFrame(
+      fd,
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kGraphUpdate, 0u,
+          rmw_mdds_cpp::ipc::EncodeEndpointList(endpoints)},
+      &error);
+}
+
+bool WaitForFile(const std::string &path, std::chrono::milliseconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     if (FileExists(path)) {
@@ -251,18 +277,16 @@ bool WaitForFile(const std::string & path, std::chrono::milliseconds timeout)
   return false;
 }
 
-bool NamesAndTypesContains(
-  const rmw_names_and_types_t & names_and_types, const std::string & name,
-  const std::string & type)
-{
+bool NamesAndTypesContains(const rmw_names_and_types_t &names_and_types,
+                           const std::string &name, const std::string &type) {
   for (size_t i = 0; i < names_and_types.names.size; ++i) {
-    if (
-      names_and_types.names.data[i] == nullptr ||
-      name != names_and_types.names.data[i]) {
+    if (names_and_types.names.data[i] == nullptr ||
+        name != names_and_types.names.data[i]) {
       continue;
     }
     for (size_t j = 0; j < names_and_types.types[i].size; ++j) {
-      if (names_and_types.types[i].data[j] != nullptr && type == names_and_types.types[i].data[j]) {
+      if (names_and_types.types[i].data[j] != nullptr &&
+          type == names_and_types.types[i].data[j]) {
         return true;
       }
     }
@@ -270,61 +294,62 @@ bool NamesAndTypesContains(
   return false;
 }
 
-bool NodeNamesContain(
-  const rcutils_string_array_t & names, const rcutils_string_array_t & namespaces,
-  const std::string & expected_name, const std::string & expected_namespace)
-{
+bool NodeNamesContain(const rcutils_string_array_t &names,
+                      const rcutils_string_array_t &namespaces,
+                      const std::string &expected_name,
+                      const std::string &expected_namespace) {
   if (names.size != namespaces.size) {
     return false;
   }
   for (size_t i = 0; i < names.size; ++i) {
-    if (
-      names.data[i] != nullptr && namespaces.data[i] != nullptr &&
-      expected_name == names.data[i] && expected_namespace == namespaces.data[i]) {
+    if (names.data[i] != nullptr && namespaces.data[i] != nullptr &&
+        expected_name == names.data[i] &&
+        expected_namespace == namespaces.data[i]) {
       return true;
     }
   }
   return false;
 }
 
-bool NodeNamesWithEnclavesContain(
-  const rcutils_string_array_t & names, const rcutils_string_array_t & namespaces,
-  const rcutils_string_array_t & enclaves, const std::string & expected_name,
-  const std::string & expected_namespace, const std::string & expected_enclave)
-{
+bool NodeNamesWithEnclavesContain(const rcutils_string_array_t &names,
+                                  const rcutils_string_array_t &namespaces,
+                                  const rcutils_string_array_t &enclaves,
+                                  const std::string &expected_name,
+                                  const std::string &expected_namespace,
+                                  const std::string &expected_enclave) {
   if (names.size != namespaces.size || names.size != enclaves.size) {
     return false;
   }
   for (size_t i = 0; i < names.size; ++i) {
-    if (
-      names.data[i] != nullptr && namespaces.data[i] != nullptr && enclaves.data[i] != nullptr &&
-      expected_name == names.data[i] && expected_namespace == namespaces.data[i] &&
-      expected_enclave == enclaves.data[i]) {
+    if (names.data[i] != nullptr && namespaces.data[i] != nullptr &&
+        enclaves.data[i] != nullptr && expected_name == names.data[i] &&
+        expected_namespace == namespaces.data[i] &&
+        expected_enclave == enclaves.data[i]) {
       return true;
     }
   }
   return false;
 }
 
-bool PublisherEndpointInfosContain(
-  const rmw_topic_endpoint_info_array_t & infos, const std::string & expected_node_name,
-  const std::string & expected_namespace, const std::string & expected_type)
-{
+bool PublisherEndpointInfosContain(const rmw_topic_endpoint_info_array_t &infos,
+                                   const std::string &expected_node_name,
+                                   const std::string &expected_namespace,
+                                   const std::string &expected_type) {
   for (size_t i = 0; i < infos.size; ++i) {
-    const rmw_topic_endpoint_info_t & info = infos.info_array[i];
-    if (
-      info.node_name != nullptr && info.node_namespace != nullptr &&
-      info.topic_type != nullptr && expected_node_name == info.node_name &&
-      expected_namespace == info.node_namespace && expected_type == info.topic_type &&
-      info.endpoint_type == RMW_ENDPOINT_PUBLISHER) {
+    const rmw_topic_endpoint_info_t &info = infos.info_array[i];
+    if (info.node_name != nullptr && info.node_namespace != nullptr &&
+        info.topic_type != nullptr && expected_node_name == info.node_name &&
+        expected_namespace == info.node_namespace &&
+        expected_type == info.topic_type &&
+        info.endpoint_type == RMW_ENDPOINT_PUBLISHER) {
       return true;
     }
   }
   return false;
 }
 
-int RunPublisher(const std::string & socket_path, const std::string & topic, const std::string & payload)
-{
+int RunPublisher(const std::string &socket_path, const std::string &topic,
+                 const std::string &payload) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -338,16 +363,20 @@ int RunPublisher(const std::string & socket_path, const std::string & topic, con
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_process_pub", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_process_pub", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
-  rmw_publisher_t * publisher = rmw_create_publisher(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &publisher_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, topic.c_str(),
+                           &rmw_qos_profile_default, &publisher_options);
   if (publisher == nullptr) {
     return 5;
   }
@@ -371,9 +400,137 @@ int RunPublisher(const std::string & socket_path, const std::string & topic, con
   return ret;
 }
 
-int RunDefaultPublisher(
-  const std::string & socket_path, const std::string & topic, const std::string & payload)
-{
+int RunLoanedInt32Publisher(const std::string &socket_path,
+                            const std::string &topic, int32_t payload) {
+  SetBrokerEnvironment(socket_path);
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  if (rmw_init_options_init(&options, allocator) != RMW_RET_OK) {
+    return 2;
+  }
+  SetEnclave(&options, "/rmw_mdds_broker_loaned_pub");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  if (rmw_init(&options, &context) != RMW_RET_OK) {
+    return 3;
+  }
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_loaned_pub", "/mdds");
+  if (node == nullptr) {
+    return 4;
+  }
+
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::Int32>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, topic.c_str(),
+                           &rmw_qos_profile_default, &publisher_options);
+  if (publisher == nullptr) {
+    return 5;
+  }
+  if (!publisher->can_loan_messages) {
+    IgnoreRmwRet(rmw_destroy_publisher(node, publisher));
+    IgnoreRmwRet(rmw_destroy_node(node));
+    IgnoreRmwRet(rmw_shutdown(&context));
+    IgnoreRmwRet(rmw_context_fini(&context));
+    IgnoreRmwRet(rmw_init_options_fini(&options));
+    return 6;
+  }
+
+  std::this_thread::sleep_for(50ms);
+  void *loaned_message = nullptr;
+  int ret = 0;
+  if (rmw_borrow_loaned_message(publisher, type_support, &loaned_message) !=
+      RMW_RET_OK) {
+    ret = 7;
+  } else {
+    auto *message = static_cast<std_msgs::msg::Int32 *>(loaned_message);
+    message->data = payload;
+    if (rmw_publish_loaned_message(publisher, loaned_message, nullptr) !=
+        RMW_RET_OK) {
+      ret = 8;
+    }
+  }
+
+  IgnoreRmwRet(rmw_destroy_publisher(node, publisher));
+  IgnoreRmwRet(rmw_destroy_node(node));
+  IgnoreRmwRet(rmw_shutdown(&context));
+  IgnoreRmwRet(rmw_context_fini(&context));
+  IgnoreRmwRet(rmw_init_options_fini(&options));
+  return ret;
+}
+
+int RunLoanedStringPublisher(const std::string &socket_path,
+                             const std::string &topic,
+                             const std::string &payload) {
+  SetBrokerEnvironment(socket_path);
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  if (rmw_init_options_init(&options, allocator) != RMW_RET_OK) {
+    return 2;
+  }
+  SetEnclave(&options, "/rmw_mdds_broker_loaned_string_pub");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  if (rmw_init(&options, &context) != RMW_RET_OK) {
+    return 3;
+  }
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_loaned_string_pub", "/mdds");
+  if (node == nullptr) {
+    return 4;
+  }
+
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, topic.c_str(),
+                           &rmw_qos_profile_default, &publisher_options);
+  if (publisher == nullptr) {
+    return 5;
+  }
+  if (!publisher->can_loan_messages) {
+    IgnoreRmwRet(rmw_destroy_publisher(node, publisher));
+    IgnoreRmwRet(rmw_destroy_node(node));
+    IgnoreRmwRet(rmw_shutdown(&context));
+    IgnoreRmwRet(rmw_context_fini(&context));
+    IgnoreRmwRet(rmw_init_options_fini(&options));
+    return 6;
+  }
+
+  std::this_thread::sleep_for(50ms);
+  void *loaned_message = nullptr;
+  int ret = 0;
+  if (rmw_borrow_loaned_message(publisher, type_support, &loaned_message) !=
+      RMW_RET_OK) {
+    ret = 7;
+  } else {
+    auto *message = static_cast<std_msgs::msg::String *>(loaned_message);
+    message->data = payload;
+    if (rmw_publish_loaned_message(publisher, loaned_message, nullptr) !=
+        RMW_RET_OK) {
+      ret = 8;
+    }
+  }
+
+  IgnoreRmwRet(rmw_destroy_publisher(node, publisher));
+  IgnoreRmwRet(rmw_destroy_node(node));
+  IgnoreRmwRet(rmw_shutdown(&context));
+  IgnoreRmwRet(rmw_context_fini(&context));
+  IgnoreRmwRet(rmw_init_options_fini(&options));
+  return ret;
+}
+
+int RunDefaultPublisher(const std::string &socket_path,
+                        const std::string &topic, const std::string &payload) {
   SetDefaultBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -387,16 +544,20 @@ int RunDefaultPublisher(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_default_process_pub", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_default_process_pub", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
-  rmw_publisher_t * publisher = rmw_create_publisher(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &publisher_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, topic.c_str(),
+                           &rmw_qos_profile_default, &publisher_options);
   if (publisher == nullptr) {
     return 5;
   }
@@ -405,7 +566,8 @@ int RunDefaultPublisher(
   msg.data = payload;
   int ret = 0;
   if (rmw_publish(publisher, &msg, nullptr) != RMW_RET_OK) {
-    std::cerr << "default publisher rmw_publish failed: " << rmw_get_error_string().str << "\n";
+    std::cerr << "default publisher rmw_publish failed: "
+              << rmw_get_error_string().str << "\n";
     rmw_reset_error();
     ret = 6;
   }
@@ -418,10 +580,10 @@ int RunDefaultPublisher(
   return ret;
 }
 
-int RunSubscriber(
-  const std::string & socket_path, const std::string & ready_path,
-  const std::string & result_path, const std::string & topic, const std::string & expected)
-{
+int RunSubscriber(const std::string &socket_path, const std::string &ready_path,
+                  const std::string &result_path, const std::string &topic,
+                  const std::string &expected,
+                  bool reliable_sensor_qos = false) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -435,16 +597,25 @@ int RunSubscriber(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_process_sub", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_process_sub", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
-  rmw_subscription_t * subscription = rmw_create_subscription(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &subscription_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_qos_profile_t qos_profile = reliable_sensor_qos
+                                      ? rmw_qos_profile_sensor_data
+                                      : rmw_qos_profile_default;
+  if (reliable_sensor_qos) {
+    qos_profile.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+  }
+  rmw_subscription_t *subscription = rmw_create_subscription(
+      node, type_support, topic.c_str(), &qos_profile, &subscription_options);
   if (subscription == nullptr) {
     return 5;
   }
@@ -454,7 +625,7 @@ int RunSubscriber(
     ready << "ready\n";
   }
 
-  rmw_wait_set_t * wait_set = rmw_create_wait_set(&context, 1);
+  rmw_wait_set_t *wait_set = rmw_create_wait_set(&context, 1);
   if (wait_set == nullptr) {
     return 6;
   }
@@ -462,19 +633,20 @@ int RunSubscriber(
   int ret = 7;
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
-    void * subscription_handle = subscription->data;
+    void *subscription_handle = subscription->data;
     rmw_subscriptions_t subscriptions;
     subscriptions.subscriber_count = 1;
     subscriptions.subscribers = &subscription_handle;
     rmw_time_t timeout;
     timeout.sec = 0;
     timeout.nsec = 100000000;
-    const rmw_ret_t wait_ret =
-      rmw_wait(&subscriptions, nullptr, nullptr, nullptr, nullptr, wait_set, &timeout);
+    const rmw_ret_t wait_ret = rmw_wait(&subscriptions, nullptr, nullptr,
+                                        nullptr, nullptr, wait_set, &timeout);
     if (wait_ret == RMW_RET_OK && subscriptions.subscribers[0] != nullptr) {
       std_msgs::msg::String received;
       bool taken = false;
-      if (rmw_take(subscription, &received, &taken, nullptr) == RMW_RET_OK && taken) {
+      if (rmw_take(subscription, &received, &taken, nullptr) == RMW_RET_OK &&
+          taken) {
         std::ofstream result(result_path);
         result << received.data << "\n";
         ret = received.data == expected ? 0 : 8;
@@ -492,10 +664,90 @@ int RunSubscriber(
   return ret;
 }
 
-int RunDefaultSubscriber(
-  const std::string & socket_path, const std::string & ready_path,
-  const std::string & result_path, const std::string & topic, const std::string & expected)
-{
+int RunInt32Subscriber(const std::string &socket_path,
+                       const std::string &ready_path,
+                       const std::string &result_path, const std::string &topic,
+                       int32_t expected) {
+  SetBrokerEnvironment(socket_path);
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  if (rmw_init_options_init(&options, allocator) != RMW_RET_OK) {
+    return 2;
+  }
+  SetEnclave(&options, "/rmw_mdds_broker_int32_sub");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  if (rmw_init(&options, &context) != RMW_RET_OK) {
+    return 3;
+  }
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_int32_sub", "/mdds");
+  if (node == nullptr) {
+    return 4;
+  }
+
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::Int32>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_subscription_t *subscription =
+      rmw_create_subscription(node, type_support, topic.c_str(),
+                              &rmw_qos_profile_default, &subscription_options);
+  if (subscription == nullptr) {
+    return 5;
+  }
+
+  {
+    std::ofstream ready(ready_path);
+    ready << "ready\n";
+  }
+
+  rmw_wait_set_t *wait_set = rmw_create_wait_set(&context, 1);
+  if (wait_set == nullptr) {
+    return 6;
+  }
+
+  int ret = 7;
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    void *subscription_handle = subscription->data;
+    rmw_subscriptions_t subscriptions;
+    subscriptions.subscriber_count = 1;
+    subscriptions.subscribers = &subscription_handle;
+    rmw_time_t timeout;
+    timeout.sec = 0;
+    timeout.nsec = 100000000;
+    const rmw_ret_t wait_ret = rmw_wait(&subscriptions, nullptr, nullptr,
+                                        nullptr, nullptr, wait_set, &timeout);
+    if (wait_ret == RMW_RET_OK && subscriptions.subscribers[0] != nullptr) {
+      std_msgs::msg::Int32 received;
+      bool taken = false;
+      if (rmw_take(subscription, &received, &taken, nullptr) == RMW_RET_OK &&
+          taken) {
+        std::ofstream result(result_path);
+        result << received.data << "\n";
+        ret = received.data == expected ? 0 : 8;
+        break;
+      }
+    }
+  }
+
+  IgnoreRmwRet(rmw_destroy_wait_set(wait_set));
+  IgnoreRmwRet(rmw_destroy_subscription(node, subscription));
+  IgnoreRmwRet(rmw_destroy_node(node));
+  IgnoreRmwRet(rmw_shutdown(&context));
+  IgnoreRmwRet(rmw_context_fini(&context));
+  IgnoreRmwRet(rmw_init_options_fini(&options));
+  return ret;
+}
+
+int RunDefaultSubscriber(const std::string &socket_path,
+                         const std::string &ready_path,
+                         const std::string &result_path,
+                         const std::string &topic,
+                         const std::string &expected) {
   SetDefaultBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -509,16 +761,20 @@ int RunDefaultSubscriber(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_default_process_sub", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_default_process_sub", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
-  rmw_subscription_t * subscription = rmw_create_subscription(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &subscription_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_subscription_t *subscription =
+      rmw_create_subscription(node, type_support, topic.c_str(),
+                              &rmw_qos_profile_default, &subscription_options);
   if (subscription == nullptr) {
     return 5;
   }
@@ -528,7 +784,7 @@ int RunDefaultSubscriber(
     ready << "ready\n";
   }
 
-  rmw_wait_set_t * wait_set = rmw_create_wait_set(&context, 1);
+  rmw_wait_set_t *wait_set = rmw_create_wait_set(&context, 1);
   if (wait_set == nullptr) {
     return 6;
   }
@@ -536,19 +792,20 @@ int RunDefaultSubscriber(
   int ret = 7;
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
-    void * subscription_handle = subscription->data;
+    void *subscription_handle = subscription->data;
     rmw_subscriptions_t subscriptions;
     subscriptions.subscriber_count = 1;
     subscriptions.subscribers = &subscription_handle;
     rmw_time_t timeout;
     timeout.sec = 0;
     timeout.nsec = 100000000;
-    const rmw_ret_t wait_ret =
-      rmw_wait(&subscriptions, nullptr, nullptr, nullptr, nullptr, wait_set, &timeout);
+    const rmw_ret_t wait_ret = rmw_wait(&subscriptions, nullptr, nullptr,
+                                        nullptr, nullptr, wait_set, &timeout);
     if (wait_ret == RMW_RET_OK && subscriptions.subscribers[0] != nullptr) {
       std_msgs::msg::String received;
       bool taken = false;
-      if (rmw_take(subscription, &received, &taken, nullptr) == RMW_RET_OK && taken) {
+      if (rmw_take(subscription, &received, &taken, nullptr) == RMW_RET_OK &&
+          taken) {
         std::ofstream result(result_path);
         result << received.data << "\n";
         ret = received.data == expected ? 0 : 8;
@@ -566,9 +823,8 @@ int RunDefaultSubscriber(
   return ret;
 }
 
-int RunGraphPublisher(
-  const std::string & socket_path, const std::string & ready_path, const std::string & topic)
-{
+int RunGraphPublisher(const std::string &socket_path,
+                      const std::string &ready_path, const std::string &topic) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -582,16 +838,20 @@ int RunGraphPublisher(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_graph_pub", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_graph_pub", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
-  rmw_publisher_t * publisher = rmw_create_publisher(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &publisher_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, topic.c_str(),
+                           &rmw_qos_profile_default, &publisher_options);
   if (publisher == nullptr) {
     return 5;
   }
@@ -611,9 +871,9 @@ int RunGraphPublisher(
   return 0;
 }
 
-int RunMatchedPublisher(
-  const std::string & socket_path, const std::string & ready_path, const std::string & topic)
-{
+int RunMatchedPublisher(const std::string &socket_path,
+                        const std::string &ready_path,
+                        const std::string &topic) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -627,16 +887,20 @@ int RunMatchedPublisher(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_matched_pub", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_matched_pub", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
-  rmw_publisher_t * publisher = rmw_create_publisher(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &publisher_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, topic.c_str(),
+                           &rmw_qos_profile_default, &publisher_options);
   if (publisher == nullptr) {
     return 5;
   }
@@ -656,9 +920,9 @@ int RunMatchedPublisher(
   return 0;
 }
 
-int RunMatchedSubscriber(
-  const std::string & socket_path, const std::string & ready_path, const std::string & topic)
-{
+int RunMatchedSubscriber(const std::string &socket_path,
+                         const std::string &ready_path,
+                         const std::string &topic) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -672,16 +936,20 @@ int RunMatchedSubscriber(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_matched_sub", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_matched_sub", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
-  rmw_subscription_t * subscription = rmw_create_subscription(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &subscription_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_subscription_t *subscription =
+      rmw_create_subscription(node, type_support, topic.c_str(),
+                              &rmw_qos_profile_default, &subscription_options);
   if (subscription == nullptr) {
     return 5;
   }
@@ -701,9 +969,9 @@ int RunMatchedSubscriber(
   return 0;
 }
 
-int RunMatchedPublisherObserver(
-  const std::string & socket_path, const std::string & result_path, const std::string & topic)
-{
+int RunMatchedPublisherObserver(const std::string &socket_path,
+                                const std::string &result_path,
+                                const std::string &topic) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -717,16 +985,20 @@ int RunMatchedPublisherObserver(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_matched_pub_observer", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_matched_pub_observer", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
-  rmw_publisher_t * publisher = rmw_create_publisher(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &publisher_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, topic.c_str(),
+                           &rmw_qos_profile_default, &publisher_options);
   if (publisher == nullptr) {
     return 5;
   }
@@ -735,9 +1007,9 @@ int RunMatchedPublisherObserver(
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
     size_t subscription_count = 0;
-    if (
-      rmw_publisher_count_matched_subscriptions(publisher, &subscription_count) == RMW_RET_OK &&
-      subscription_count == 1u) {
+    if (rmw_publisher_count_matched_subscriptions(
+            publisher, &subscription_count) == RMW_RET_OK &&
+        subscription_count == 1u) {
       std::ofstream result(result_path);
       result << "publisher-matched-ok\n";
       ret = 0;
@@ -754,9 +1026,9 @@ int RunMatchedPublisherObserver(
   return ret;
 }
 
-int RunMatchedSubscriberObserver(
-  const std::string & socket_path, const std::string & result_path, const std::string & topic)
-{
+int RunMatchedSubscriberObserver(const std::string &socket_path,
+                                 const std::string &result_path,
+                                 const std::string &topic) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -770,16 +1042,20 @@ int RunMatchedSubscriberObserver(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_matched_sub_observer", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_matched_sub_observer", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
-  rmw_subscription_t * subscription = rmw_create_subscription(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &subscription_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_subscription_t *subscription =
+      rmw_create_subscription(node, type_support, topic.c_str(),
+                              &rmw_qos_profile_default, &subscription_options);
   if (subscription == nullptr) {
     return 5;
   }
@@ -788,9 +1064,9 @@ int RunMatchedSubscriberObserver(
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
     size_t publisher_count = 0;
-    if (
-      rmw_subscription_count_matched_publishers(subscription, &publisher_count) == RMW_RET_OK &&
-      publisher_count == 1u) {
+    if (rmw_subscription_count_matched_publishers(
+            subscription, &publisher_count) == RMW_RET_OK &&
+        publisher_count == 1u) {
       std::ofstream result(result_path);
       result << "subscription-matched-ok\n";
       ret = 0;
@@ -807,9 +1083,9 @@ int RunMatchedSubscriberObserver(
   return ret;
 }
 
-int RunMatchedPublisherEventObserver(
-  const std::string & socket_path, const std::string & result_path, const std::string & topic)
-{
+int RunMatchedPublisherEventObserver(const std::string &socket_path,
+                                     const std::string &result_path,
+                                     const std::string &topic) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -823,25 +1099,30 @@ int RunMatchedPublisherEventObserver(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_pub_event_observer", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_pub_event_observer", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
-  rmw_publisher_t * publisher = rmw_create_publisher(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &publisher_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, topic.c_str(),
+                           &rmw_qos_profile_default, &publisher_options);
   if (publisher == nullptr) {
     return 5;
   }
 
   rmw_event_t event = rmw_get_zero_initialized_event();
-  if (rmw_publisher_event_init(&event, publisher, RMW_EVENT_PUBLICATION_MATCHED) != RMW_RET_OK) {
+  if (rmw_publisher_event_init(&event, publisher,
+                               RMW_EVENT_PUBLICATION_MATCHED) != RMW_RET_OK) {
     return 6;
   }
-  rmw_wait_set_t * wait_set = rmw_create_wait_set(&context, 1);
+  rmw_wait_set_t *wait_set = rmw_create_wait_set(&context, 1);
   if (wait_set == nullptr) {
     return 7;
   }
@@ -849,24 +1130,23 @@ int RunMatchedPublisherEventObserver(
   int ret = 8;
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
-    void * event_handle = &event;
+    void *event_handle = &event;
     rmw_events_t events;
     events.event_count = 1;
     events.events = &event_handle;
     rmw_time_t timeout;
     timeout.sec = 0;
     timeout.nsec = 100000000;
-    const rmw_ret_t wait_ret =
-      rmw_wait(nullptr, nullptr, nullptr, nullptr, &events, wait_set, &timeout);
+    const rmw_ret_t wait_ret = rmw_wait(nullptr, nullptr, nullptr, nullptr,
+                                        &events, wait_set, &timeout);
     if (wait_ret != RMW_RET_OK || events.events[0] == nullptr) {
       continue;
     }
     rmw_matched_status_t status{};
     bool taken = false;
-    if (
-      rmw_take_event(&event, &status, &taken) == RMW_RET_OK && taken &&
-      status.total_count == 1u && status.total_count_change == 1u &&
-      status.current_count == 1u && status.current_count_change == 1) {
+    if (rmw_take_event(&event, &status, &taken) == RMW_RET_OK && taken &&
+        status.total_count == 1u && status.total_count_change == 1u &&
+        status.current_count == 1u && status.current_count_change == 1) {
       std::ofstream result(result_path);
       result << "publisher-event-ok\n";
       ret = 0;
@@ -884,9 +1164,9 @@ int RunMatchedPublisherEventObserver(
   return ret;
 }
 
-int RunMatchedSubscriberEventObserver(
-  const std::string & socket_path, const std::string & result_path, const std::string & topic)
-{
+int RunMatchedSubscriberEventObserver(const std::string &socket_path,
+                                      const std::string &result_path,
+                                      const std::string &topic) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -900,26 +1180,30 @@ int RunMatchedSubscriberEventObserver(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_sub_event_observer", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_sub_event_observer", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
-  rmw_subscription_t * subscription = rmw_create_subscription(
-    node, type_support, topic.c_str(), &rmw_qos_profile_default, &subscription_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_subscription_t *subscription =
+      rmw_create_subscription(node, type_support, topic.c_str(),
+                              &rmw_qos_profile_default, &subscription_options);
   if (subscription == nullptr) {
     return 5;
   }
 
   rmw_event_t event = rmw_get_zero_initialized_event();
-  if (rmw_subscription_event_init(&event, subscription, RMW_EVENT_SUBSCRIPTION_MATCHED) !=
-    RMW_RET_OK) {
+  if (rmw_subscription_event_init(
+          &event, subscription, RMW_EVENT_SUBSCRIPTION_MATCHED) != RMW_RET_OK) {
     return 6;
   }
-  rmw_wait_set_t * wait_set = rmw_create_wait_set(&context, 1);
+  rmw_wait_set_t *wait_set = rmw_create_wait_set(&context, 1);
   if (wait_set == nullptr) {
     return 7;
   }
@@ -927,24 +1211,23 @@ int RunMatchedSubscriberEventObserver(
   int ret = 8;
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
-    void * event_handle = &event;
+    void *event_handle = &event;
     rmw_events_t events;
     events.event_count = 1;
     events.events = &event_handle;
     rmw_time_t timeout;
     timeout.sec = 0;
     timeout.nsec = 100000000;
-    const rmw_ret_t wait_ret =
-      rmw_wait(nullptr, nullptr, nullptr, nullptr, &events, wait_set, &timeout);
+    const rmw_ret_t wait_ret = rmw_wait(nullptr, nullptr, nullptr, nullptr,
+                                        &events, wait_set, &timeout);
     if (wait_ret != RMW_RET_OK || events.events[0] == nullptr) {
       continue;
     }
     rmw_matched_status_t status{};
     bool taken = false;
-    if (
-      rmw_take_event(&event, &status, &taken) == RMW_RET_OK && taken &&
-      status.total_count == 1u && status.total_count_change == 1u &&
-      status.current_count == 1u && status.current_count_change == 1) {
+    if (rmw_take_event(&event, &status, &taken) == RMW_RET_OK && taken &&
+        status.total_count == 1u && status.total_count_change == 1u &&
+        status.current_count == 1u && status.current_count_change == 1) {
       std::ofstream result(result_path);
       result << "subscription-event-ok\n";
       ret = 0;
@@ -962,61 +1245,70 @@ int RunMatchedSubscriberEventObserver(
   return ret;
 }
 
-bool GraphSnapshotContainsRemotePublisher(
-  rmw_node_t * node, rcutils_allocator_t * allocator, const std::string & topic,
-  const std::string & type)
-{
-  rmw_names_and_types_t topic_names = rmw_get_zero_initialized_names_and_types();
+bool GraphSnapshotContainsRemotePublisher(rmw_node_t *node,
+                                          rcutils_allocator_t *allocator,
+                                          const std::string &topic,
+                                          const std::string &type) {
+  rmw_names_and_types_t topic_names =
+      rmw_get_zero_initialized_names_and_types();
   const bool has_topic =
-    rmw_get_topic_names_and_types(node, allocator, false, &topic_names) == RMW_RET_OK &&
-    NamesAndTypesContains(topic_names, topic, type);
+      rmw_get_topic_names_and_types(node, allocator, false, &topic_names) ==
+          RMW_RET_OK &&
+      NamesAndTypesContains(topic_names, topic, type);
   IgnoreRmwRet(rmw_names_and_types_fini(&topic_names));
 
-  rmw_names_and_types_t publisher_names = rmw_get_zero_initialized_names_and_types();
+  rmw_names_and_types_t publisher_names =
+      rmw_get_zero_initialized_names_and_types();
   const bool has_publisher =
-    rmw_get_publisher_names_and_types_by_node(
-      node, allocator, "mdds_broker_graph_pub", "/mdds", false, &publisher_names) ==
-      RMW_RET_OK &&
-    NamesAndTypesContains(publisher_names, topic, type);
+      rmw_get_publisher_names_and_types_by_node(
+          node, allocator, "mdds_broker_graph_pub", "/mdds", false,
+          &publisher_names) == RMW_RET_OK &&
+      NamesAndTypesContains(publisher_names, topic, type);
   IgnoreRmwRet(rmw_names_and_types_fini(&publisher_names));
 
-  rcutils_string_array_t node_names = rcutils_get_zero_initialized_string_array();
-  rcutils_string_array_t node_namespaces = rcutils_get_zero_initialized_string_array();
+  rcutils_string_array_t node_names =
+      rcutils_get_zero_initialized_string_array();
+  rcutils_string_array_t node_namespaces =
+      rcutils_get_zero_initialized_string_array();
   const bool has_node =
-    rmw_get_node_names(node, &node_names, &node_namespaces) == RMW_RET_OK &&
-    NodeNamesContain(node_names, node_namespaces, "mdds_broker_graph_pub", "/mdds");
+      rmw_get_node_names(node, &node_names, &node_namespaces) == RMW_RET_OK &&
+      NodeNamesContain(node_names, node_namespaces, "mdds_broker_graph_pub",
+                       "/mdds");
   IgnoreRcutilsRet(rcutils_string_array_fini(&node_names));
   IgnoreRcutilsRet(rcutils_string_array_fini(&node_namespaces));
 
-  rcutils_string_array_t names_with_enclaves = rcutils_get_zero_initialized_string_array();
-  rcutils_string_array_t namespaces_with_enclaves = rcutils_get_zero_initialized_string_array();
+  rcutils_string_array_t names_with_enclaves =
+      rcutils_get_zero_initialized_string_array();
+  rcutils_string_array_t namespaces_with_enclaves =
+      rcutils_get_zero_initialized_string_array();
   rcutils_string_array_t enclaves = rcutils_get_zero_initialized_string_array();
   const bool has_enclave =
-    rmw_get_node_names_with_enclaves(
-      node, &names_with_enclaves, &namespaces_with_enclaves, &enclaves) == RMW_RET_OK &&
-    NodeNamesWithEnclavesContain(
-      names_with_enclaves, namespaces_with_enclaves, enclaves, "mdds_broker_graph_pub",
-      "/mdds", "/rmw_mdds_broker_graph_pub");
+      rmw_get_node_names_with_enclaves(node, &names_with_enclaves,
+                                       &namespaces_with_enclaves,
+                                       &enclaves) == RMW_RET_OK &&
+      NodeNamesWithEnclavesContain(
+          names_with_enclaves, namespaces_with_enclaves, enclaves,
+          "mdds_broker_graph_pub", "/mdds", "/rmw_mdds_broker_graph_pub");
   IgnoreRcutilsRet(rcutils_string_array_fini(&names_with_enclaves));
   IgnoreRcutilsRet(rcutils_string_array_fini(&namespaces_with_enclaves));
   IgnoreRcutilsRet(rcutils_string_array_fini(&enclaves));
 
   rmw_topic_endpoint_info_array_t publisher_infos =
-    rmw_get_zero_initialized_topic_endpoint_info_array();
+      rmw_get_zero_initialized_topic_endpoint_info_array();
   const bool has_publisher_info =
-    rmw_get_publishers_info_by_topic(
-      node, allocator, topic.c_str(), false, &publisher_infos) == RMW_RET_OK &&
-    PublisherEndpointInfosContain(
-      publisher_infos, "mdds_broker_graph_pub", "/mdds", type);
+      rmw_get_publishers_info_by_topic(node, allocator, topic.c_str(), false,
+                                       &publisher_infos) == RMW_RET_OK &&
+      PublisherEndpointInfosContain(publisher_infos, "mdds_broker_graph_pub",
+                                    "/mdds", type);
   IgnoreRmwRet(rmw_topic_endpoint_info_array_fini(&publisher_infos, allocator));
 
-  return has_topic && has_publisher && has_node && has_enclave && has_publisher_info;
+  return has_topic && has_publisher && has_node && has_enclave &&
+         has_publisher_info;
 }
 
-int RunGraphObserver(
-  const std::string & socket_path, const std::string & result_path,
-  const std::string & topic, const std::string & type)
-{
+int RunGraphObserver(const std::string &socket_path,
+                     const std::string &result_path, const std::string &topic,
+                     const std::string &type) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -1030,17 +1322,20 @@ int RunGraphObserver(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_graph_observer", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_graph_observer", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
-  rmw_subscription_t * subscription = rmw_create_subscription(
-    node, type_support, "/mdds_broker_graph_anchor", &rmw_qos_profile_default,
-    &subscription_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_subscription_t *subscription =
+      rmw_create_subscription(node, type_support, "/mdds_broker_graph_anchor",
+                              &rmw_qos_profile_default, &subscription_options);
   if (subscription == nullptr) {
     return 5;
   }
@@ -1065,10 +1360,257 @@ int RunGraphObserver(
   return ret;
 }
 
-int RunGraphService(
-  const std::string & socket_path, const std::string & ready_path,
-  const std::string & service_name)
-{
+int RunPrimedGraphObserver(const std::string &socket_path,
+                           const std::string &ready_path,
+                           const std::string &result_path,
+                           const std::string &topic,
+                           const std::string &type) {
+  SetBrokerEnvironment(socket_path);
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  if (rmw_init_options_init(&options, allocator) != RMW_RET_OK) {
+    return 2;
+  }
+  SetEnclave(&options, "/rmw_mdds_broker_primed_graph_observer");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  if (rmw_init(&options, &context) != RMW_RET_OK) {
+    return 3;
+  }
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_primed_graph_observer", "/mdds");
+  if (node == nullptr) {
+    return 4;
+  }
+
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_subscription_t *subscription = rmw_create_subscription(
+      node, type_support, "/mdds_broker_primed_graph_anchor",
+      &rmw_qos_profile_default, &subscription_options);
+  if (subscription == nullptr) {
+    return 5;
+  }
+
+  // Prime the graph cache before the publisher exists. A local-only graph must
+  // not suppress later refreshes while discovery is still changing.
+  (void)GraphSnapshotContainsRemotePublisher(node, &allocator, topic, type);
+  {
+    std::ofstream ready(ready_path);
+    ready << "ready\n";
+  }
+
+  int ret = 6;
+  const auto deadline = std::chrono::steady_clock::now() + 4s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (GraphSnapshotContainsRemotePublisher(node, &allocator, topic, type)) {
+      std::ofstream result(result_path);
+      result << "primed-graph-ok\n";
+      ret = 0;
+      break;
+    }
+    std::this_thread::sleep_for(10ms);
+  }
+
+  IgnoreRmwRet(rmw_destroy_subscription(node, subscription));
+  IgnoreRmwRet(rmw_destroy_node(node));
+  IgnoreRmwRet(rmw_shutdown(&context));
+  IgnoreRmwRet(rmw_context_fini(&context));
+  IgnoreRmwRet(rmw_init_options_fini(&options));
+  return ret;
+}
+
+int RunPublisherPrimedGraphObserver(const std::string &socket_path,
+                                    const std::string &ready_path,
+                                    const std::string &result_path,
+                                    const std::string &topic,
+                                    const std::string &type) {
+  SetBrokerEnvironment(socket_path);
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  if (rmw_init_options_init(&options, allocator) != RMW_RET_OK) {
+    return 2;
+  }
+  SetEnclave(&options, "/rmw_mdds_broker_pub_primed_graph_observer");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  if (rmw_init(&options, &context) != RMW_RET_OK) {
+    return 3;
+  }
+  rmw_node_t *node = rmw_create_node(
+      &context, "mdds_broker_pub_primed_graph_observer", "/mdds");
+  if (node == nullptr) {
+    return 4;
+  }
+
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *anchor = rmw_create_publisher(
+      node, type_support, "/mdds_broker_pub_primed_graph_anchor",
+      &rmw_qos_profile_default, &publisher_options);
+  if (anchor == nullptr) {
+    return 5;
+  }
+
+  // Publishers do not have a broker reader thread. If this primes a local-only
+  // cache, later graph queries must still refresh instead of trusting it.
+  (void)GraphSnapshotContainsRemotePublisher(node, &allocator, topic, type);
+  {
+    std::ofstream ready(ready_path);
+    ready << "ready\n";
+  }
+
+  int ret = 6;
+  const auto deadline = std::chrono::steady_clock::now() + 4s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (GraphSnapshotContainsRemotePublisher(node, &allocator, topic, type)) {
+      std::ofstream result(result_path);
+      result << "publisher-primed-graph-ok\n";
+      ret = 0;
+      break;
+    }
+    std::this_thread::sleep_for(10ms);
+  }
+
+  IgnoreRmwRet(rmw_destroy_publisher(node, anchor));
+  IgnoreRmwRet(rmw_destroy_node(node));
+  IgnoreRmwRet(rmw_shutdown(&context));
+  IgnoreRmwRet(rmw_context_fini(&context));
+  IgnoreRmwRet(rmw_init_options_fini(&options));
+  return ret;
+}
+
+int RunColdGraphObserver(const std::string &socket_path,
+                         const std::string &result_path,
+                         const std::string &topic, const std::string &type) {
+  SetBrokerEnvironment(socket_path);
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  if (rmw_init_options_init(&options, allocator) != RMW_RET_OK) {
+    return 2;
+  }
+  SetEnclave(&options, "/rmw_mdds_broker_cold_graph_observer");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  if (rmw_init(&options, &context) != RMW_RET_OK) {
+    return 3;
+  }
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_cold_graph_observer", "/mdds");
+  if (node == nullptr) {
+    return 4;
+  }
+
+  int ret = 5;
+  bool saw_topic = false;
+  bool saw_publisher = false;
+  bool saw_node = false;
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    rmw_names_and_types_t topic_names =
+        rmw_get_zero_initialized_names_and_types();
+    saw_topic = rmw_get_topic_names_and_types(node, &allocator, false,
+                                              &topic_names) == RMW_RET_OK &&
+                NamesAndTypesContains(topic_names, topic, type);
+    IgnoreRmwRet(rmw_names_and_types_fini(&topic_names));
+
+    rmw_names_and_types_t publisher_names =
+        rmw_get_zero_initialized_names_and_types();
+    saw_publisher = rmw_get_publisher_names_and_types_by_node(
+                        node, &allocator, "mdds_broker_graph_pub", "/mdds",
+                        false, &publisher_names) == RMW_RET_OK &&
+                    NamesAndTypesContains(publisher_names, topic, type);
+    IgnoreRmwRet(rmw_names_and_types_fini(&publisher_names));
+
+    rcutils_string_array_t node_names =
+        rcutils_get_zero_initialized_string_array();
+    rcutils_string_array_t node_namespaces =
+        rcutils_get_zero_initialized_string_array();
+    saw_node =
+        rmw_get_node_names(node, &node_names, &node_namespaces) == RMW_RET_OK &&
+        NodeNamesContain(node_names, node_namespaces, "mdds_broker_graph_pub",
+                         "/mdds");
+    IgnoreRcutilsRet(rcutils_string_array_fini(&node_names));
+    IgnoreRcutilsRet(rcutils_string_array_fini(&node_namespaces));
+
+    if (GraphSnapshotContainsRemotePublisher(node, &allocator, topic, type)) {
+      std::ofstream result(result_path);
+      result << "cold-graph-ok\n";
+      ret = 0;
+      break;
+    }
+    std::this_thread::sleep_for(10ms);
+  }
+  if (ret != 0) {
+    std::ofstream result(result_path);
+    result << "cold-graph-fail topic=" << (saw_topic ? 1 : 0)
+           << " publisher=" << (saw_publisher ? 1 : 0)
+           << " node=" << (saw_node ? 1 : 0) << "\n";
+  }
+
+  IgnoreRmwRet(rmw_destroy_node(node));
+  IgnoreRmwRet(rmw_shutdown(&context));
+  IgnoreRmwRet(rmw_context_fini(&context));
+  IgnoreRmwRet(rmw_init_options_fini(&options));
+  return ret;
+}
+
+int RunOneShotTopicGraphObserver(const std::string &socket_path,
+                                 const std::string &result_path,
+                                 const std::string &topic,
+                                 const std::string &type) {
+  SetBrokerEnvironment(socket_path);
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  if (rmw_init_options_init(&options, allocator) != RMW_RET_OK) {
+    return 2;
+  }
+  SetEnclave(&options, "/rmw_mdds_broker_one_shot_graph_observer");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  if (rmw_init(&options, &context) != RMW_RET_OK) {
+    return 3;
+  }
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_one_shot_graph_observer", "/mdds");
+  if (node == nullptr) {
+    return 4;
+  }
+
+  rmw_names_and_types_t topic_names =
+      rmw_get_zero_initialized_names_and_types();
+  const bool has_topic =
+      rmw_get_topic_names_and_types(node, &allocator, false, &topic_names) ==
+          RMW_RET_OK &&
+      NamesAndTypesContains(topic_names, topic, type);
+  IgnoreRmwRet(rmw_names_and_types_fini(&topic_names));
+
+  {
+    std::ofstream result(result_path);
+    result << (has_topic ? "one-shot-graph-ok" : "one-shot-graph-miss")
+           << "\n";
+  }
+
+  IgnoreRmwRet(rmw_destroy_node(node));
+  IgnoreRmwRet(rmw_shutdown(&context));
+  IgnoreRmwRet(rmw_context_fini(&context));
+  IgnoreRmwRet(rmw_init_options_fini(&options));
+  return has_topic ? 0 : 5;
+}
+
+int RunGraphService(const std::string &socket_path,
+                    const std::string &ready_path,
+                    const std::string &service_name) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -1082,16 +1624,18 @@ int RunGraphService(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_graph_service", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_graph_service", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_service_type_support_t * type_support =
-    ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
-      rosidl_typesupport_c, std_srvs, srv, Trigger)();
-  rmw_service_t * service =
-    rmw_create_service(node, type_support, service_name.c_str(), &rmw_qos_profile_services_default);
+  const rosidl_service_type_support_t *type_support =
+      ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
+          rosidl_typesupport_c, std_srvs, srv, Trigger)();
+  rmw_service_t *service =
+      rmw_create_service(node, type_support, service_name.c_str(),
+                         &rmw_qos_profile_services_default);
   if (service == nullptr) {
     return 5;
   }
@@ -1111,10 +1655,9 @@ int RunGraphService(
   return 0;
 }
 
-int RunGraphClient(
-  const std::string & socket_path, const std::string & ready_path,
-  const std::string & service_name)
-{
+int RunGraphClient(const std::string &socket_path,
+                   const std::string &ready_path,
+                   const std::string &service_name) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -1128,16 +1671,18 @@ int RunGraphClient(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_graph_client", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_graph_client", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_service_type_support_t * type_support =
-    ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
-      rosidl_typesupport_c, std_srvs, srv, Trigger)();
-  rmw_client_t * client =
-    rmw_create_client(node, type_support, service_name.c_str(), &rmw_qos_profile_services_default);
+  const rosidl_service_type_support_t *type_support =
+      ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
+          rosidl_typesupport_c, std_srvs, srv, Trigger)();
+  rmw_client_t *client =
+      rmw_create_client(node, type_support, service_name.c_str(),
+                        &rmw_qos_profile_services_default);
   if (client == nullptr) {
     return 5;
   }
@@ -1157,67 +1702,77 @@ int RunGraphClient(
   return 0;
 }
 
-bool ServiceClientGraphSnapshotContains(
-  rmw_node_t * node, rcutils_allocator_t * allocator, const std::string & service_name,
-  const std::string & type)
-{
+bool ServiceClientGraphSnapshotContains(rmw_node_t *node,
+                                        rcutils_allocator_t *allocator,
+                                        const std::string &service_name,
+                                        const std::string &type) {
   size_t service_count = 0;
   const bool has_service_count =
-    rmw_count_services(node, service_name.c_str(), &service_count) == RMW_RET_OK &&
-    service_count == 1u;
+      rmw_count_services(node, service_name.c_str(), &service_count) ==
+          RMW_RET_OK &&
+      service_count == 1u;
 
   size_t client_count = 0;
   const bool has_client_count =
-    rmw_count_clients(node, service_name.c_str(), &client_count) == RMW_RET_OK &&
-    client_count == 1u;
+      rmw_count_clients(node, service_name.c_str(), &client_count) ==
+          RMW_RET_OK &&
+      client_count == 1u;
 
-  rmw_names_and_types_t service_names = rmw_get_zero_initialized_names_and_types();
+  rmw_names_and_types_t service_names =
+      rmw_get_zero_initialized_names_and_types();
   const bool has_global_service =
-    rmw_get_service_names_and_types(node, allocator, &service_names) == RMW_RET_OK &&
-    NamesAndTypesContains(service_names, service_name, type);
+      rmw_get_service_names_and_types(node, allocator, &service_names) ==
+          RMW_RET_OK &&
+      NamesAndTypesContains(service_names, service_name, type);
   IgnoreRmwRet(rmw_names_and_types_fini(&service_names));
 
-  rmw_names_and_types_t service_names_by_node = rmw_get_zero_initialized_names_and_types();
+  rmw_names_and_types_t service_names_by_node =
+      rmw_get_zero_initialized_names_and_types();
   const bool has_service_by_node =
-    rmw_get_service_names_and_types_by_node(
-      node, allocator, "mdds_broker_graph_service", "/mdds", &service_names_by_node) ==
-      RMW_RET_OK &&
-    NamesAndTypesContains(service_names_by_node, service_name, type);
+      rmw_get_service_names_and_types_by_node(
+          node, allocator, "mdds_broker_graph_service", "/mdds",
+          &service_names_by_node) == RMW_RET_OK &&
+      NamesAndTypesContains(service_names_by_node, service_name, type);
   IgnoreRmwRet(rmw_names_and_types_fini(&service_names_by_node));
 
-  rmw_names_and_types_t client_names_by_node = rmw_get_zero_initialized_names_and_types();
+  rmw_names_and_types_t client_names_by_node =
+      rmw_get_zero_initialized_names_and_types();
   const bool has_client_by_node =
-    rmw_get_client_names_and_types_by_node(
-      node, allocator, "mdds_broker_graph_client", "/mdds", &client_names_by_node) ==
-      RMW_RET_OK &&
-    NamesAndTypesContains(client_names_by_node, service_name, type);
+      rmw_get_client_names_and_types_by_node(
+          node, allocator, "mdds_broker_graph_client", "/mdds",
+          &client_names_by_node) == RMW_RET_OK &&
+      NamesAndTypesContains(client_names_by_node, service_name, type);
   IgnoreRmwRet(rmw_names_and_types_fini(&client_names_by_node));
 
-  rcutils_string_array_t names_with_enclaves = rcutils_get_zero_initialized_string_array();
-  rcutils_string_array_t namespaces_with_enclaves = rcutils_get_zero_initialized_string_array();
+  rcutils_string_array_t names_with_enclaves =
+      rcutils_get_zero_initialized_string_array();
+  rcutils_string_array_t namespaces_with_enclaves =
+      rcutils_get_zero_initialized_string_array();
   rcutils_string_array_t enclaves = rcutils_get_zero_initialized_string_array();
   const bool has_service_node =
-    rmw_get_node_names_with_enclaves(
-      node, &names_with_enclaves, &namespaces_with_enclaves, &enclaves) == RMW_RET_OK &&
-    NodeNamesWithEnclavesContain(
-      names_with_enclaves, namespaces_with_enclaves, enclaves,
-      "mdds_broker_graph_service", "/mdds", "/rmw_mdds_broker_graph_service");
-  const bool has_client_node =
-    NodeNamesWithEnclavesContain(
+      rmw_get_node_names_with_enclaves(node, &names_with_enclaves,
+                                       &namespaces_with_enclaves,
+                                       &enclaves) == RMW_RET_OK &&
+      NodeNamesWithEnclavesContain(names_with_enclaves,
+                                   namespaces_with_enclaves, enclaves,
+                                   "mdds_broker_graph_service", "/mdds",
+                                   "/rmw_mdds_broker_graph_service");
+  const bool has_client_node = NodeNamesWithEnclavesContain(
       names_with_enclaves, namespaces_with_enclaves, enclaves,
       "mdds_broker_graph_client", "/mdds", "/rmw_mdds_broker_graph_client");
   IgnoreRcutilsRet(rcutils_string_array_fini(&names_with_enclaves));
   IgnoreRcutilsRet(rcutils_string_array_fini(&namespaces_with_enclaves));
   IgnoreRcutilsRet(rcutils_string_array_fini(&enclaves));
 
-  return has_service_count && has_client_count && has_global_service && has_service_by_node &&
-         has_client_by_node && has_service_node && has_client_node;
+  return has_service_count && has_client_count && has_global_service &&
+         has_service_by_node && has_client_by_node && has_service_node &&
+         has_client_node;
 }
 
-int RunServiceClientGraphObserver(
-  const std::string & socket_path, const std::string & result_path,
-  const std::string & service_name, const std::string & type)
-{
+int RunServiceClientGraphObserver(const std::string &socket_path,
+                                  const std::string &result_path,
+                                  const std::string &service_name,
+                                  const std::string &type) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -1231,17 +1786,20 @@ int RunServiceClientGraphObserver(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_service_graph_observer", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_service_graph_observer", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_message_type_support_t * type_support =
-    rosidl_typesupport_cpp::get_message_type_support_handle<std_msgs::msg::String>();
-  rmw_subscription_options_t subscription_options = rmw_get_default_subscription_options();
-  rmw_subscription_t * subscription = rmw_create_subscription(
-    node, type_support, "/mdds_broker_service_graph_anchor", &rmw_qos_profile_default,
-    &subscription_options);
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_subscription_t *subscription = rmw_create_subscription(
+      node, type_support, "/mdds_broker_service_graph_anchor",
+      &rmw_qos_profile_default, &subscription_options);
   if (subscription == nullptr) {
     return 5;
   }
@@ -1249,7 +1807,8 @@ int RunServiceClientGraphObserver(
   int ret = 6;
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
-    if (ServiceClientGraphSnapshotContains(node, &allocator, service_name, type)) {
+    if (ServiceClientGraphSnapshotContains(node, &allocator, service_name,
+                                           type)) {
       std::ofstream result(result_path);
       result << "service-client-graph-ok\n";
       ret = 0;
@@ -1266,10 +1825,9 @@ int RunServiceClientGraphObserver(
   return ret;
 }
 
-int RunService(
-  const std::string & socket_path, const std::string & ready_path,
-  const std::string & service_name, const std::string & response_message)
-{
+int RunService(const std::string &socket_path, const std::string &ready_path,
+               const std::string &service_name,
+               const std::string &response_message) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -1283,16 +1841,18 @@ int RunService(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_process_service", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_process_service", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_service_type_support_t * type_support =
-    ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
-      rosidl_typesupport_c, std_srvs, srv, Trigger)();
-  rmw_service_t * service =
-    rmw_create_service(node, type_support, service_name.c_str(), &rmw_qos_profile_services_default);
+  const rosidl_service_type_support_t *type_support =
+      ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
+          rosidl_typesupport_c, std_srvs, srv, Trigger)();
+  rmw_service_t *service =
+      rmw_create_service(node, type_support, service_name.c_str(),
+                         &rmw_qos_profile_services_default);
   if (service == nullptr) {
     return 5;
   }
@@ -1302,7 +1862,7 @@ int RunService(
     ready << "ready\n";
   }
 
-  rmw_wait_set_t * wait_set = rmw_create_wait_set(&context, 1);
+  rmw_wait_set_t *wait_set = rmw_create_wait_set(&context, 1);
   if (wait_set == nullptr) {
     return 6;
   }
@@ -1310,15 +1870,15 @@ int RunService(
   int ret = 7;
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
-    void * service_handle = service->data;
+    void *service_handle = service->data;
     rmw_services_t services;
     services.service_count = 1;
     services.services = &service_handle;
     rmw_time_t timeout;
     timeout.sec = 0;
     timeout.nsec = 100000000;
-    const rmw_ret_t wait_ret =
-      rmw_wait(nullptr, nullptr, &services, nullptr, nullptr, wait_set, &timeout);
+    const rmw_ret_t wait_ret = rmw_wait(nullptr, nullptr, &services, nullptr,
+                                        nullptr, wait_set, &timeout);
     if (wait_ret != RMW_RET_OK || services.services[0] == nullptr) {
       continue;
     }
@@ -1331,7 +1891,7 @@ int RunService(
     rmw_service_info_t request_header{};
     bool taken = false;
     const rmw_ret_t take_ret =
-      rmw_take_request(service, &request_header, &request, &taken);
+        rmw_take_request(service, &request_header, &request, &taken);
     std_srvs__srv__Trigger_Request__fini(&request);
     if (take_ret != RMW_RET_OK || !taken) {
       continue;
@@ -1343,12 +1903,16 @@ int RunService(
       break;
     }
     response.success = true;
-    if (!rosidl_runtime_c__String__assign(&response.message, response_message.c_str())) {
+    if (!rosidl_runtime_c__String__assign(&response.message,
+                                          response_message.c_str())) {
       std_srvs__srv__Trigger_Response__fini(&response);
       ret = 10;
       break;
     }
-    ret = rmw_send_response(service, &request_header.request_id, &response) == RMW_RET_OK ? 0 : 11;
+    ret = rmw_send_response(service, &request_header.request_id, &response) ==
+                  RMW_RET_OK
+              ? 0
+              : 11;
     std_srvs__srv__Trigger_Response__fini(&response);
     break;
   }
@@ -1362,10 +1926,9 @@ int RunService(
   return ret;
 }
 
-int RunClient(
-  const std::string & socket_path, const std::string & result_path,
-  const std::string & service_name, const std::string & expected_response)
-{
+int RunClient(const std::string &socket_path, const std::string &result_path,
+              const std::string &service_name,
+              const std::string &expected_response) {
   SetBrokerEnvironment(socket_path);
 
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
@@ -1379,16 +1942,18 @@ int RunClient(
   if (rmw_init(&options, &context) != RMW_RET_OK) {
     return 3;
   }
-  rmw_node_t * node = rmw_create_node(&context, "mdds_broker_process_client", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_broker_process_client", "/mdds");
   if (node == nullptr) {
     return 4;
   }
 
-  const rosidl_service_type_support_t * type_support =
-    ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
-      rosidl_typesupport_c, std_srvs, srv, Trigger)();
-  rmw_client_t * client =
-    rmw_create_client(node, type_support, service_name.c_str(), &rmw_qos_profile_services_default);
+  const rosidl_service_type_support_t *type_support =
+      ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
+          rosidl_typesupport_c, std_srvs, srv, Trigger)();
+  rmw_client_t *client =
+      rmw_create_client(node, type_support, service_name.c_str(),
+                        &rmw_qos_profile_services_default);
   if (client == nullptr) {
     return 5;
   }
@@ -1397,9 +1962,9 @@ int RunClient(
   const auto availability_deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < availability_deadline) {
     bool current_available = false;
-    if (
-      rmw_service_server_is_available(node, client, &current_available) == RMW_RET_OK &&
-      current_available) {
+    if (rmw_service_server_is_available(node, client, &current_available) ==
+            RMW_RET_OK &&
+        current_available) {
       service_available = true;
       break;
     }
@@ -1420,7 +1985,7 @@ int RunClient(
   }
   std_srvs__srv__Trigger_Request__fini(&request);
 
-  rmw_wait_set_t * wait_set = rmw_create_wait_set(&context, 1);
+  rmw_wait_set_t *wait_set = rmw_create_wait_set(&context, 1);
   if (wait_set == nullptr) {
     return 9;
   }
@@ -1428,15 +1993,15 @@ int RunClient(
   int ret = 10;
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
-    void * client_handle = client->data;
+    void *client_handle = client->data;
     rmw_clients_t clients;
     clients.client_count = 1;
     clients.clients = &client_handle;
     rmw_time_t timeout;
     timeout.sec = 0;
     timeout.nsec = 100000000;
-    const rmw_ret_t wait_ret =
-      rmw_wait(nullptr, nullptr, nullptr, &clients, nullptr, wait_set, &timeout);
+    const rmw_ret_t wait_ret = rmw_wait(nullptr, nullptr, nullptr, &clients,
+                                        nullptr, wait_set, &timeout);
     if (wait_ret != RMW_RET_OK || clients.clients[0] == nullptr) {
       continue;
     }
@@ -1449,15 +2014,18 @@ int RunClient(
     rmw_service_info_t response_header{};
     bool taken = false;
     const rmw_ret_t take_ret =
-      rmw_take_response(client, &response_header, &response, &taken);
+        rmw_take_response(client, &response_header, &response, &taken);
     if (take_ret == RMW_RET_OK && taken) {
-      const std::string actual =
-        response.message.data == nullptr ? std::string() : response.message.data;
+      const std::string actual = response.message.data == nullptr
+                                     ? std::string()
+                                     : response.message.data;
       std::ofstream result(result_path);
       result << actual << "\n";
-      ret =
-        response.success && response_header.request_id.sequence_number == sequence_id &&
-        actual == expected_response ? 0 : 12;
+      ret = response.success &&
+                    response_header.request_id.sequence_number == sequence_id &&
+                    actual == expected_response
+                ? 0
+                : 12;
       std_srvs__srv__Trigger_Response__fini(&response);
       break;
     }
@@ -1472,33 +2040,33 @@ int RunClient(
   IgnoreRmwRet(rmw_init_options_fini(&options));
   return ret;
 }
-}  // namespace
+} // namespace
 
-TEST(RmwMddsBrokerProcess, RoutesSamplesBetweenSeparateRmwProcesses)
-{
+TEST(RmwMddsBrokerProcess, RoutesSamplesBetweenSeparateRmwProcesses) {
   const std::string self = CurrentExecutablePath(nullptr);
   ASSERT_FALSE(self.empty());
   const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
-  ASSERT_EQ(0, access(broker.c_str(), X_OK)) << "missing broker executable: " << broker;
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
 
   TempDirectory temp_dir;
   ASSERT_FALSE(temp_dir.path().empty());
   const std::string topic = "/mdds_broker_process_string";
   const std::string payload = "hello separate rmw processes";
 
-  const pid_t broker_pid = SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
   ASSERT_GT(broker_pid, 0);
   ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
 
   const pid_t subscriber_pid = SpawnProcess(
-    self,
-    {"--subscriber", temp_dir.SocketPath(), temp_dir.ReadyPath(), temp_dir.ResultPath(), topic,
-      payload});
+      self, {"--subscriber", temp_dir.SocketPath(), temp_dir.ReadyPath(),
+             temp_dir.ResultPath(), topic, payload});
   ASSERT_GT(subscriber_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
 
-  const pid_t publisher_pid =
-    SpawnProcess(self, {"--publisher", temp_dir.SocketPath(), topic, payload});
+  const pid_t publisher_pid = SpawnProcess(
+      self, {"--publisher", temp_dir.SocketPath(), topic, payload});
   ASSERT_GT(publisher_pid, 0);
   EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 3s)));
   EXPECT_TRUE(ExitedWithZero(WaitForExit(subscriber_pid, 4s)));
@@ -1512,8 +2080,127 @@ TEST(RmwMddsBrokerProcess, RoutesSamplesBetweenSeparateRmwProcesses)
   EXPECT_EQ(payload, received);
 }
 
-TEST(RmwMddsBrokerProcess, DefaultTransportRoutesSamplesBetweenSeparateRmwProcesses)
-{
+TEST(RmwMddsBrokerProcess,
+     RoutesFixedSizeLoanedSampleBetweenSeparateRmwProcesses) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+  const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string topic = "/mdds_broker_process_loaned_int32";
+  constexpr int32_t payload = 3588;
+
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  ASSERT_GT(broker_pid, 0);
+  ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
+
+  const pid_t subscriber_pid = SpawnProcess(
+      self, {"--int32-subscriber", temp_dir.SocketPath(), temp_dir.ReadyPath(),
+             temp_dir.ResultPath(), topic, std::to_string(payload)});
+  ASSERT_GT(subscriber_pid, 0);
+  ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
+
+  const pid_t publisher_pid =
+      SpawnProcess(self, {"--loaned-int32-publisher", temp_dir.SocketPath(),
+                          topic, std::to_string(payload)});
+  ASSERT_GT(publisher_pid, 0);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 3s)));
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(subscriber_pid, 4s)));
+
+  kill(broker_pid, SIGTERM);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(broker_pid, 2s)));
+
+  std::ifstream result(temp_dir.ResultPath());
+  std::string received;
+  std::getline(result, received);
+  EXPECT_EQ(std::to_string(payload), received);
+}
+
+TEST(RmwMddsBrokerProcess,
+     RoutesLoanedStringSampleBetweenSeparateRmwProcesses) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+  const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string topic = "/mdds_broker_process_loaned_string";
+  const std::string payload = "loaned string through broker";
+
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  ASSERT_GT(broker_pid, 0);
+  ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
+
+  const pid_t subscriber_pid = SpawnProcess(
+      self, {"--subscriber", temp_dir.SocketPath(), temp_dir.ReadyPath(),
+             temp_dir.ResultPath(), topic, payload});
+  ASSERT_GT(subscriber_pid, 0);
+  ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
+
+  const pid_t publisher_pid =
+      SpawnProcess(self, {"--loaned-string-publisher", temp_dir.SocketPath(),
+                          topic, payload});
+  ASSERT_GT(publisher_pid, 0);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 3s)));
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(subscriber_pid, 4s)));
+
+  kill(broker_pid, SIGTERM);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(broker_pid, 2s)));
+
+  std::ifstream result(temp_dir.ResultPath());
+  std::string received;
+  std::getline(result, received);
+  EXPECT_EQ(payload, received);
+}
+
+TEST(RmwMddsBrokerProcess,
+     RoutesExplicitReliableCliQosBetweenSeparateRmwProcesses) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+  const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string topic = "/mdds_broker_cli_reliable_string";
+  const std::string payload = "qos_reliable_ok";
+
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  ASSERT_GT(broker_pid, 0);
+  ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
+
+  const pid_t subscriber_pid = SpawnProcess(
+      self, {"--reliable-sensor-subscriber", temp_dir.SocketPath(),
+             temp_dir.ReadyPath(), temp_dir.ResultPath(), topic, payload});
+  ASSERT_GT(subscriber_pid, 0);
+  ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
+
+  const pid_t publisher_pid = SpawnProcess(
+      self, {"--publisher", temp_dir.SocketPath(), topic, payload});
+  ASSERT_GT(publisher_pid, 0);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 3s)));
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(subscriber_pid, 4s)));
+
+  kill(broker_pid, SIGTERM);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(broker_pid, 2s)));
+
+  std::ifstream result(temp_dir.ResultPath());
+  std::string received;
+  std::getline(result, received);
+  EXPECT_EQ(payload, received);
+}
+
+TEST(RmwMddsBrokerProcess,
+     DefaultTransportRoutesSamplesBetweenSeparateRmwProcesses) {
   const std::string self = CurrentExecutablePath(nullptr);
   ASSERT_FALSE(self.empty());
 
@@ -1523,15 +2210,14 @@ TEST(RmwMddsBrokerProcess, DefaultTransportRoutesSamplesBetweenSeparateRmwProces
   const std::string payload = "hello default rmw mdds transport";
 
   const pid_t subscriber_pid = SpawnProcess(
-    self,
-    {"--default-subscriber", temp_dir.SocketPath(), temp_dir.ReadyPath(),
-      temp_dir.ResultPath(), topic, payload});
+      self, {"--default-subscriber", temp_dir.SocketPath(),
+             temp_dir.ReadyPath(), temp_dir.ResultPath(), topic, payload});
   ASSERT_GT(subscriber_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
   EXPECT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
 
-  const pid_t publisher_pid =
-    SpawnProcess(self, {"--default-publisher", temp_dir.SocketPath(), topic, payload});
+  const pid_t publisher_pid = SpawnProcess(
+      self, {"--default-publisher", temp_dir.SocketPath(), topic, payload});
   ASSERT_GT(publisher_pid, 0);
   EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 3s)));
   EXPECT_TRUE(ExitedWithZero(WaitForExit(subscriber_pid, 4s)));
@@ -1542,31 +2228,33 @@ TEST(RmwMddsBrokerProcess, DefaultTransportRoutesSamplesBetweenSeparateRmwProces
   EXPECT_EQ(payload, received);
 }
 
-TEST(RmwMddsBrokerProcess, RoutesServiceCallsBetweenSeparateRmwProcesses)
-{
+TEST(RmwMddsBrokerProcess, RoutesServiceCallsBetweenSeparateRmwProcesses) {
   const std::string self = CurrentExecutablePath(nullptr);
   ASSERT_FALSE(self.empty());
   const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
-  ASSERT_EQ(0, access(broker.c_str(), X_OK)) << "missing broker executable: " << broker;
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
 
   TempDirectory temp_dir;
   ASSERT_FALSE(temp_dir.path().empty());
   const std::string service_name = "/mdds_broker_process_trigger";
-  const std::string response = "trigger response from separate brokered service";
+  const std::string response =
+      "trigger response from separate brokered service";
 
-  const pid_t broker_pid = SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
   ASSERT_GT(broker_pid, 0);
   ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
 
-  const pid_t service_pid = SpawnProcess(
-    self,
-    {"--service", temp_dir.SocketPath(), temp_dir.ServiceReadyPath(), service_name, response});
+  const pid_t service_pid =
+      SpawnProcess(self, {"--service", temp_dir.SocketPath(),
+                          temp_dir.ServiceReadyPath(), service_name, response});
   ASSERT_GT(service_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ServiceReadyPath(), 2s));
 
-  const pid_t client_pid = SpawnProcess(
-    self,
-    {"--client", temp_dir.SocketPath(), temp_dir.ClientResultPath(), service_name, response});
+  const pid_t client_pid =
+      SpawnProcess(self, {"--client", temp_dir.SocketPath(),
+                          temp_dir.ClientResultPath(), service_name, response});
   ASSERT_GT(client_pid, 0);
   EXPECT_TRUE(ExitedWithZero(WaitForExit(client_pid, 4s)));
   EXPECT_TRUE(ExitedWithZero(WaitForExit(service_pid, 4s)));
@@ -1580,31 +2268,36 @@ TEST(RmwMddsBrokerProcess, RoutesServiceCallsBetweenSeparateRmwProcesses)
   EXPECT_EQ(response, received);
 }
 
-TEST(RmwMddsBrokerProcess, ReportsGraphAcrossSeparateRmwProcesses)
-{
+TEST(RmwMddsBrokerProcess, ReportsGraphAcrossSeparateRmwProcesses) {
   const std::string self = CurrentExecutablePath(nullptr);
   ASSERT_FALSE(self.empty());
   const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
-  ASSERT_EQ(0, access(broker.c_str(), X_OK)) << "missing broker executable: " << broker;
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
 
   TempDirectory temp_dir;
   ASSERT_FALSE(temp_dir.path().empty());
   const std::string topic = "/mdds_broker_graph_string";
   const std::string type = "std_msgs/msg/String";
 
-  const pid_t broker_pid = SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
   ASSERT_GT(broker_pid, 0);
   ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
 
   const pid_t publisher_pid =
-    SpawnProcess(self, {"--graph-publisher", temp_dir.SocketPath(), temp_dir.ReadyPath(), topic});
+      SpawnProcess(self, {"--graph-publisher", temp_dir.SocketPath(),
+                          temp_dir.ReadyPath(), topic});
   ASSERT_GT(publisher_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
+  ASSERT_TRUE(
+      RawBrokerGraphContainsPublisher(temp_dir.SocketPath(), topic, type));
 
   const pid_t observer_pid =
-    SpawnProcess(self, {"--graph-observer", temp_dir.SocketPath(), temp_dir.ResultPath(), topic, type});
+      SpawnProcess(self, {"--graph-observer", temp_dir.SocketPath(),
+                          temp_dir.ResultPath(), topic, type});
   ASSERT_GT(observer_pid, 0);
-  EXPECT_TRUE(ExitedWithZero(WaitForExit(observer_pid, 4s)));
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(observer_pid, 9s)));
   EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 6s)));
 
   kill(broker_pid, SIGTERM);
@@ -1616,36 +2309,204 @@ TEST(RmwMddsBrokerProcess, ReportsGraphAcrossSeparateRmwProcesses)
   EXPECT_EQ("graph-ok", received);
 }
 
-TEST(RmwMddsBrokerProcess, ReportsServiceClientGraphAcrossSeparateRmwProcesses)
-{
+TEST(RmwMddsBrokerProcess, ReportsGraphFromColdGraphOnlyRmwProcess) {
   const std::string self = CurrentExecutablePath(nullptr);
   ASSERT_FALSE(self.empty());
   const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
-  ASSERT_EQ(0, access(broker.c_str(), X_OK)) << "missing broker executable: " << broker;
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string topic = "/mdds_broker_cold_graph_string";
+  const std::string type = "std_msgs/msg/String";
+
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  ASSERT_GT(broker_pid, 0);
+  ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
+
+  const pid_t publisher_pid =
+      SpawnProcess(self, {"--graph-publisher", temp_dir.SocketPath(),
+                          temp_dir.ReadyPath(), topic});
+  ASSERT_GT(publisher_pid, 0);
+  ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
+
+  const pid_t observer_pid =
+      SpawnProcess(self, {"--cold-graph-observer", temp_dir.SocketPath(),
+                          temp_dir.ResultPath(), topic, type});
+  ASSERT_GT(observer_pid, 0);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(observer_pid, 9s)));
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 6s)));
+
+  kill(broker_pid, SIGTERM);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(broker_pid, 2s)));
+
+  std::ifstream result(temp_dir.ResultPath());
+  std::string received;
+  std::getline(result, received);
+  EXPECT_EQ("cold-graph-ok", received);
+}
+
+TEST(RmwMddsBrokerProcess, RefreshesGraphAfterLocalOnlyCachePrime) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+  const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string topic = "/mdds_broker_primed_graph_string";
+  const std::string type = "std_msgs/msg/String";
+
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  ASSERT_GT(broker_pid, 0);
+  ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
+
+  const pid_t observer_pid =
+      SpawnProcess(self, {"--primed-graph-observer", temp_dir.SocketPath(),
+                          temp_dir.ClientReadyPath(), temp_dir.ResultPath(),
+                          topic, type});
+  ASSERT_GT(observer_pid, 0);
+  ASSERT_TRUE(WaitForFile(temp_dir.ClientReadyPath(), 8s));
+
+  const pid_t publisher_pid =
+      SpawnProcess(self, {"--graph-publisher", temp_dir.SocketPath(),
+                          temp_dir.ReadyPath(), topic});
+  ASSERT_GT(publisher_pid, 0);
+  ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
+
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(observer_pid, 9s)));
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 6s)));
+
+  kill(broker_pid, SIGTERM);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(broker_pid, 2s)));
+
+  std::ifstream result(temp_dir.ResultPath());
+  std::string received;
+  std::getline(result, received);
+  EXPECT_EQ("primed-graph-ok", received);
+}
+
+TEST(RmwMddsBrokerProcess, RefreshesGraphAfterPublisherOnlyCachePrime) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+  const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string topic = "/mdds_broker_publisher_primed_graph_string";
+  const std::string type = "std_msgs/msg/String";
+
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  ASSERT_GT(broker_pid, 0);
+  ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
+
+  const pid_t observer_pid = SpawnProcess(
+      self, {"--publisher-primed-graph-observer", temp_dir.SocketPath(),
+             temp_dir.ClientReadyPath(), temp_dir.ResultPath(), topic, type});
+  ASSERT_GT(observer_pid, 0);
+  ASSERT_TRUE(WaitForFile(temp_dir.ClientReadyPath(), 8s));
+
+  const pid_t publisher_pid =
+      SpawnProcess(self, {"--graph-publisher", temp_dir.SocketPath(),
+                          temp_dir.ReadyPath(), topic});
+  ASSERT_GT(publisher_pid, 0);
+  ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
+
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(observer_pid, 9s)));
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 6s)));
+
+  kill(broker_pid, SIGTERM);
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(broker_pid, 2s)));
+
+  std::ifstream result(temp_dir.ResultPath());
+  std::string received;
+  std::getline(result, received);
+  EXPECT_EQ("publisher-primed-graph-ok", received);
+}
+
+TEST(RmwMddsBrokerProcess, OneShotGraphRefreshWaitsForSettledSnapshot) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string topic = "/mdds_broker_settled_graph_string";
+  const std::string type = "std_msgs/msg/String";
+
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd listener =
+      rmw_mdds_cpp::ipc::ListenUnixSocket(temp_dir.SocketPath(), &error);
+  ASSERT_TRUE(listener) << error;
+
+  const pid_t observer_pid =
+      SpawnProcess(self, {"--one-shot-topic-graph-observer",
+                          temp_dir.SocketPath(), temp_dir.ResultPath(), topic,
+                          type});
+  ASSERT_GT(observer_pid, 0);
+
+  rmw_mdds_cpp::ipc::UniqueFd client =
+      rmw_mdds_cpp::ipc::AcceptUnixSocket(listener.get(), &error);
+  ASSERT_TRUE(client) << error;
+
+  ASSERT_TRUE(WriteGraphUpdateFrame(
+      client.get(),
+      {MakeGraphEndpoint(1u, rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
+                         "mdds_local_only_graph_pub",
+                         "/mdds_broker_local_only_graph_string", type)}));
+  std::this_thread::sleep_for(100ms);
+  ASSERT_TRUE(WriteGraphUpdateFrame(
+      client.get(),
+      {MakeGraphEndpoint(2u, rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
+                         "mdds_broker_settled_graph_pub", topic, type)}));
+
+  EXPECT_TRUE(ExitedWithZero(WaitForExit(observer_pid, 4s)));
+
+  std::ifstream result(temp_dir.ResultPath());
+  std::string received;
+  std::getline(result, received);
+  EXPECT_EQ("one-shot-graph-ok", received);
+}
+
+TEST(RmwMddsBrokerProcess,
+     ReportsServiceClientGraphAcrossSeparateRmwProcesses) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+  const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
 
   TempDirectory temp_dir;
   ASSERT_FALSE(temp_dir.path().empty());
   const std::string service_name = "/mdds_broker_graph_trigger";
   const std::string type = "std_srvs/srv/Trigger";
 
-  const pid_t broker_pid = SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
   ASSERT_GT(broker_pid, 0);
   ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
 
-  const pid_t service_pid = SpawnProcess(
-    self, {"--graph-service", temp_dir.SocketPath(), temp_dir.ServiceReadyPath(), service_name});
+  const pid_t service_pid =
+      SpawnProcess(self, {"--graph-service", temp_dir.SocketPath(),
+                          temp_dir.ServiceReadyPath(), service_name});
   ASSERT_GT(service_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ServiceReadyPath(), 2s));
 
-  const pid_t client_pid = SpawnProcess(
-    self, {"--graph-client", temp_dir.SocketPath(), temp_dir.ClientReadyPath(), service_name});
+  const pid_t client_pid =
+      SpawnProcess(self, {"--graph-client", temp_dir.SocketPath(),
+                          temp_dir.ClientReadyPath(), service_name});
   ASSERT_GT(client_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ClientReadyPath(), 2s));
 
   const pid_t observer_pid = SpawnProcess(
-    self,
-    {"--service-client-graph-observer", temp_dir.SocketPath(), temp_dir.ResultPath(),
-      service_name, type});
+      self, {"--service-client-graph-observer", temp_dir.SocketPath(),
+             temp_dir.ResultPath(), service_name, type});
   ASSERT_GT(observer_pid, 0);
   EXPECT_TRUE(ExitedWithZero(WaitForExit(observer_pid, 4s)));
   EXPECT_TRUE(ExitedWithZero(WaitForExit(client_pid, 6s)));
@@ -1660,28 +2521,31 @@ TEST(RmwMddsBrokerProcess, ReportsServiceClientGraphAcrossSeparateRmwProcesses)
   EXPECT_EQ("service-client-graph-ok", received);
 }
 
-TEST(RmwMddsBrokerProcess, ReportsMatchedCountsAcrossSeparateRmwProcesses)
-{
+TEST(RmwMddsBrokerProcess, ReportsMatchedCountsAcrossSeparateRmwProcesses) {
   const std::string self = CurrentExecutablePath(nullptr);
   ASSERT_FALSE(self.empty());
   const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
-  ASSERT_EQ(0, access(broker.c_str(), X_OK)) << "missing broker executable: " << broker;
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
 
   TempDirectory temp_dir;
   ASSERT_FALSE(temp_dir.path().empty());
   const std::string topic = "/mdds_broker_matched_string";
 
-  const pid_t broker_pid = SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
   ASSERT_GT(broker_pid, 0);
   ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
 
-  const pid_t subscriber_pid = SpawnProcess(
-    self, {"--matched-subscriber", temp_dir.SocketPath(), temp_dir.ReadyPath(), topic});
+  const pid_t subscriber_pid =
+      SpawnProcess(self, {"--matched-subscriber", temp_dir.SocketPath(),
+                          temp_dir.ReadyPath(), topic});
   ASSERT_GT(subscriber_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
 
-  const pid_t publisher_observer_pid = SpawnProcess(
-    self, {"--matched-publisher-observer", temp_dir.SocketPath(), temp_dir.ResultPath(), topic});
+  const pid_t publisher_observer_pid =
+      SpawnProcess(self, {"--matched-publisher-observer", temp_dir.SocketPath(),
+                          temp_dir.ResultPath(), topic});
   ASSERT_GT(publisher_observer_pid, 0);
   EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_observer_pid, 4s)));
   EXPECT_TRUE(ExitedWithZero(WaitForExit(subscriber_pid, 6s)));
@@ -1691,14 +2555,15 @@ TEST(RmwMddsBrokerProcess, ReportsMatchedCountsAcrossSeparateRmwProcesses)
   std::getline(publisher_result, publisher_received);
   EXPECT_EQ("publisher-matched-ok", publisher_received);
 
-  const pid_t publisher_pid = SpawnProcess(
-    self, {"--matched-publisher", temp_dir.SocketPath(), temp_dir.ServiceReadyPath(), topic});
+  const pid_t publisher_pid =
+      SpawnProcess(self, {"--matched-publisher", temp_dir.SocketPath(),
+                          temp_dir.ServiceReadyPath(), topic});
   ASSERT_GT(publisher_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ServiceReadyPath(), 2s));
 
   const pid_t subscriber_observer_pid = SpawnProcess(
-    self,
-    {"--matched-subscriber-observer", temp_dir.SocketPath(), temp_dir.ClientResultPath(), topic});
+      self, {"--matched-subscriber-observer", temp_dir.SocketPath(),
+             temp_dir.ClientResultPath(), topic});
   ASSERT_GT(subscriber_observer_pid, 0);
   EXPECT_TRUE(ExitedWithZero(WaitForExit(subscriber_observer_pid, 4s)));
   EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 6s)));
@@ -1712,29 +2577,31 @@ TEST(RmwMddsBrokerProcess, ReportsMatchedCountsAcrossSeparateRmwProcesses)
   EXPECT_EQ("subscription-matched-ok", subscriber_received);
 }
 
-TEST(RmwMddsBrokerProcess, ReportsMatchedEventsAcrossSeparateRmwProcesses)
-{
+TEST(RmwMddsBrokerProcess, ReportsMatchedEventsAcrossSeparateRmwProcesses) {
   const std::string self = CurrentExecutablePath(nullptr);
   ASSERT_FALSE(self.empty());
   const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
-  ASSERT_EQ(0, access(broker.c_str(), X_OK)) << "missing broker executable: " << broker;
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
 
   TempDirectory temp_dir;
   ASSERT_FALSE(temp_dir.path().empty());
   const std::string topic = "/mdds_broker_matched_event_string";
 
-  const pid_t broker_pid = SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
+  const pid_t broker_pid =
+      SpawnProcess(broker, {"--socket", temp_dir.SocketPath()});
   ASSERT_GT(broker_pid, 0);
   ASSERT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
 
-  const pid_t subscriber_pid = SpawnProcess(
-    self, {"--matched-subscriber", temp_dir.SocketPath(), temp_dir.ReadyPath(), topic});
+  const pid_t subscriber_pid =
+      SpawnProcess(self, {"--matched-subscriber", temp_dir.SocketPath(),
+                          temp_dir.ReadyPath(), topic});
   ASSERT_GT(subscriber_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
 
-  const pid_t publisher_observer_pid = SpawnProcess(
-    self,
-    {"--matched-publisher-event-observer", temp_dir.SocketPath(), temp_dir.ResultPath(), topic});
+  const pid_t publisher_observer_pid =
+      SpawnProcess(self, {"--matched-publisher-event-observer",
+                          temp_dir.SocketPath(), temp_dir.ResultPath(), topic});
   ASSERT_GT(publisher_observer_pid, 0);
   EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_observer_pid, 4s)));
   EXPECT_TRUE(ExitedWithZero(WaitForExit(subscriber_pid, 6s)));
@@ -1744,15 +2611,15 @@ TEST(RmwMddsBrokerProcess, ReportsMatchedEventsAcrossSeparateRmwProcesses)
   std::getline(publisher_result, publisher_received);
   EXPECT_EQ("publisher-event-ok", publisher_received);
 
-  const pid_t publisher_pid = SpawnProcess(
-    self, {"--matched-publisher", temp_dir.SocketPath(), temp_dir.ServiceReadyPath(), topic});
+  const pid_t publisher_pid =
+      SpawnProcess(self, {"--matched-publisher", temp_dir.SocketPath(),
+                          temp_dir.ServiceReadyPath(), topic});
   ASSERT_GT(publisher_pid, 0);
   ASSERT_TRUE(WaitForFile(temp_dir.ServiceReadyPath(), 2s));
 
   const pid_t subscriber_observer_pid = SpawnProcess(
-    self,
-    {"--matched-subscriber-event-observer", temp_dir.SocketPath(), temp_dir.ClientResultPath(),
-      topic});
+      self, {"--matched-subscriber-event-observer", temp_dir.SocketPath(),
+             temp_dir.ClientResultPath(), topic});
   ASSERT_GT(subscriber_observer_pid, 0);
   EXPECT_TRUE(ExitedWithZero(WaitForExit(subscriber_observer_pid, 4s)));
   EXPECT_TRUE(ExitedWithZero(WaitForExit(publisher_pid, 6s)));
@@ -1766,13 +2633,25 @@ TEST(RmwMddsBrokerProcess, ReportsMatchedEventsAcrossSeparateRmwProcesses)
   EXPECT_EQ("subscription-event-ok", subscriber_received);
 }
 
-int main(int argc, char ** argv)
-{
+int main(int argc, char **argv) {
   if (argc >= 2 && std::strcmp(argv[1], "--publisher") == 0) {
     if (argc != 5) {
       return 64;
     }
     return RunPublisher(argv[2], argv[3], argv[4]);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--loaned-int32-publisher") == 0) {
+    if (argc != 5) {
+      return 64;
+    }
+    return RunLoanedInt32Publisher(argv[2], argv[3],
+                                   static_cast<int32_t>(std::stol(argv[4])));
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--loaned-string-publisher") == 0) {
+    if (argc != 5) {
+      return 64;
+    }
+    return RunLoanedStringPublisher(argv[2], argv[3], argv[4]);
   }
   if (argc >= 2 && std::strcmp(argv[1], "--default-publisher") == 0) {
     if (argc != 5) {
@@ -1785,6 +2664,19 @@ int main(int argc, char ** argv)
       return 64;
     }
     return RunSubscriber(argv[2], argv[3], argv[4], argv[5], argv[6]);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--reliable-sensor-subscriber") == 0) {
+    if (argc != 7) {
+      return 64;
+    }
+    return RunSubscriber(argv[2], argv[3], argv[4], argv[5], argv[6], true);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--int32-subscriber") == 0) {
+    if (argc != 7) {
+      return 64;
+    }
+    return RunInt32Subscriber(argv[2], argv[3], argv[4], argv[5],
+                              static_cast<int32_t>(std::stol(argv[6])));
   }
   if (argc >= 2 && std::strcmp(argv[1], "--default-subscriber") == 0) {
     if (argc != 7) {
@@ -1803,6 +2695,33 @@ int main(int argc, char ** argv)
       return 64;
     }
     return RunGraphObserver(argv[2], argv[3], argv[4], argv[5]);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--cold-graph-observer") == 0) {
+    if (argc != 6) {
+      return 64;
+    }
+    return RunColdGraphObserver(argv[2], argv[3], argv[4], argv[5]);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--primed-graph-observer") == 0) {
+    if (argc != 7) {
+      return 64;
+    }
+    return RunPrimedGraphObserver(argv[2], argv[3], argv[4], argv[5], argv[6]);
+  }
+  if (argc >= 2 &&
+      std::strcmp(argv[1], "--publisher-primed-graph-observer") == 0) {
+    if (argc != 7) {
+      return 64;
+    }
+    return RunPublisherPrimedGraphObserver(argv[2], argv[3], argv[4], argv[5],
+                                          argv[6]);
+  }
+  if (argc >= 2 &&
+      std::strcmp(argv[1], "--one-shot-topic-graph-observer") == 0) {
+    if (argc != 6) {
+      return 64;
+    }
+    return RunOneShotTopicGraphObserver(argv[2], argv[3], argv[4], argv[5]);
   }
   if (argc >= 2 && std::strcmp(argv[1], "--matched-publisher") == 0) {
     if (argc != 5) {
@@ -1828,13 +2747,15 @@ int main(int argc, char ** argv)
     }
     return RunMatchedSubscriberObserver(argv[2], argv[3], argv[4]);
   }
-  if (argc >= 2 && std::strcmp(argv[1], "--matched-publisher-event-observer") == 0) {
+  if (argc >= 2 &&
+      std::strcmp(argv[1], "--matched-publisher-event-observer") == 0) {
     if (argc != 5) {
       return 64;
     }
     return RunMatchedPublisherEventObserver(argv[2], argv[3], argv[4]);
   }
-  if (argc >= 2 && std::strcmp(argv[1], "--matched-subscriber-event-observer") == 0) {
+  if (argc >= 2 &&
+      std::strcmp(argv[1], "--matched-subscriber-event-observer") == 0) {
     if (argc != 5) {
       return 64;
     }
@@ -1852,7 +2773,8 @@ int main(int argc, char ** argv)
     }
     return RunGraphClient(argv[2], argv[3], argv[4]);
   }
-  if (argc >= 2 && std::strcmp(argv[1], "--service-client-graph-observer") == 0) {
+  if (argc >= 2 &&
+      std::strcmp(argv[1], "--service-client-graph-observer") == 0) {
     if (argc != 6) {
       return 64;
     }

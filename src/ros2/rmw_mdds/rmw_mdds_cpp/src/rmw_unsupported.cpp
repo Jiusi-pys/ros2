@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <limits>
@@ -347,7 +348,39 @@ bool BorrowPublisherBridgeLoan(rmw_mdds_cpp::PublisherData *data,
   loan->capacity = kDefaultBridgeLoanedPayloadCapacity;
   loan->message_in_loan = false;
   loan->raw_message_in_loan = false;
+  loan->storage_owned_by_rmw = false;
   loan->arena.Reset(bridge_data, kDefaultBridgeLoanedPayloadCapacity);
+  return true;
+}
+
+bool BorrowPublisherBrokerLoan(rmw_mdds_cpp::PublisherData *data,
+                               rmw_mdds_cpp::BridgePublisherLoanRecord *loan) {
+  const bool supports_raw_loan =
+      data != nullptr && data->adapter.SupportsRawLoanedMessage();
+  const bool supports_dynamic_loan =
+      data != nullptr && data->adapter.SupportsDynamicLoanedMessage();
+  if (data == nullptr || data->broker_client == nullptr || loan == nullptr ||
+      (!supports_raw_loan && !supports_dynamic_loan)) {
+    return false;
+  }
+  const size_t loan_capacity = supports_raw_loan
+                                   ? data->adapter.MessageSize()
+                                   : kDefaultBridgeLoanedPayloadCapacity;
+  if (loan_capacity == 0 ||
+      loan_capacity > std::numeric_limits<uint32_t>::max()) {
+    return false;
+  }
+  void *storage = std::malloc(loan_capacity);
+  if (storage == nullptr) {
+    return false;
+  }
+  loan->loan = nullptr;
+  loan->data = storage;
+  loan->capacity = static_cast<uint32_t>(loan_capacity);
+  loan->message_in_loan = false;
+  loan->raw_message_in_loan = false;
+  loan->storage_owned_by_rmw = true;
+  loan->arena.Reset(storage, loan_capacity);
   return true;
 }
 
@@ -396,6 +429,10 @@ bool TakePublisherLoanRecord(rmw_mdds_cpp::PublisherData *data,
 bool ReturnPublisherBridgeLoan(
     rmw_mdds_cpp::PublisherData *data,
     const rmw_mdds_cpp::BridgePublisherLoanRecord &loan) {
+  if (loan.storage_owned_by_rmw) {
+    std::free(loan.data);
+    return true;
+  }
   if (data == nullptr || data->bridge_publisher == nullptr ||
       loan.loan == nullptr) {
     return true;
@@ -411,6 +448,9 @@ void DestroyPublisherLoanedRosMessage(
     return;
   }
   if (bridge_loan.raw_message_in_loan) {
+    if (bridge_loan.storage_owned_by_rmw && bridge_loan.message_in_loan) {
+      data->adapter.DestroyMessageInPlace(ros_message);
+    }
     return;
   }
   if (bridge_loan.message_in_loan) {
@@ -706,10 +746,11 @@ void AddUniqueNodeGraphInfo(std::vector<rmw_mdds_cpp::NodeGraphInfo> *nodes,
   }
 }
 
-bool GraphNodeExists(const char *node_name, const char *node_namespace) {
+bool GraphNodeExists(const rmw_node_t *node, const char *node_name,
+                     const char *node_namespace) {
   auto nodes = rmw_mdds_cpp::GetRegisteredNodes();
   if (rmw_mdds_cpp::BrokerModeEnabled()) {
-    for (const auto &broker_node : rmw_mdds_cpp::GetBrokerGraphNodes()) {
+    for (const auto &broker_node : rmw_mdds_cpp::GetBrokerGraphNodes(node->context)) {
       AddUniqueNodeGraphInfo(&nodes, broker_node);
     }
   }
@@ -762,7 +803,7 @@ rmw_ret_t ValidateNamesAndTypesByNodeQuery(
     RMW_SET_ERROR_MSG("node namespace is invalid");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  if (!GraphNodeExists(node_name, node_namespace)) {
+  if (!GraphNodeExists(node, node_name, node_namespace)) {
     RMW_SET_ERROR_MSG("node name was not found");
     return RMW_RET_NODE_NAME_NON_EXISTENT;
   }
@@ -1495,7 +1536,7 @@ rmw_ret_t InitNodeGraphStringArrays(const rmw_node_t *node,
 
   auto nodes = rmw_mdds_cpp::GetRegisteredNodes();
   if (rmw_mdds_cpp::BrokerModeEnabled()) {
-    for (const auto &broker_node : rmw_mdds_cpp::GetBrokerGraphNodes()) {
+    for (const auto &broker_node : rmw_mdds_cpp::GetBrokerGraphNodes(node->context)) {
       AddUniqueNodeGraphInfo(&nodes, broker_node);
     }
   }
@@ -2009,7 +2050,8 @@ rmw_borrow_loaned_message(const rmw_publisher_t *publisher,
     return RMW_RET_UNSUPPORTED;
   }
   rmw_mdds_cpp::BridgePublisherLoanRecord bridge_loan;
-  if (BorrowPublisherBridgeLoan(data, &bridge_loan)) {
+  if (BorrowPublisherBridgeLoan(data, &bridge_loan) ||
+      BorrowPublisherBrokerLoan(data, &bridge_loan)) {
     if (supports_raw_loan) {
       void *message = data->adapter.ConstructMessageInPlace(
           bridge_loan.data, bridge_loan.capacity);
@@ -2117,6 +2159,73 @@ rmw_ret_t rmw_publish_loaned_message(const rmw_publisher_t *publisher,
     return RMW_RET_INVALID_ARGUMENT;
   }
   const size_t payload_size = data->adapter.MessageSize();
+  const bool can_publish_broker_raw_loan =
+      data->broker_client != nullptr && bridge_loan.storage_owned_by_rmw &&
+      bridge_loan.loan == nullptr && bridge_loan.raw_message_in_loan &&
+      bridge_loan.message_in_loan && payload_size != 0;
+  if (can_publish_broker_raw_loan) {
+    std::vector<uint8_t> payload;
+    const bool use_mdds_payload = rmw_mdds_cpp::BrokerBridgePayloadEnabled();
+    const bool encoded = use_mdds_payload
+                             ? data->adapter.EncodeMdds(ros_message, &payload)
+                             : data->adapter.Encode(ros_message, &payload);
+    if (!encoded) {
+      DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
+      (void)ReturnPublisherBridgeLoan(data, bridge_loan);
+      RMW_SET_ERROR_MSG("failed to encode broker loaned message");
+      return RMW_RET_ERROR;
+    }
+    rmw_mdds_cpp::NotePublisherPublication(data,
+                                           rmw_mdds_cpp::MddsNowNanoseconds());
+    const uint64_t publication_sequence_number =
+        rmw_mdds_cpp::ReservePublicationSequenceNumber(data);
+    std::string error;
+    const bool published = rmw_mdds_cpp::BrokerClientPublish(
+        data->broker_client, payload, publication_sequence_number, &error,
+        use_mdds_payload);
+    DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
+    (void)ReturnPublisherBridgeLoan(data, bridge_loan);
+    if (!published) {
+      RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("MDDS broker publish failed: %s",
+                                           error.c_str());
+      return RMW_RET_ERROR;
+    }
+    return RMW_RET_OK;
+  }
+  const bool can_publish_broker_dynamic_loan =
+      data->broker_client != nullptr && bridge_loan.storage_owned_by_rmw &&
+      bridge_loan.loan == nullptr && bridge_loan.message_in_loan &&
+      !bridge_loan.raw_message_in_loan &&
+      data->adapter.SupportsDynamicLoanedMessage();
+  if (can_publish_broker_dynamic_loan) {
+    std::vector<uint8_t> payload;
+    const bool use_mdds_payload = rmw_mdds_cpp::BrokerBridgePayloadEnabled();
+    const bool encoded = use_mdds_payload
+                             ? data->adapter.EncodeMdds(ros_message, &payload)
+                             : data->adapter.Encode(ros_message, &payload);
+    if (!encoded) {
+      DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
+      (void)ReturnPublisherBridgeLoan(data, bridge_loan);
+      RMW_SET_ERROR_MSG("failed to encode broker dynamic loaned message");
+      return RMW_RET_ERROR;
+    }
+    rmw_mdds_cpp::NotePublisherPublication(data,
+                                           rmw_mdds_cpp::MddsNowNanoseconds());
+    const uint64_t publication_sequence_number =
+        rmw_mdds_cpp::ReservePublicationSequenceNumber(data);
+    std::string error;
+    const bool published = rmw_mdds_cpp::BrokerClientPublish(
+        data->broker_client, payload, publication_sequence_number, &error,
+        use_mdds_payload);
+    DestroyPublisherLoanedRosMessage(data, ros_message, bridge_loan);
+    (void)ReturnPublisherBridgeLoan(data, bridge_loan);
+    if (!published) {
+      RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("MDDS broker publish failed: %s",
+                                           error.c_str());
+      return RMW_RET_ERROR;
+    }
+    return RMW_RET_OK;
+  }
   const bool can_publish_raw_loan =
       data->bridge_publisher != nullptr && bridge_loan.loan != nullptr &&
       bridge_loan.raw_message_in_loan && payload_size != 0 &&
@@ -3611,7 +3720,7 @@ rmw_ret_t rmw_get_publisher_names_and_types_by_node(
       node, allocator, names_and_types,
       rmw_mdds_cpp::BrokerModeEnabled()
           ? rmw_mdds_cpp::GetBrokerGraphPublisherNamesAndTypesByNode(
-                node_name, node_namespace)
+                node->context, node_name, node_namespace)
           : rmw_mdds_cpp::GetPublisherNamesAndTypesByNode(node_name,
                                                           node_namespace));
 }
@@ -3630,7 +3739,7 @@ rmw_ret_t rmw_get_subscriber_names_and_types_by_node(
       node, allocator, names_and_types,
       rmw_mdds_cpp::BrokerModeEnabled()
           ? rmw_mdds_cpp::GetBrokerGraphSubscriptionNamesAndTypesByNode(
-                node_name, node_namespace)
+                node->context, node_name, node_namespace)
           : rmw_mdds_cpp::GetSubscriptionNamesAndTypesByNode(node_name,
                                                              node_namespace));
 }
@@ -3648,7 +3757,7 @@ rmw_ret_t rmw_get_service_names_and_types_by_node(
       node, allocator, names_and_types,
       rmw_mdds_cpp::BrokerModeEnabled()
           ? rmw_mdds_cpp::GetBrokerGraphServiceNamesAndTypesByNode(
-                node_name, node_namespace)
+                node->context, node_name, node_namespace)
           : GetServiceNamesAndTypesByNode(node_name, node_namespace));
 }
 
@@ -3665,7 +3774,7 @@ rmw_ret_t rmw_get_client_names_and_types_by_node(
       node, allocator, names_and_types,
       rmw_mdds_cpp::BrokerModeEnabled()
           ? rmw_mdds_cpp::GetBrokerGraphClientNamesAndTypesByNode(
-                node_name, node_namespace)
+                node->context, node_name, node_namespace)
           : GetClientNamesAndTypesByNode(node_name, node_namespace));
 }
 
@@ -3677,7 +3786,7 @@ rmw_get_topic_names_and_types(const rmw_node_t *node,
   return InitNamesAndTypes(
       node, allocator, topic_names_and_types,
       rmw_mdds_cpp::BrokerModeEnabled()
-          ? rmw_mdds_cpp::GetBrokerGraphTopicNamesAndTypes()
+          ? rmw_mdds_cpp::GetBrokerGraphTopicNamesAndTypes(node->context)
           : rmw_mdds_cpp::GetTopicNamesAndTypes());
 }
 
@@ -3687,7 +3796,7 @@ rmw_ret_t rmw_get_service_names_and_types(
   return InitNamesAndTypes(
       node, allocator, service_names_and_types,
       rmw_mdds_cpp::BrokerModeEnabled()
-          ? rmw_mdds_cpp::GetBrokerGraphServiceNamesAndTypes()
+          ? rmw_mdds_cpp::GetBrokerGraphServiceNamesAndTypes(node->context)
           : GetServiceNamesAndTypes());
 }
 
@@ -3722,7 +3831,7 @@ rmw_ret_t rmw_count_publishers(const rmw_node_t *node, const char *topic_name,
     return ret;
   }
   *count = rmw_mdds_cpp::BrokerModeEnabled()
-               ? rmw_mdds_cpp::CountBrokerGraphPublishersByTopic(topic_name)
+               ? rmw_mdds_cpp::CountBrokerGraphPublishersByTopic(node->context, topic_name)
                : rmw_mdds_cpp::CountPublishersByTopic(topic_name);
   return RMW_RET_OK;
 }
@@ -3742,7 +3851,7 @@ rmw_ret_t rmw_count_subscribers(const rmw_node_t *node, const char *topic_name,
     return ret;
   }
   *count = rmw_mdds_cpp::BrokerModeEnabled()
-               ? rmw_mdds_cpp::CountBrokerGraphSubscriptionsByTopic(topic_name)
+               ? rmw_mdds_cpp::CountBrokerGraphSubscriptionsByTopic(node->context, topic_name)
                : rmw_mdds_cpp::CountSubscriptionsByTopic(topic_name);
   return RMW_RET_OK;
 }
@@ -3762,7 +3871,7 @@ rmw_ret_t rmw_count_clients(const rmw_node_t *node, const char *service_name,
     return ret;
   }
   *count = rmw_mdds_cpp::BrokerModeEnabled()
-               ? rmw_mdds_cpp::CountBrokerGraphClientsByName(service_name)
+               ? rmw_mdds_cpp::CountBrokerGraphClientsByName(node->context, service_name)
                : CountClientsByName(service_name);
   return RMW_RET_OK;
 }
@@ -3782,7 +3891,7 @@ rmw_ret_t rmw_count_services(const rmw_node_t *node, const char *service_name,
     return ret;
   }
   *count = rmw_mdds_cpp::BrokerModeEnabled()
-               ? rmw_mdds_cpp::CountBrokerGraphServicesByName(service_name)
+               ? rmw_mdds_cpp::CountBrokerGraphServicesByName(node->context, service_name)
                : CountServicesByName(service_name);
   return RMW_RET_OK;
 }
@@ -3893,7 +4002,7 @@ rmw_ret_t rmw_get_publishers_info_by_topic(
       node, allocator,
       rmw_mdds_cpp::BrokerModeEnabled()
           ? rmw_mdds_cpp::GetBrokerGraphPublisherEndpointInfosByTopic(
-                topic_name)
+                node->context, topic_name)
           : rmw_mdds_cpp::GetPublisherEndpointInfosByTopic(topic_name),
       publishers_info);
 }
@@ -3915,7 +4024,7 @@ rmw_ret_t rmw_get_subscriptions_info_by_topic(
       node, allocator,
       rmw_mdds_cpp::BrokerModeEnabled()
           ? rmw_mdds_cpp::GetBrokerGraphSubscriptionEndpointInfosByTopic(
-                topic_name)
+                node->context, topic_name)
           : rmw_mdds_cpp::GetSubscriptionEndpointInfosByTopic(topic_name),
       subscriptions_info);
 }

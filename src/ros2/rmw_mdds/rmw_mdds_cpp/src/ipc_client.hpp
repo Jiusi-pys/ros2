@@ -49,8 +49,8 @@ void NoteContextInitialized();
  * remain, and in a process that only connects to a remote broker. */
 void ShutdownEmbeddedBrokerIfLastContext();
 bool BrokerGraphHasMatchingService(const ClientData * client);
-size_t CountBrokerGraphPublishersByTopic(const char * topic_name);
-size_t CountBrokerGraphSubscriptionsByTopic(const char * topic_name);
+size_t CountBrokerGraphPublishersByTopic(const rmw_context_t * context, const char * topic_name);
+size_t CountBrokerGraphSubscriptionsByTopic(const rmw_context_t * context, const char * topic_name);
 size_t CountBrokerGraphPublishersForSubscription(const SubscriptionData * subscription);
 size_t CountBrokerGraphSubscriptionsForPublisher(const PublisherData * publisher);
 bool HasUnreadBrokerGraphPublisherMatchedStatus(PublisherData * publisher);
@@ -59,23 +59,23 @@ bool TakeBrokerGraphPublisherMatchedStatus(
   PublisherData * publisher, rmw_matched_status_t * status);
 bool TakeBrokerGraphSubscriptionMatchedStatus(
   SubscriptionData * subscription, rmw_matched_status_t * status);
-size_t CountBrokerGraphClientsByName(const char * service_name);
-size_t CountBrokerGraphServicesByName(const char * service_name);
-std::vector<NameAndTypes> GetBrokerGraphTopicNamesAndTypes();
+size_t CountBrokerGraphClientsByName(const rmw_context_t * context, const char * service_name);
+size_t CountBrokerGraphServicesByName(const rmw_context_t * context, const char * service_name);
+std::vector<NameAndTypes> GetBrokerGraphTopicNamesAndTypes(const rmw_context_t * context);
 std::vector<NameAndTypes> GetBrokerGraphPublisherNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace);
+  const rmw_context_t * context, const char * node_name, const char * node_namespace);
 std::vector<NameAndTypes> GetBrokerGraphSubscriptionNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace);
-std::vector<NameAndTypes> GetBrokerGraphServiceNamesAndTypes();
+  const rmw_context_t * context, const char * node_name, const char * node_namespace);
+std::vector<NameAndTypes> GetBrokerGraphServiceNamesAndTypes(const rmw_context_t * context);
 std::vector<NameAndTypes> GetBrokerGraphServiceNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace);
+  const rmw_context_t * context, const char * node_name, const char * node_namespace);
 std::vector<NameAndTypes> GetBrokerGraphClientNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace);
-std::vector<NodeGraphInfo> GetBrokerGraphNodes();
+  const rmw_context_t * context, const char * node_name, const char * node_namespace);
+std::vector<NodeGraphInfo> GetBrokerGraphNodes(const rmw_context_t * context);
 std::vector<TopicEndpointInfo> GetBrokerGraphPublisherEndpointInfosByTopic(
-  const char * topic_name);
+  const rmw_context_t * context, const char * topic_name);
 std::vector<TopicEndpointInfo> GetBrokerGraphSubscriptionEndpointInfosByTopic(
-  const char * topic_name);
+  const rmw_context_t * context, const char * topic_name);
 
 void * CreatePublisherBrokerClient(PublisherData * publisher, std::string * error);
 void * CreateSubscriptionBrokerClient(SubscriptionData * subscription, std::string * error);

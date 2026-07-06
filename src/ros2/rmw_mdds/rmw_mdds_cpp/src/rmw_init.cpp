@@ -467,7 +467,9 @@ rmw_ret_t rmw_init(const rmw_init_options_t * options, rmw_context_t * context)
   // so the increment still pairs 1:1 with exactly one rmw_context_fini.
   rmw_mdds_cpp::NoteContextInitialized();
 
-  (void)rmw_mdds_cpp::BridgeBackend::Instance().Available();
+  if (!broker_mode) {
+    (void)rmw_mdds_cpp::BridgeBackend::Instance().Available();
+  }
 
   *context = tmp;
   return RMW_RET_OK;

@@ -25,33 +25,34 @@
 #include <utility>
 #include <vector>
 
+#include "bridge_backend.hpp"
 #include "ipc_protocol.hpp"
 #include "ipc_transport.hpp"
 
-namespace rmw_mdds_cpp
-{
-struct BridgeSample;
+namespace rmw_mdds_cpp {
+namespace ipc {
 
-namespace ipc
-{
-
-struct RetainedSample
-{
-  void * owner = nullptr;
+struct RetainedSample {
+  void *owner = nullptr;
   EndpointDescriptor source;
   SampleMessage sample;
 };
 
-class IpcBroker
-{
+struct LocalBridgeEcho {
+  EndpointDescriptor source;
+  std::vector<uint8_t> payload;
+  std::chrono::steady_clock::time_point expires_at{};
+};
+
+class IpcBroker {
 public:
   IpcBroker();
   ~IpcBroker();
 
   IpcBroker(const IpcBroker &) = delete;
-  IpcBroker & operator=(const IpcBroker &) = delete;
+  IpcBroker &operator=(const IpcBroker &) = delete;
 
-  bool Start(const std::string & socket_path, std::string * error);
+  bool Start(const std::string &socket_path, std::string *error);
   void Stop();
   bool IsRunning() const;
 
@@ -60,33 +61,46 @@ private:
   struct BridgeSubscriptionState;
 
   void AcceptLoop();
-  void ClientLoop(Connection * connection);
-  void HandleFrame(Connection * connection, const Frame & frame);
-  void RegisterEndpoint(Connection * connection, const Frame & frame, EndpointKind expected_kind);
-  void PublishSample(Connection * connection, const Frame & frame);
-  void DeliverBridgeSample(
-    const EndpointDescriptor & subscription_endpoint, const std::vector<uint8_t> & payload,
-    uint64_t sequence_number);
+  void ClientLoop(Connection *connection);
+  void HandleFrame(Connection *connection, const Frame &frame);
+  void RegisterEndpoint(Connection *connection, const Frame &frame,
+                        EndpointKind expected_kind);
+  void PublishSample(Connection *connection, const Frame &frame);
+  void DeliverBridgeSample(const EndpointDescriptor &subscription_endpoint,
+                           const std::vector<uint8_t> &payload,
+                           uint64_t sequence_number);
+  void RememberLocalBridgeEcho(const EndpointDescriptor &source,
+                               const std::vector<uint8_t> &payload);
+  void ForgetLocalBridgeEcho(const EndpointDescriptor &source,
+                             const std::vector<uint8_t> &payload);
+  bool ConsumeLocalBridgeEcho(const EndpointDescriptor &target,
+                              const std::vector<uint8_t> &payload);
   void BroadcastGraphUpdate();
-  void DestroyBridgeEndpoints(Connection * connection);
-  static void BridgeSampleCallback(const BridgeSample * sample, void * user_data);
-  /* Matched-count listener on a local client's rq/ bridge publisher; rebroadcasts
-   * the graph so a remote service provider becomes visible as a kService. */
-  static void OnBridgePublisherMatched(uint32_t matched_count, void * user_data);
+  void DestroyBridgeEndpoints(Connection *connection);
+  static void BridgeSampleCallback(const BridgeSample *sample, void *user_data);
+  /* Matched-count listener on a local client's rq/ bridge publisher;
+   * rebroadcasts the graph so a remote service provider becomes visible as a
+   * kService. */
+  static void OnBridgePublisherMatched(uint32_t matched_count, void *user_data);
   /* Receives the DDS-side node list a gateway publishes over MDDS, so remote
-   * nodes can be surfaced in this broker's graph (cross-board node discovery). */
-  static void NodeSyncBridgeCallback(const BridgeSample * sample, void * user_data);
-  void OnNodeSync(const std::vector<uint8_t> & payload);
+   * nodes can be surfaced in this broker's graph (cross-board node discovery).
+   */
+  static void NodeSyncBridgeCallback(const BridgeSample *sample,
+                                     void *user_data);
+  void OnNodeSync(const std::vector<uint8_t> &payload);
   /* Cross-board graph introspection: every broker publishes its full local
-   * endpoint list (real ROS node_name/topic/service identities) over the bridge;
-   * peers merge it so get_node_names / get_*_names_and_types resolve cross-board.
-   * Generalises the gateway-only node-sync channel to every rmw_mdds broker. */
-  static void GraphSyncBridgeCallback(const BridgeSample * sample, void * user_data);
-  void OnGraphSync(const std::vector<uint8_t> & payload);
+   * endpoint list (real ROS node_name/topic/service identities) over the
+   * bridge; peers merge it so get_node_names / get_*_names_and_types resolve
+   * cross-board. Generalises the gateway-only node-sync channel to every
+   * rmw_mdds broker. */
+  static void GraphSyncBridgeCallback(const BridgeSample *sample,
+                                      void *user_data);
+  void OnGraphSync(const std::vector<uint8_t> &payload);
   void PublishLocalGraph();
-  bool SendFrame(Connection * connection, const Frame & frame);
-  void SendAck(Connection * connection, uint64_t request_id);
-  void SendError(Connection * connection, uint64_t request_id, const std::string & message);
+  bool SendFrame(Connection *connection, const Frame &frame);
+  void SendAck(Connection *connection, uint64_t request_id);
+  void SendError(Connection *connection, uint64_t request_id,
+                 const std::string &message);
 
   mutable std::mutex mutex_;
   std::atomic<bool> running_{false};
@@ -95,29 +109,29 @@ private:
   std::thread accept_thread_;
   std::vector<std::unique_ptr<Connection>> connections_;
   std::vector<RetainedSample> retained_samples_;
+  std::vector<LocalBridgeEcho> pending_bridge_echoes_;
   bool bridge_enabled_ = false;
-  void * node_sync_subscription_ = nullptr;
+  void *node_sync_subscription_ = nullptr;
   std::vector<EndpointDescriptor> remote_node_endpoints_;
 
   // Cross-board graph sync state. Each peer broker is keyed by a random
   // broker_id_; its latest full endpoint list is kept in a per-source bucket
   // (whole-list replace + epoch ordering so a peer's removals propagate, plus a
   // last-seen TTL so a vanished board's entries age out).
-  struct RemoteGraphBucket
-  {
+  struct RemoteGraphBucket {
     std::chrono::steady_clock::time_point last_seen{};
     uint64_t epoch = 0u;
     std::vector<EndpointDescriptor> endpoints;
   };
   uint64_t broker_id_ = 0u;
   std::atomic<uint64_t> graph_epoch_{0u};
-  void * graph_sync_publisher_ = nullptr;
-  void * graph_sync_subscription_ = nullptr;
+  void *graph_sync_publisher_ = nullptr;
+  void *graph_sync_subscription_ = nullptr;
   std::map<uint64_t, RemoteGraphBucket> remote_graph_endpoints_;
   std::thread graph_reannounce_thread_;
 };
 
-}  // namespace ipc
-}  // namespace rmw_mdds_cpp
+} // namespace ipc
+} // namespace rmw_mdds_cpp
 
-#endif  // RMW_MDDS_CPP_SRC__IPC_BROKER_HPP_
+#endif // RMW_MDDS_CPP_SRC__IPC_BROKER_HPP_

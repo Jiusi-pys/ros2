@@ -253,9 +253,13 @@ rmw_subscription_t * rmw_create_subscription(
   subscription->data = data;
   subscription->topic_name = rcutils_strdup(topic_name, allocator);
   subscription->options = *subscription_options;
+  const bool bridge_can_loan =
+      data->broker_client == nullptr &&
+      rmw_mdds_cpp::BridgeBackend::Instance().SupportsSubscriberLoanedMessages(
+          data->bridge_subscription);
   subscription->can_loan_messages =
-    data->adapter.IsValid() && data->adapter.SupportsRawLoanedMessage() &&
-    rmw_mdds_cpp::BridgeBackend::Instance().SupportsSubscriberLoanedMessages(data->bridge_subscription);
+      data->adapter.IsValid() && data->adapter.SupportsRawLoanedMessage() &&
+      bridge_can_loan;
   subscription->is_cft_enabled = false;
   if (subscription->topic_name == nullptr) {
     rmw_mdds_cpp::DestroyBrokerClient(data->broker_client);

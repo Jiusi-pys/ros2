@@ -28,6 +28,7 @@ TEST(RmwMddsIpcProtocol, EndpointDescriptorRoundTripPreservesGraphFields)
   rmw_mdds_cpp::ipc::EndpointDescriptor endpoint;
   endpoint.entity_id = 0x1234567890abcdefu;
   endpoint.local_context_id = 0x0fedcba987654321u;
+  endpoint.domain_id = 93u;
   endpoint.kind = rmw_mdds_cpp::ipc::EndpointKind::kPublisher;
   endpoint.node_name = "camera_node";
   endpoint.node_namespace = "/robot/front";
@@ -66,6 +67,7 @@ TEST(RmwMddsIpcProtocol, EndpointDescriptorRoundTripPreservesGraphFields)
     << error;
   EXPECT_EQ(endpoint.entity_id, decoded_endpoint.entity_id);
   EXPECT_EQ(endpoint.local_context_id, decoded_endpoint.local_context_id);
+  EXPECT_EQ(endpoint.domain_id, decoded_endpoint.domain_id);
   EXPECT_EQ(endpoint.kind, decoded_endpoint.kind);
   EXPECT_EQ(endpoint.node_name, decoded_endpoint.node_name);
   EXPECT_EQ(endpoint.node_namespace, decoded_endpoint.node_namespace);

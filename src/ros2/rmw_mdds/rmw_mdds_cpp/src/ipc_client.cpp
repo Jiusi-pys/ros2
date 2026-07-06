@@ -14,11 +14,13 @@
 
 #include "ipc_client.hpp"
 
+#include <poll.h>
 #include <sys/socket.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -26,8 +28,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <utility>
 #include <unistd.h>
+#include <utility>
 
 #include "bridge_backend.hpp"
 #include "broker.hpp"
@@ -38,13 +40,17 @@
 #include "rmw_dds_common/qos.hpp"
 #include "rmw_mdds_cpp/identifier.hpp"
 
-namespace rmw_mdds_cpp
-{
-namespace
-{
+namespace rmw_mdds_cpp {
+namespace {
 constexpr uint64_t kRegisterRequestId = 1u;
+constexpr std::chrono::milliseconds kGraphCacheWarmupTimeout{6500};
+constexpr std::chrono::milliseconds kGraphCacheSettleWindow{3500};
+constexpr std::chrono::seconds kGraphCacheFreshWindow{5};
+constexpr const char *kRemoteNodeSyncTopic = "_mdds_remote_node";
 std::mutex g_graph_mutex;
 std::vector<ipc::EndpointDescriptor> g_graph_endpoints;
+std::chrono::steady_clock::time_point g_graph_cache_last_update;
+std::chrono::steady_clock::time_point g_graph_cache_last_refresh;
 std::mutex g_auto_broker_mutex;
 std::unique_ptr<ipc::IpcBroker> g_auto_broker;
 // Process-wide count of live rmw contexts, guarded by g_auto_broker_mutex. The
@@ -53,21 +59,19 @@ std::unique_ptr<ipc::IpcBroker> g_auto_broker;
 // tearing them down on an earlier context's fini would break the others.
 int g_active_context_count = 0;
 
-void SetError(std::string * error, const std::string & message)
-{
+void SetError(std::string *error, const std::string &message) {
   if (error != nullptr) {
     *error = message;
   }
 }
 
-uint64_t NowNanoseconds()
-{
+uint64_t NowNanoseconds() {
   const auto now = std::chrono::system_clock::now().time_since_epoch();
-  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
 }
 
-bool EnvValueEnabled(const char * value)
-{
+bool EnvValueEnabled(const char *value) {
   if (value == nullptr || value[0] == '\0') {
     return false;
   }
@@ -77,8 +81,7 @@ bool EnvValueEnabled(const char * value)
          std::strcmp(value, "YES") == 0;
 }
 
-bool EnvValueDisabled(const char * value)
-{
+bool EnvValueDisabled(const char *value) {
   if (value == nullptr || value[0] == '\0') {
     return false;
   }
@@ -88,26 +91,44 @@ bool EnvValueDisabled(const char * value)
          std::strcmp(value, "NO") == 0;
 }
 
-bool EnvValueConfigured(const char * value)
-{
+bool EnvValueConfigured(const char *value) {
   return value != nullptr && value[0] != '\0';
 }
 
-uint64_t EntityIdFromPointer(const void * ptr)
-{
+bool GraphDebugEnabled() {
+  const char *value = std::getenv("RMW_MDDS_GRAPH_DEBUG");
+  return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+uint64_t EntityIdFromPointer(const void *ptr) {
   return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(ptr));
 }
 
-uint64_t LocalContextId(const rmw_context_t * context)
-{
-  return (static_cast<uint64_t>(getpid()) << 32u) ^ EntityIdFromPointer(context);
+uint64_t LocalContextId(const rmw_context_t *context) {
+  return (static_cast<uint64_t>(getpid()) << 32u) ^
+         EntityIdFromPointer(context);
 }
 
-ipc::EndpointDescriptor MakePublisherEndpoint(PublisherData * publisher)
-{
+uint32_t DomainIdFromContext(const rmw_context_t *context) {
+  if (context == nullptr) {
+    return 0u;
+  }
+  return static_cast<uint32_t>(context->actual_domain_id);
+}
+
+bool EndpointMatchesDomain(const ipc::EndpointDescriptor &endpoint,
+                           uint32_t domain_id) {
+  return endpoint.domain_id == domain_id;
+}
+
+bool ConnectBrokerSocketWithAutoStart(const std::string &socket_path,
+                                      ipc::UniqueFd *fd, std::string *error);
+
+ipc::EndpointDescriptor MakePublisherEndpoint(PublisherData *publisher) {
   ipc::EndpointDescriptor endpoint;
   endpoint.entity_id = EntityIdFromPointer(publisher);
   endpoint.local_context_id = LocalContextId(publisher->context);
+  endpoint.domain_id = DomainIdFromContext(publisher->context);
   endpoint.kind = ipc::EndpointKind::kPublisher;
   endpoint.node_name = publisher->node_name;
   endpoint.node_namespace = publisher->node_namespace;
@@ -120,11 +141,12 @@ ipc::EndpointDescriptor MakePublisherEndpoint(PublisherData * publisher)
   return endpoint;
 }
 
-ipc::EndpointDescriptor MakeSubscriptionEndpoint(SubscriptionData * subscription)
-{
+ipc::EndpointDescriptor
+MakeSubscriptionEndpoint(SubscriptionData *subscription) {
   ipc::EndpointDescriptor endpoint;
   endpoint.entity_id = EntityIdFromPointer(subscription);
   endpoint.local_context_id = LocalContextId(subscription->context);
+  endpoint.domain_id = DomainIdFromContext(subscription->context);
   endpoint.kind = ipc::EndpointKind::kSubscription;
   endpoint.node_name = subscription->node_name;
   endpoint.node_namespace = subscription->node_namespace;
@@ -138,11 +160,11 @@ ipc::EndpointDescriptor MakeSubscriptionEndpoint(SubscriptionData * subscription
   return endpoint;
 }
 
-ipc::EndpointDescriptor MakeClientEndpoint(ClientData * client)
-{
+ipc::EndpointDescriptor MakeClientEndpoint(ClientData *client) {
   ipc::EndpointDescriptor endpoint;
   endpoint.entity_id = EntityIdFromPointer(client);
   endpoint.local_context_id = LocalContextId(client->context);
+  endpoint.domain_id = DomainIdFromContext(client->context);
   endpoint.kind = ipc::EndpointKind::kClient;
   endpoint.node_name = client->node_name;
   endpoint.node_namespace = client->node_namespace;
@@ -154,11 +176,11 @@ ipc::EndpointDescriptor MakeClientEndpoint(ClientData * client)
   return endpoint;
 }
 
-ipc::EndpointDescriptor MakeServiceEndpoint(ServiceData * service)
-{
+ipc::EndpointDescriptor MakeServiceEndpoint(ServiceData *service) {
   ipc::EndpointDescriptor endpoint;
   endpoint.entity_id = EntityIdFromPointer(service);
   endpoint.local_context_id = LocalContextId(service->context);
+  endpoint.domain_id = DomainIdFromContext(service->context);
   endpoint.kind = ipc::EndpointKind::kService;
   endpoint.node_name = service->node_name;
   endpoint.node_namespace = service->node_namespace;
@@ -170,110 +192,257 @@ ipc::EndpointDescriptor MakeServiceEndpoint(ServiceData * service)
   return endpoint;
 }
 
-bool RegistrationKindForEndpoint(
-  ipc::EndpointKind endpoint_kind, ipc::MessageKind * message_kind, std::string * error)
-{
+bool RegistrationKindForEndpoint(ipc::EndpointKind endpoint_kind,
+                                 ipc::MessageKind *message_kind,
+                                 std::string *error) {
   if (message_kind == nullptr) {
     SetError(error, "registration message kind output is null");
     return false;
   }
   switch (endpoint_kind) {
-    case ipc::EndpointKind::kPublisher:
-      *message_kind = ipc::MessageKind::kRegisterPublisher;
-      return true;
-    case ipc::EndpointKind::kSubscription:
-      *message_kind = ipc::MessageKind::kRegisterSubscription;
-      return true;
-    case ipc::EndpointKind::kClient:
-      *message_kind = ipc::MessageKind::kRegisterClient;
-      return true;
-    case ipc::EndpointKind::kService:
-      *message_kind = ipc::MessageKind::kRegisterService;
-      return true;
+  case ipc::EndpointKind::kPublisher:
+    *message_kind = ipc::MessageKind::kRegisterPublisher;
+    return true;
+  case ipc::EndpointKind::kSubscription:
+    *message_kind = ipc::MessageKind::kRegisterSubscription;
+    return true;
+  case ipc::EndpointKind::kClient:
+    *message_kind = ipc::MessageKind::kRegisterClient;
+    return true;
+  case ipc::EndpointKind::kService:
+    *message_kind = ipc::MessageKind::kRegisterService;
+    return true;
   }
   SetError(error, "endpoint kind is not supported by broker registration");
   return false;
 }
 
-void UpdateGraphCache(std::vector<ipc::EndpointDescriptor> endpoints)
-{
+void UpdateGraphCache(std::vector<ipc::EndpointDescriptor> endpoints,
+                      bool from_explicit_refresh = false) {
+  const size_t endpoint_count = endpoints.size();
+  const bool has_non_synthetic_endpoint = std::any_of(
+      endpoints.begin(), endpoints.end(), [](const ipc::EndpointDescriptor &endpoint) {
+        return endpoint.topic_name != kRemoteNodeSyncTopic;
+      });
   std::lock_guard<std::mutex> lock(g_graph_mutex);
   g_graph_endpoints = std::move(endpoints);
+  g_graph_cache_last_update = std::chrono::steady_clock::now();
+  if (from_explicit_refresh) {
+    g_graph_cache_last_refresh = g_graph_cache_last_update;
+  }
+  if (GraphDebugEnabled()) {
+    std::fprintf(stderr,
+                 "[rmw_mdds_graph] client cache update endpoints=%zu "
+                 "has_non_synthetic=%d\n",
+                 endpoint_count, has_non_synthetic_endpoint ? 1 : 0);
+  }
 }
 
-void ClearGraphCache()
-{
+void ClearGraphCache() {
   std::lock_guard<std::mutex> lock(g_graph_mutex);
   g_graph_endpoints.clear();
+  g_graph_cache_last_update = std::chrono::steady_clock::time_point{};
+  g_graph_cache_last_refresh = std::chrono::steady_clock::time_point{};
 }
 
-std::vector<ipc::EndpointDescriptor> GetGraphCacheSnapshot()
-{
+bool GraphCacheFresh() {
+  std::lock_guard<std::mutex> lock(g_graph_mutex);
+  if (g_graph_cache_last_refresh == std::chrono::steady_clock::time_point{} ||
+      std::chrono::steady_clock::now() - g_graph_cache_last_refresh >=
+          kGraphCacheFreshWindow) {
+    return false;
+  }
+  return std::any_of(g_graph_endpoints.begin(), g_graph_endpoints.end(),
+                     [](const ipc::EndpointDescriptor &endpoint) {
+                       return endpoint.topic_name != kRemoteNodeSyncTopic;
+                     });
+}
+
+bool GraphEndpointsContainNonSyntheticEndpoint(
+    const std::vector<ipc::EndpointDescriptor> &endpoints) {
+  return std::any_of(endpoints.begin(), endpoints.end(),
+                     [](const ipc::EndpointDescriptor &endpoint) {
+                       return endpoint.topic_name != kRemoteNodeSyncTopic;
+                     });
+}
+
+void RefreshGraphCacheFromBroker() {
+  if (!BrokerModeEnabled() || GraphCacheFresh()) {
+    if (GraphDebugEnabled()) {
+      std::fprintf(stderr, "[rmw_mdds_graph] client refresh skip broker_or_fresh\n");
+    }
+    return;
+  }
+
+  ipc::UniqueFd fd;
+  std::string error;
+  if (!ConnectBrokerSocketWithAutoStart(BrokerSocketPath(), &fd, &error)) {
+    if (GraphDebugEnabled()) {
+      std::fprintf(stderr, "[rmw_mdds_graph] client refresh connect fail error=%s\n", error.c_str());
+    }
+    return;
+  }
+  if (GraphDebugEnabled()) {
+    std::fprintf(stderr, "[rmw_mdds_graph] client refresh connected\n");
+  }
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + kGraphCacheWarmupTimeout;
+  bool saw_non_synthetic_update = false;
+  auto settle_deadline = deadline;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto now = std::chrono::steady_clock::now();
+    const auto wait_deadline =
+        saw_non_synthetic_update ? std::min(deadline, settle_deadline) : deadline;
+    if (now >= wait_deadline) {
+      if (GraphDebugEnabled()) {
+        std::fprintf(
+            stderr,
+            "[rmw_mdds_graph] client refresh settle complete saw_non_synthetic=%d\n",
+            saw_non_synthetic_update ? 1 : 0);
+      }
+      return;
+    }
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            wait_deadline - now);
+    pollfd pfd;
+    pfd.fd = fd.get();
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    const int poll_timeout =
+        static_cast<int>(std::max<std::chrono::milliseconds>(
+                             remaining, std::chrono::milliseconds{1})
+                             .count());
+    const int ready = poll(&pfd, 1u, poll_timeout);
+    if (ready <= 0 || (pfd.revents & POLLIN) == 0) {
+      if (saw_non_synthetic_update) {
+        if (GraphDebugEnabled()) {
+          std::fprintf(stderr, "[rmw_mdds_graph] client refresh poll settle timeout\n");
+        }
+        return;
+      }
+      continue;
+    }
+
+    ipc::Frame frame;
+    if (ipc::ReadFrame(fd.get(), &frame, &error) != ipc::ReadFrameStatus::kOk) {
+      if (GraphDebugEnabled()) {
+        std::fprintf(stderr, "[rmw_mdds_graph] client refresh read fail error=%s\n", error.c_str());
+      }
+      return;
+    }
+    if (frame.kind != ipc::MessageKind::kGraphUpdate) {
+      if (GraphDebugEnabled()) {
+        std::fprintf(
+            stderr, "[rmw_mdds_graph] client refresh ignore frame kind=%u bytes=%zu\n",
+            static_cast<unsigned>(frame.kind), frame.payload.size());
+      }
+      continue;
+    }
+
+    std::vector<ipc::EndpointDescriptor> endpoints;
+    std::string decode_error;
+    if (ipc::DecodeEndpointList(frame.payload.data(), frame.payload.size(),
+                                &endpoints, &decode_error)) {
+      const bool has_non_synthetic_endpoint =
+          GraphEndpointsContainNonSyntheticEndpoint(endpoints);
+      if (GraphDebugEnabled()) {
+        std::fprintf(
+            stderr,
+            "[rmw_mdds_graph] client refresh graph frame endpoints=%zu "
+            "has_non_synthetic=%d bytes=%zu\n",
+            endpoints.size(), has_non_synthetic_endpoint ? 1 : 0,
+            frame.payload.size());
+      }
+      UpdateGraphCache(std::move(endpoints), true);
+      if (has_non_synthetic_endpoint) {
+        saw_non_synthetic_update = true;
+        settle_deadline =
+            std::chrono::steady_clock::now() + kGraphCacheSettleWindow;
+      }
+    } else if (GraphDebugEnabled()) {
+      std::fprintf(
+          stderr, "[rmw_mdds_graph] client refresh decode fail bytes=%zu error=%s\n",
+          frame.payload.size(), decode_error.c_str());
+    }
+  }
+  if (GraphDebugEnabled()) {
+    std::fprintf(stderr, "[rmw_mdds_graph] client refresh deadline expired\n");
+  }
+}
+
+std::vector<ipc::EndpointDescriptor> GetGraphCacheSnapshot(bool refresh = true) {
+  if (refresh) {
+    RefreshGraphCacheFromBroker();
+  }
   std::lock_guard<std::mutex> lock(g_graph_mutex);
   return g_graph_endpoints;
 }
 
-bool EndpointMatchesNameAndType(
-  const ipc::EndpointDescriptor & endpoint, const std::string & name, const std::string & type)
-{
-  return endpoint.topic_name == name && (endpoint.type_name.empty() || type.empty() ||
-                                         endpoint.type_name == type);
+bool EndpointMatchesNameAndType(const ipc::EndpointDescriptor &endpoint,
+                                const std::string &name,
+                                const std::string &type) {
+  return endpoint.topic_name == name &&
+         (endpoint.type_name.empty() || type.empty() ||
+          endpoint.type_name == type);
 }
 
-size_t CountGraphEndpoints(
-  ipc::EndpointKind kind, const std::string & name, const std::string & type = {})
-{
+size_t CountGraphEndpoints(const rmw_context_t *context,
+                           ipc::EndpointKind kind, const std::string &name,
+                           const std::string &type = {}) {
   const auto endpoints = GetGraphCacheSnapshot();
+  const uint32_t domain_id = DomainIdFromContext(context);
   return static_cast<size_t>(std::count_if(
-    endpoints.begin(), endpoints.end(), [kind, &name, &type](const ipc::EndpointDescriptor & endpoint) {
-      return endpoint.kind == kind && EndpointMatchesNameAndType(endpoint, name, type);
-    }));
+      endpoints.begin(), endpoints.end(),
+      [domain_id, kind, &name, &type](const ipc::EndpointDescriptor &endpoint) {
+        return EndpointMatchesDomain(endpoint, domain_id) &&
+               endpoint.kind == kind &&
+               EndpointMatchesNameAndType(endpoint, name, type);
+      }));
 }
 
-bool QosProfilesCompatible(
-  const rmw_qos_profile_t & offered, const rmw_qos_profile_t & requested)
-{
+bool QosProfilesCompatible(const rmw_qos_profile_t &offered,
+                           const rmw_qos_profile_t &requested) {
   rmw_qos_compatibility_type_t compatibility = RMW_QOS_COMPATIBILITY_OK;
-  if (
-    rmw_dds_common::qos_profile_check_compatible(
-      offered, requested, &compatibility, nullptr, 0) != RMW_RET_OK) {
+  if (rmw_dds_common::qos_profile_check_compatible(
+          offered, requested, &compatibility, nullptr, 0) != RMW_RET_OK) {
     return false;
   }
   return compatibility != RMW_QOS_COMPATIBILITY_ERROR;
 }
 
 size_t CountCompatibleGraphPublishersForSubscription(
-  const std::vector<ipc::EndpointDescriptor> & endpoints,
-  const SubscriptionData & subscription)
-{
+    const std::vector<ipc::EndpointDescriptor> &endpoints,
+    const SubscriptionData &subscription) {
   return static_cast<size_t>(std::count_if(
-    endpoints.begin(), endpoints.end(),
-    [&subscription](const ipc::EndpointDescriptor & endpoint) {
-      return endpoint.kind == ipc::EndpointKind::kPublisher &&
-             EndpointMatchesNameAndType(
-               endpoint, subscription.topic_name, subscription.adapter.TypeName()) &&
-             QosProfilesCompatible(endpoint.qos, subscription.actual_qos);
-    }));
+      endpoints.begin(), endpoints.end(),
+      [&subscription](const ipc::EndpointDescriptor &endpoint) {
+        return EndpointMatchesDomain(endpoint, DomainIdFromContext(subscription.context)) &&
+               endpoint.kind == ipc::EndpointKind::kPublisher &&
+               EndpointMatchesNameAndType(endpoint, subscription.topic_name,
+                                          subscription.adapter.TypeName()) &&
+               QosProfilesCompatible(endpoint.qos, subscription.actual_qos);
+      }));
 }
 
 size_t CountCompatibleGraphSubscriptionsForPublisher(
-  const std::vector<ipc::EndpointDescriptor> & endpoints,
-  const PublisherData & publisher)
-{
+    const std::vector<ipc::EndpointDescriptor> &endpoints,
+    const PublisherData &publisher) {
   return static_cast<size_t>(std::count_if(
-    endpoints.begin(), endpoints.end(),
-    [&publisher](const ipc::EndpointDescriptor & endpoint) {
-      return endpoint.kind == ipc::EndpointKind::kSubscription &&
-             EndpointMatchesNameAndType(
-               endpoint, publisher.topic_name, publisher.adapter.TypeName()) &&
-             QosProfilesCompatible(publisher.actual_qos, endpoint.qos);
-    }));
+      endpoints.begin(), endpoints.end(),
+      [&publisher](const ipc::EndpointDescriptor &endpoint) {
+        return EndpointMatchesDomain(endpoint, DomainIdFromContext(publisher.context)) &&
+               endpoint.kind == ipc::EndpointKind::kSubscription &&
+               EndpointMatchesNameAndType(endpoint, publisher.topic_name,
+                                          publisher.adapter.TypeName()) &&
+               QosProfilesCompatible(publisher.actual_qos, endpoint.qos);
+      }));
 }
 
-int32_t CountChange(size_t current_count, size_t previous_count)
-{
-  const int64_t delta =
-    static_cast<int64_t>(current_count) - static_cast<int64_t>(previous_count);
+int32_t CountChange(size_t current_count, size_t previous_count) {
+  const int64_t delta = static_cast<int64_t>(current_count) -
+                        static_cast<int64_t>(previous_count);
   if (delta > std::numeric_limits<int32_t>::max()) {
     return std::numeric_limits<int32_t>::max();
   }
@@ -283,13 +452,12 @@ int32_t CountChange(size_t current_count, size_t previous_count)
   return static_cast<int32_t>(delta);
 }
 
-void FillBrokerMatchedStatus(
-  size_t current_count, size_t * total_count, size_t * last_total_count,
-  size_t * last_current_count, rmw_matched_status_t * status)
-{
-  if (
-    total_count == nullptr || last_total_count == nullptr || last_current_count == nullptr ||
-    status == nullptr) {
+void FillBrokerMatchedStatus(size_t current_count, size_t *total_count,
+                             size_t *last_total_count,
+                             size_t *last_current_count,
+                             rmw_matched_status_t *status) {
+  if (total_count == nullptr || last_total_count == nullptr ||
+      last_current_count == nullptr || status == nullptr) {
     return;
   }
   if (current_count > *last_current_count) {
@@ -298,21 +466,20 @@ void FillBrokerMatchedStatus(
   status->total_count = *total_count;
   status->total_count_change = *total_count - *last_total_count;
   status->current_count = current_count;
-  status->current_count_change = CountChange(current_count, *last_current_count);
+  status->current_count_change =
+      CountChange(current_count, *last_current_count);
   *last_total_count = *total_count;
   *last_current_count = current_count;
 }
 
-void AddGraphNameAndType(
-  std::vector<NameAndTypes> * names_and_types, const std::string & name,
-  const std::string & type)
-{
+void AddGraphNameAndType(std::vector<NameAndTypes> *names_and_types,
+                         const std::string &name, const std::string &type) {
   if (names_and_types == nullptr || name.empty() || type.empty()) {
     return;
   }
   auto it = std::find_if(
-    names_and_types->begin(), names_and_types->end(),
-    [&name](const NameAndTypes & entry) { return entry.name == name; });
+      names_and_types->begin(), names_and_types->end(),
+      [&name](const NameAndTypes &entry) { return entry.name == name; });
   if (it == names_and_types->end()) {
     names_and_types->push_back(NameAndTypes{name, {type}});
     return;
@@ -322,71 +489,74 @@ void AddGraphNameAndType(
   }
 }
 
-bool EndpointBelongsToNode(
-  const ipc::EndpointDescriptor & endpoint, const char * node_name,
-  const char * node_namespace)
-{
-  return node_name != nullptr && node_namespace != nullptr && endpoint.node_name == node_name &&
+bool EndpointBelongsToNode(const ipc::EndpointDescriptor &endpoint,
+                           const char *node_name, const char *node_namespace) {
+  return node_name != nullptr && node_namespace != nullptr &&
+         endpoint.node_name == node_name &&
          endpoint.node_namespace == node_namespace;
 }
 
-std::vector<NameAndTypes> CollectGraphNamesAndTypesForKind(
-  ipc::EndpointKind kind, const char * node_name = nullptr, const char * node_namespace = nullptr)
-{
+std::vector<NameAndTypes>
+CollectGraphNamesAndTypesForKind(ipc::EndpointKind kind,
+                                 const rmw_context_t *context,
+                                 const char *node_name = nullptr,
+                                 const char *node_namespace = nullptr) {
   std::vector<NameAndTypes> names_and_types;
   const auto endpoints = GetGraphCacheSnapshot();
-  for (const auto & endpoint : endpoints) {
-    if (endpoint.kind != kind) {
+  const uint32_t domain_id = DomainIdFromContext(context);
+  for (const auto &endpoint : endpoints) {
+    if (!EndpointMatchesDomain(endpoint, domain_id) || endpoint.kind != kind) {
       continue;
     }
-    if (
-      (node_name != nullptr || node_namespace != nullptr) &&
-      !EndpointBelongsToNode(endpoint, node_name, node_namespace)) {
+    if ((node_name != nullptr || node_namespace != nullptr) &&
+        !EndpointBelongsToNode(endpoint, node_name, node_namespace)) {
       continue;
     }
-    AddGraphNameAndType(&names_and_types, endpoint.topic_name, endpoint.type_name);
+    AddGraphNameAndType(&names_and_types, endpoint.topic_name,
+                        endpoint.type_name);
   }
   return names_and_types;
 }
 
-void AddGraphNode(std::vector<NodeGraphInfo> * nodes, const ipc::EndpointDescriptor & endpoint)
-{
+void AddGraphNode(std::vector<NodeGraphInfo> *nodes,
+                  const ipc::EndpointDescriptor &endpoint) {
   if (nodes == nullptr || endpoint.node_name.empty()) {
     return;
   }
   const auto it = std::find_if(
-    nodes->begin(), nodes->end(), [&endpoint](const NodeGraphInfo & node) {
-      return node.node_name == endpoint.node_name &&
-             node.node_namespace == endpoint.node_namespace &&
-             node.enclave == endpoint.node_enclave;
-    });
+      nodes->begin(), nodes->end(), [&endpoint](const NodeGraphInfo &node) {
+        return node.node_name == endpoint.node_name &&
+               node.node_namespace == endpoint.node_namespace &&
+               node.enclave == endpoint.node_enclave;
+      });
   if (it == nodes->end()) {
-    nodes->push_back(
-      NodeGraphInfo{endpoint.node_name, endpoint.node_namespace, endpoint.node_enclave});
+    nodes->push_back(NodeGraphInfo{endpoint.node_name, endpoint.node_namespace,
+                                   endpoint.node_enclave});
   }
 }
 
-void FillGraphEndpointGid(
-  const ipc::EndpointDescriptor & endpoint, uint8_t discriminator, rmw_gid_t * gid)
-{
+void FillGraphEndpointGid(const ipc::EndpointDescriptor &endpoint,
+                          uint8_t discriminator, rmw_gid_t *gid) {
   if (gid == nullptr) {
     return;
   }
   *gid = {};
   gid->implementation_identifier = rmw_mdds_cpp_identifier;
   const uint64_t entity_id = endpoint.entity_id;
-  std::memcpy(gid->data, &entity_id, std::min(sizeof(entity_id), sizeof(gid->data)));
-  const size_t topic_size = std::min(endpoint.topic_name.size(), sizeof(gid->data));
+  std::memcpy(gid->data, &entity_id,
+              std::min(sizeof(entity_id), sizeof(gid->data)));
+  const size_t topic_size =
+      std::min(endpoint.topic_name.size(), sizeof(gid->data));
   for (size_t i = 0; i < topic_size; ++i) {
     gid->data[i] ^= static_cast<uint8_t>(endpoint.topic_name[i]);
   }
   gid->data[sizeof(gid->data) - 1] ^= discriminator;
 }
 
-TopicEndpointInfo MakeGraphTopicEndpointInfo(
-  const ipc::EndpointDescriptor & endpoint, rmw_endpoint_type_t endpoint_type,
-  uint8_t gid_discriminator)
-{
+TopicEndpointInfo
+MakeGraphTopicEndpointInfo(const ipc::EndpointDescriptor &endpoint,
+                           rmw_endpoint_type_t endpoint_type,
+                           uint8_t gid_discriminator) {
   TopicEndpointInfo info;
   info.node_name = endpoint.node_name;
   info.node_namespace = endpoint.node_namespace;
@@ -398,30 +568,33 @@ TopicEndpointInfo MakeGraphTopicEndpointInfo(
   return info;
 }
 
-std::vector<TopicEndpointInfo> CollectGraphEndpointInfosByTopic(
-  ipc::EndpointKind kind, const char * topic_name, rmw_endpoint_type_t endpoint_type,
-  uint8_t gid_discriminator)
-{
+std::vector<TopicEndpointInfo>
+CollectGraphEndpointInfosByTopic(ipc::EndpointKind kind, const char *topic_name,
+                                 const rmw_context_t *context,
+                                 rmw_endpoint_type_t endpoint_type,
+                                 uint8_t gid_discriminator) {
   std::vector<TopicEndpointInfo> infos;
   if (topic_name == nullptr) {
     return infos;
   }
   const auto endpoints = GetGraphCacheSnapshot();
-  for (const auto & endpoint : endpoints) {
-    if (endpoint.kind == kind && endpoint.topic_name == topic_name) {
-      infos.push_back(MakeGraphTopicEndpointInfo(endpoint, endpoint_type, gid_discriminator));
+  const uint32_t domain_id = DomainIdFromContext(context);
+  for (const auto &endpoint : endpoints) {
+    if (EndpointMatchesDomain(endpoint, domain_id) && endpoint.kind == kind &&
+        endpoint.topic_name == topic_name) {
+      infos.push_back(MakeGraphTopicEndpointInfo(endpoint, endpoint_type,
+                                                 gid_discriminator));
     }
   }
   return infos;
 }
 
-std::string FrameErrorMessage(const ipc::Frame & frame)
-{
+std::string FrameErrorMessage(const ipc::Frame &frame) {
   return std::string(frame.payload.begin(), frame.payload.end());
 }
 
-bool TryConnectBrokerSocket(const std::string & socket_path, ipc::UniqueFd * fd, std::string * error)
-{
+bool TryConnectBrokerSocket(const std::string &socket_path, ipc::UniqueFd *fd,
+                            std::string *error) {
   if (fd == nullptr) {
     SetError(error, "broker client fd output is null");
     return false;
@@ -436,8 +609,8 @@ bool TryConnectBrokerSocket(const std::string & socket_path, ipc::UniqueFd * fd,
   return false;
 }
 
-bool EnsureAutoBrokerStarted(const std::string & socket_path, std::string * error)
-{
+bool EnsureAutoBrokerStarted(const std::string &socket_path,
+                             std::string *error) {
   {
     std::lock_guard<std::mutex> lock(g_auto_broker_mutex);
     if (g_auto_broker != nullptr && g_auto_broker->IsRunning()) {
@@ -457,9 +630,8 @@ bool EnsureAutoBrokerStarted(const std::string & socket_path, std::string * erro
   return TryConnectBrokerSocket(socket_path, &ignored_fd, error);
 }
 
-bool ConnectBrokerSocketWithAutoStart(
-  const std::string & socket_path, ipc::UniqueFd * fd, std::string * error)
-{
+bool ConnectBrokerSocketWithAutoStart(const std::string &socket_path,
+                                      ipc::UniqueFd *fd, std::string *error) {
   if (TryConnectBrokerSocket(socket_path, fd, error)) {
     return true;
   }
@@ -467,7 +639,8 @@ bool ConnectBrokerSocketWithAutoStart(
     return false;
   }
 
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (std::chrono::steady_clock::now() < deadline) {
     if (TryConnectBrokerSocket(socket_path, fd, error)) {
       return true;
@@ -477,21 +650,17 @@ bool ConnectBrokerSocketWithAutoStart(
   return false;
 }
 
-class IpcClient
-{
+class IpcClient {
 public:
   IpcClient() = default;
 
-  ~IpcClient()
-  {
-    Stop();
-  }
+  ~IpcClient() { Stop(); }
 
   IpcClient(const IpcClient &) = delete;
-  IpcClient & operator=(const IpcClient &) = delete;
+  IpcClient &operator=(const IpcClient &) = delete;
 
-  bool ConnectAndRegister(const ipc::EndpointDescriptor & endpoint, std::string * error)
-  {
+  bool ConnectAndRegister(const ipc::EndpointDescriptor &endpoint,
+                          std::string *error) {
     ipc::UniqueFd fd;
     if (!ConnectBrokerSocketWithAutoStart(BrokerSocketPath(), &fd, error)) {
       return false;
@@ -501,16 +670,17 @@ public:
     if (!RegistrationKindForEndpoint(endpoint.kind, &kind, error)) {
       return false;
     }
-    if (!ipc::WriteFrame(
-        fd.get(),
-        ipc::Frame{kind, kRegisterRequestId, ipc::EncodeEndpointDescriptor(endpoint)}, error)) {
+    if (!ipc::WriteFrame(fd.get(),
+                         ipc::Frame{kind, kRegisterRequestId,
+                                    ipc::EncodeEndpointDescriptor(endpoint)},
+                         error)) {
       return false;
     }
 
     // The broker may interleave kGraphUpdate frames (triggered by another
     // endpoint's matched-count change) ahead of the registration ACK. Apply
-    // those to the graph cache and keep waiting for the ACK rather than treating
-    // an early graph update as an unexpected response.
+    // those to the graph cache and keep waiting for the ACK rather than
+    // treating an early graph update as an unexpected response.
     ipc::Frame ack;
     for (;;) {
       const ipc::ReadFrameStatus status = ipc::ReadFrame(fd.get(), &ack, error);
@@ -520,7 +690,8 @@ public:
       if (ack.kind == ipc::MessageKind::kGraphUpdate) {
         std::vector<ipc::EndpointDescriptor> endpoints;
         std::string decode_error;
-        if (ipc::DecodeEndpointList(ack.payload.data(), ack.payload.size(), &endpoints, &decode_error)) {
+        if (ipc::DecodeEndpointList(ack.payload.data(), ack.payload.size(),
+                                    &endpoints, &decode_error)) {
           UpdateGraphCache(std::move(endpoints));
         }
         continue;
@@ -531,7 +702,8 @@ public:
       SetError(error, "broker registration failed: " + FrameErrorMessage(ack));
       return false;
     }
-    if (ack.kind != ipc::MessageKind::kAck || ack.request_id != kRegisterRequestId) {
+    if (ack.kind != ipc::MessageKind::kAck ||
+        ack.request_id != kRegisterRequestId) {
       SetError(error, "broker registration returned an unexpected response");
       return false;
     }
@@ -541,27 +713,23 @@ public:
     return true;
   }
 
-  void StartReader(SubscriptionData * subscription)
-  {
+  void StartReader(SubscriptionData *subscription) {
     subscription_ = subscription;
     StartReaderThread();
   }
 
-  void StartReader(BrokerDeliveryCallback callback, void * user_data)
-  {
+  void StartReader(BrokerDeliveryCallback callback, void *user_data) {
     delivery_callback_ = callback;
     delivery_user_data_ = user_data;
     StartReaderThread();
   }
 
-  void StartReaderThread()
-  {
+  void StartReaderThread() {
     running_.store(true);
     reader_thread_ = std::thread(&IpcClient::ReaderLoop, this);
   }
 
-  void Stop()
-  {
+  void Stop() {
     running_.store(false);
     {
       std::lock_guard<std::mutex> lock(write_mutex_);
@@ -575,10 +743,8 @@ public:
     }
   }
 
-  bool Publish(
-    const std::vector<uint8_t> & payload, uint64_t sequence_number, bool mdds_payload,
-    std::string * error)
-  {
+  bool Publish(const std::vector<uint8_t> &payload, uint64_t sequence_number,
+               bool mdds_payload, std::string *error) {
     std::lock_guard<std::mutex> lock(write_mutex_);
     if (fd_.get() < 0) {
       SetError(error, "broker client socket is not connected");
@@ -597,18 +763,19 @@ public:
   }
 
 private:
-  void ReaderLoop()
-  {
+  void ReaderLoop() {
     while (running_.load()) {
       ipc::Frame frame;
       std::string error;
-      const ipc::ReadFrameStatus status = ipc::ReadFrame(fd_.get(), &frame, &error);
+      const ipc::ReadFrameStatus status =
+          ipc::ReadFrame(fd_.get(), &frame, &error);
       if (status != ipc::ReadFrameStatus::kOk) {
         break;
       }
       if (frame.kind == ipc::MessageKind::kGraphUpdate) {
         std::vector<ipc::EndpointDescriptor> endpoints;
-        if (ipc::DecodeEndpointList(frame.payload.data(), frame.payload.size(), &endpoints, &error)) {
+        if (ipc::DecodeEndpointList(frame.payload.data(), frame.payload.size(),
+                                    &endpoints, &error)) {
           UpdateGraphCache(std::move(endpoints));
         }
         continue;
@@ -617,7 +784,8 @@ private:
         continue;
       }
       ipc::SampleMessage sample;
-      if (!ipc::DecodeSampleMessage(frame.payload.data(), frame.payload.size(), &sample, &error)) {
+      if (!ipc::DecodeSampleMessage(frame.payload.data(), frame.payload.size(),
+                                    &sample, &error)) {
         continue;
       }
 
@@ -625,7 +793,8 @@ private:
         QueuedSample queued_sample;
         queued_sample.payload = std::move(sample.payload);
         queued_sample.info = rmw_get_zero_initialized_message_info();
-        queued_sample.info.publisher_gid.implementation_identifier = rmw_mdds_cpp_identifier;
+        queued_sample.info.publisher_gid.implementation_identifier =
+            rmw_mdds_cpp_identifier;
         queued_sample.info.source_timestamp = NowNanoseconds();
         queued_sample.info.publication_sequence_number = sample.sequence_number;
         queued_sample.info.from_intra_process = false;
@@ -645,36 +814,36 @@ private:
   std::atomic<bool> running_{false};
   uint64_t entity_id_ = 0u;
   uint64_t next_request_id_ = 2u;
-  SubscriptionData * subscription_ = nullptr;
+  SubscriptionData *subscription_ = nullptr;
   BrokerDeliveryCallback delivery_callback_ = nullptr;
-  void * delivery_user_data_ = nullptr;
+  void *delivery_user_data_ = nullptr;
 };
-}  // namespace
+} // namespace
 
-void NoteContextInitialized()
-{
+void NoteContextInitialized() {
   std::lock_guard<std::mutex> lock(g_auto_broker_mutex);
   ++g_active_context_count;
 }
 
-void ShutdownEmbeddedBrokerIfLastContext()
-{
+void ShutdownEmbeddedBrokerIfLastContext() {
   bool shutdown_bridge = false;
   {
     std::lock_guard<std::mutex> lock(g_auto_broker_mutex);
-    // Defensive: never underflow if fini is somehow called more times than init.
+    // Defensive: never underflow if fini is somehow called more times than
+    // init.
     if (g_active_context_count > 0) {
       --g_active_context_count;
     }
     if (g_active_context_count != 0) {
-      // Other contexts still share the embedded broker + bridge — leave them up.
+      // Other contexts still share the embedded broker + bridge — leave them
+      // up.
       return;
     }
-    // Last context in this process. Stop the auto-started broker first, under the
-    // lock so a concurrent EnsureAutoBrokerStarted cannot observe a half-stopped
-    // broker: IpcBroker::Stop() unsubscribes node-sync and destroys all bridge
-    // endpoints (so nothing new is queued). The MDDS runtime (which the endpoints
-    // rely on) is torn down afterwards, below.
+    // Last context in this process. Stop the auto-started broker first, under
+    // the lock so a concurrent EnsureAutoBrokerStarted cannot observe a
+    // half-stopped broker: IpcBroker::Stop() unsubscribes node-sync and
+    // destroys all bridge endpoints (so nothing new is queued). The MDDS
+    // runtime (which the endpoints rely on) is torn down afterwards, below.
     if (g_auto_broker != nullptr) {
       g_auto_broker->Stop();
       g_auto_broker.reset();
@@ -682,27 +851,26 @@ void ShutdownEmbeddedBrokerIfLastContext()
     ClearGraphCache();
     shutdown_bridge = true;
   }
-  // Bridge runtime teardown lives on the separate BridgeBackend singleton, so do
-  // it outside the broker lock. This joins the MDDS spin + lane-worker threads
-  // before the process's atexit phase reaches openssl (the SIGSEGV this whole
-  // path prevents). No-op when this process never loaded the bridge.
+  // Bridge runtime teardown lives on the separate BridgeBackend singleton, so
+  // do it outside the broker lock. This joins the MDDS spin + lane-worker
+  // threads before the process's atexit phase reaches openssl (the SIGSEGV this
+  // whole path prevents). No-op when this process never loaded the bridge.
   if (shutdown_bridge) {
     BridgeBackend::Instance().Shutdown();
   }
 }
 
-bool BrokerModeEnabled()
-{
-  const char * broker_mode = std::getenv("RMW_MDDS_BROKER");
+bool BrokerModeEnabled() {
+  const char *broker_mode = std::getenv("RMW_MDDS_BROKER");
   if (EnvValueConfigured(broker_mode)) {
     return EnvValueEnabled(broker_mode) && !EnvValueDisabled(broker_mode);
   }
   return !EnvValueConfigured(std::getenv("RMW_MDDS_BRIDGE_LIBRARY"));
 }
 
-bool BrokerBridgePayloadEnabled()
-{
-  if (!BrokerModeEnabled() || EnvValueDisabled(std::getenv("RMW_MDDS_BRIDGE"))) {
+bool BrokerBridgePayloadEnabled() {
+  if (!BrokerModeEnabled() ||
+      EnvValueDisabled(std::getenv("RMW_MDDS_BRIDGE"))) {
     return false;
   }
   // When a broker client is explicitly pointed at a bridge library, encode and
@@ -714,9 +882,8 @@ bool BrokerBridgePayloadEnabled()
   return BridgeBackend::Instance().Available();
 }
 
-std::string BrokerSocketPath()
-{
-  const char * socket_path = std::getenv("RMW_MDDS_BROKER_SOCKET");
+std::string BrokerSocketPath() {
+  const char *socket_path = std::getenv("RMW_MDDS_BROKER_SOCKET");
   if (socket_path != nullptr && socket_path[0] != '\0') {
     return socket_path;
   }
@@ -727,187 +894,195 @@ std::string BrokerSocketPath()
 #endif
 }
 
-bool BrokerGraphHasMatchingService(const ClientData * client)
-{
+bool BrokerGraphHasMatchingService(const ClientData *client) {
   if (client == nullptr) {
     return false;
   }
-  return CountGraphEndpoints(
-           ipc::EndpointKind::kService, client->service_name, client->type_name) != 0u;
+  return CountGraphEndpoints(client->context, ipc::EndpointKind::kService,
+                             client->service_name, client->type_name) != 0u;
 }
 
-size_t CountBrokerGraphPublishersByTopic(const char * topic_name)
-{
+size_t CountBrokerGraphPublishersByTopic(const rmw_context_t *context,
+                                         const char *topic_name) {
   if (topic_name == nullptr) {
     return 0u;
   }
-  return CountGraphEndpoints(ipc::EndpointKind::kPublisher, topic_name);
+  return CountGraphEndpoints(context, ipc::EndpointKind::kPublisher, topic_name);
 }
 
-size_t CountBrokerGraphSubscriptionsByTopic(const char * topic_name)
-{
+size_t CountBrokerGraphSubscriptionsByTopic(const rmw_context_t *context,
+                                            const char *topic_name) {
   if (topic_name == nullptr) {
     return 0u;
   }
-  return CountGraphEndpoints(ipc::EndpointKind::kSubscription, topic_name);
+  return CountGraphEndpoints(context, ipc::EndpointKind::kSubscription, topic_name);
 }
 
-size_t CountBrokerGraphPublishersForSubscription(const SubscriptionData * subscription)
-{
+size_t CountBrokerGraphPublishersForSubscription(
+    const SubscriptionData *subscription) {
   if (subscription == nullptr) {
     return 0u;
   }
-  return CountCompatibleGraphPublishersForSubscription(
-    GetGraphCacheSnapshot(), *subscription);
+  return CountCompatibleGraphPublishersForSubscription(GetGraphCacheSnapshot(false),
+                                                       *subscription);
 }
 
-size_t CountBrokerGraphSubscriptionsForPublisher(const PublisherData * publisher)
-{
+size_t
+CountBrokerGraphSubscriptionsForPublisher(const PublisherData *publisher) {
   if (publisher == nullptr) {
     return 0u;
   }
-  return CountCompatibleGraphSubscriptionsForPublisher(GetGraphCacheSnapshot(), *publisher);
+  return CountCompatibleGraphSubscriptionsForPublisher(GetGraphCacheSnapshot(false),
+                                                       *publisher);
 }
 
-bool HasUnreadBrokerGraphPublisherMatchedStatus(PublisherData * publisher)
-{
+bool HasUnreadBrokerGraphPublisherMatchedStatus(PublisherData *publisher) {
   if (publisher == nullptr) {
     return false;
   }
-  const size_t current_count = CountBrokerGraphSubscriptionsForPublisher(publisher);
+  const size_t current_count =
+      CountBrokerGraphSubscriptionsForPublisher(publisher);
   std::lock_guard<std::mutex> lock(publisher->mutex);
   return current_count != publisher->broker_matched_last_current_count;
 }
 
-bool HasUnreadBrokerGraphSubscriptionMatchedStatus(SubscriptionData * subscription)
-{
+bool HasUnreadBrokerGraphSubscriptionMatchedStatus(
+    SubscriptionData *subscription) {
   if (subscription == nullptr) {
     return false;
   }
-  const size_t current_count = CountBrokerGraphPublishersForSubscription(subscription);
+  const size_t current_count =
+      CountBrokerGraphPublishersForSubscription(subscription);
   std::lock_guard<std::mutex> lock(subscription->mutex);
   return current_count != subscription->broker_matched_last_current_count;
 }
 
-bool TakeBrokerGraphPublisherMatchedStatus(
-  PublisherData * publisher, rmw_matched_status_t * status)
-{
+bool TakeBrokerGraphPublisherMatchedStatus(PublisherData *publisher,
+                                           rmw_matched_status_t *status) {
   if (publisher == nullptr || status == nullptr) {
     return false;
   }
-  const size_t current_count = CountBrokerGraphSubscriptionsForPublisher(publisher);
+  const size_t current_count =
+      CountBrokerGraphSubscriptionsForPublisher(publisher);
   std::lock_guard<std::mutex> lock(publisher->mutex);
-  FillBrokerMatchedStatus(
-    current_count, &publisher->broker_matched_total_count,
-    &publisher->broker_matched_last_total_count,
-    &publisher->broker_matched_last_current_count, status);
+  FillBrokerMatchedStatus(current_count, &publisher->broker_matched_total_count,
+                          &publisher->broker_matched_last_total_count,
+                          &publisher->broker_matched_last_current_count,
+                          status);
   return true;
 }
 
-bool TakeBrokerGraphSubscriptionMatchedStatus(
-  SubscriptionData * subscription, rmw_matched_status_t * status)
-{
+bool TakeBrokerGraphSubscriptionMatchedStatus(SubscriptionData *subscription,
+                                              rmw_matched_status_t *status) {
   if (subscription == nullptr || status == nullptr) {
     return false;
   }
-  const size_t current_count = CountBrokerGraphPublishersForSubscription(subscription);
+  const size_t current_count =
+      CountBrokerGraphPublishersForSubscription(subscription);
   std::lock_guard<std::mutex> lock(subscription->mutex);
   FillBrokerMatchedStatus(
-    current_count, &subscription->broker_matched_total_count,
-    &subscription->broker_matched_last_total_count,
-    &subscription->broker_matched_last_current_count, status);
+      current_count, &subscription->broker_matched_total_count,
+      &subscription->broker_matched_last_total_count,
+      &subscription->broker_matched_last_current_count, status);
   return true;
 }
 
-size_t CountBrokerGraphClientsByName(const char * service_name)
-{
+size_t CountBrokerGraphClientsByName(const rmw_context_t *context,
+                                     const char *service_name) {
   if (service_name == nullptr) {
     return 0u;
   }
-  return CountGraphEndpoints(ipc::EndpointKind::kClient, service_name);
+  return CountGraphEndpoints(context, ipc::EndpointKind::kClient, service_name);
 }
 
-size_t CountBrokerGraphServicesByName(const char * service_name)
-{
+size_t CountBrokerGraphServicesByName(const rmw_context_t *context,
+                                      const char *service_name) {
   if (service_name == nullptr) {
     return 0u;
   }
-  return CountGraphEndpoints(ipc::EndpointKind::kService, service_name);
+  return CountGraphEndpoints(context, ipc::EndpointKind::kService, service_name);
 }
 
-std::vector<NameAndTypes> GetBrokerGraphTopicNamesAndTypes()
-{
+std::vector<NameAndTypes> GetBrokerGraphTopicNamesAndTypes(const rmw_context_t *context) {
   std::vector<NameAndTypes> names_and_types;
   const auto endpoints = GetGraphCacheSnapshot();
-  for (const auto & endpoint : endpoints) {
-    if (
-      endpoint.kind == ipc::EndpointKind::kPublisher ||
-      endpoint.kind == ipc::EndpointKind::kSubscription) {
-      AddGraphNameAndType(&names_and_types, endpoint.topic_name, endpoint.type_name);
+  const uint32_t domain_id = DomainIdFromContext(context);
+  for (const auto &endpoint : endpoints) {
+    if (EndpointMatchesDomain(endpoint, domain_id) &&
+        (endpoint.kind == ipc::EndpointKind::kPublisher ||
+        endpoint.kind == ipc::EndpointKind::kSubscription)) {
+      AddGraphNameAndType(&names_and_types, endpoint.topic_name,
+                          endpoint.type_name);
     }
   }
   return names_and_types;
 }
 
-std::vector<NameAndTypes> GetBrokerGraphPublisherNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace)
-{
-  return CollectGraphNamesAndTypesForKind(
-    ipc::EndpointKind::kPublisher, node_name, node_namespace);
+std::vector<NameAndTypes>
+GetBrokerGraphPublisherNamesAndTypesByNode(const rmw_context_t *context,
+                                           const char *node_name,
+                                           const char *node_namespace) {
+  return CollectGraphNamesAndTypesForKind(ipc::EndpointKind::kPublisher,
+                                          context, node_name, node_namespace);
 }
 
-std::vector<NameAndTypes> GetBrokerGraphSubscriptionNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace)
-{
-  return CollectGraphNamesAndTypesForKind(
-    ipc::EndpointKind::kSubscription, node_name, node_namespace);
+std::vector<NameAndTypes>
+GetBrokerGraphSubscriptionNamesAndTypesByNode(const rmw_context_t *context,
+                                              const char *node_name,
+                                              const char *node_namespace) {
+  return CollectGraphNamesAndTypesForKind(ipc::EndpointKind::kSubscription,
+                                          context, node_name, node_namespace);
 }
 
-std::vector<NameAndTypes> GetBrokerGraphServiceNamesAndTypes()
-{
-  return CollectGraphNamesAndTypesForKind(ipc::EndpointKind::kService);
+std::vector<NameAndTypes> GetBrokerGraphServiceNamesAndTypes(const rmw_context_t *context) {
+  return CollectGraphNamesAndTypesForKind(ipc::EndpointKind::kService, context);
 }
 
-std::vector<NameAndTypes> GetBrokerGraphServiceNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace)
-{
-  return CollectGraphNamesAndTypesForKind(
-    ipc::EndpointKind::kService, node_name, node_namespace);
+std::vector<NameAndTypes>
+GetBrokerGraphServiceNamesAndTypesByNode(const rmw_context_t *context,
+                                         const char *node_name,
+                                         const char *node_namespace) {
+  return CollectGraphNamesAndTypesForKind(ipc::EndpointKind::kService,
+                                          context, node_name, node_namespace);
 }
 
-std::vector<NameAndTypes> GetBrokerGraphClientNamesAndTypesByNode(
-  const char * node_name, const char * node_namespace)
-{
-  return CollectGraphNamesAndTypesForKind(
-    ipc::EndpointKind::kClient, node_name, node_namespace);
+std::vector<NameAndTypes>
+GetBrokerGraphClientNamesAndTypesByNode(const rmw_context_t *context,
+                                        const char *node_name,
+                                        const char *node_namespace) {
+  return CollectGraphNamesAndTypesForKind(ipc::EndpointKind::kClient, context,
+                                          node_name, node_namespace);
 }
 
-std::vector<NodeGraphInfo> GetBrokerGraphNodes()
-{
+std::vector<NodeGraphInfo> GetBrokerGraphNodes(const rmw_context_t *context) {
   std::vector<NodeGraphInfo> nodes;
   const auto endpoints = GetGraphCacheSnapshot();
-  for (const auto & endpoint : endpoints) {
-    AddGraphNode(&nodes, endpoint);
+  const uint32_t domain_id = DomainIdFromContext(context);
+  for (const auto &endpoint : endpoints) {
+    if (EndpointMatchesDomain(endpoint, domain_id)) {
+      AddGraphNode(&nodes, endpoint);
+    }
   }
   return nodes;
 }
 
-std::vector<TopicEndpointInfo> GetBrokerGraphPublisherEndpointInfosByTopic(
-  const char * topic_name)
-{
+std::vector<TopicEndpointInfo>
+GetBrokerGraphPublisherEndpointInfosByTopic(const rmw_context_t *context,
+                                            const char *topic_name) {
   return CollectGraphEndpointInfosByTopic(
-    ipc::EndpointKind::kPublisher, topic_name, RMW_ENDPOINT_PUBLISHER, 0);
+      ipc::EndpointKind::kPublisher, topic_name, context, RMW_ENDPOINT_PUBLISHER, 0);
 }
 
-std::vector<TopicEndpointInfo> GetBrokerGraphSubscriptionEndpointInfosByTopic(
-  const char * topic_name)
-{
-  return CollectGraphEndpointInfosByTopic(
-    ipc::EndpointKind::kSubscription, topic_name, RMW_ENDPOINT_SUBSCRIPTION, 0x5a);
+std::vector<TopicEndpointInfo>
+GetBrokerGraphSubscriptionEndpointInfosByTopic(const rmw_context_t *context,
+                                               const char *topic_name) {
+  return CollectGraphEndpointInfosByTopic(ipc::EndpointKind::kSubscription,
+                                          topic_name, context, RMW_ENDPOINT_SUBSCRIPTION,
+                                          0x5a);
 }
 
-void * CreatePublisherBrokerClient(PublisherData * publisher, std::string * error)
-{
+void *CreatePublisherBrokerClient(PublisherData *publisher,
+                                  std::string *error) {
   if (publisher == nullptr) {
     SetError(error, "publisher data is null");
     return nullptr;
@@ -920,23 +1095,24 @@ void * CreatePublisherBrokerClient(PublisherData * publisher, std::string * erro
   return client.release();
 }
 
-void * CreateSubscriptionBrokerClient(SubscriptionData * subscription, std::string * error)
-{
+void *CreateSubscriptionBrokerClient(SubscriptionData *subscription,
+                                     std::string *error) {
   if (subscription == nullptr) {
     SetError(error, "subscription data is null");
     return nullptr;
   }
   auto client = std::make_unique<IpcClient>();
-  if (!client->ConnectAndRegister(MakeSubscriptionEndpoint(subscription), error)) {
+  if (!client->ConnectAndRegister(MakeSubscriptionEndpoint(subscription),
+                                  error)) {
     return nullptr;
   }
   client->StartReader(subscription);
   return client.release();
 }
 
-void * CreateClientBrokerClient(
-  ClientData * client_data, BrokerDeliveryCallback callback, void * user_data, std::string * error)
-{
+void *CreateClientBrokerClient(ClientData *client_data,
+                               BrokerDeliveryCallback callback, void *user_data,
+                               std::string *error) {
   if (client_data == nullptr) {
     SetError(error, "client data is null");
     return nullptr;
@@ -953,9 +1129,9 @@ void * CreateClientBrokerClient(
   return client.release();
 }
 
-void * CreateServiceBrokerClient(
-  ServiceData * service, BrokerDeliveryCallback callback, void * user_data, std::string * error)
-{
+void *CreateServiceBrokerClient(ServiceData *service,
+                                BrokerDeliveryCallback callback,
+                                void *user_data, std::string *error) {
   if (service == nullptr) {
     SetError(error, "service data is null");
     return nullptr;
@@ -972,16 +1148,14 @@ void * CreateServiceBrokerClient(
   return client.release();
 }
 
-void DestroyBrokerClient(void * client)
-{
+void DestroyBrokerClient(void *client) {
   delete static_cast<IpcClient *>(client);
 }
 
-bool BrokerClientPublish(
-  void * client, const std::vector<uint8_t> & payload, uint64_t sequence_number,
-  std::string * error, bool mdds_payload)
-{
-  auto * ipc_client = static_cast<IpcClient *>(client);
+bool BrokerClientPublish(void *client, const std::vector<uint8_t> &payload,
+                         uint64_t sequence_number, std::string *error,
+                         bool mdds_payload) {
+  auto *ipc_client = static_cast<IpcClient *>(client);
   if (ipc_client == nullptr) {
     SetError(error, "broker client is null");
     return false;
@@ -989,4 +1163,4 @@ bool BrokerClientPublish(
   return ipc_client->Publish(payload, sequence_number, mdds_payload, error);
 }
 
-}  // namespace rmw_mdds_cpp
+} // namespace rmw_mdds_cpp

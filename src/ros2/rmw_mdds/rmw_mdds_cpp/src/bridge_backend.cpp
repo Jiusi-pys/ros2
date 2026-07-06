@@ -27,8 +27,19 @@ constexpr uint32_t kProtectedTransportAuthenticated = 0x1u;
 constexpr uint32_t kProtectedTransportEncrypted = 0x2u;
 
 uint32_t TimeToMs(const rmw_time_t &time) {
-  uint64_t ms = time.sec * 1000u + time.nsec / 1000000u;
-  return ms > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(ms);
+  constexpr uint64_t kMsPerSec = 1000u;
+  constexpr uint64_t kNsPerMs = 1000000u;
+  constexpr uint64_t kMaxMs = UINT32_MAX;
+
+  if (time.sec > kMaxMs / kMsPerSec) {
+    return UINT32_MAX;
+  }
+  const uint64_t whole_sec_ms = time.sec * kMsPerSec;
+  const uint64_t ns_ms = time.nsec / kNsPerMs;
+  if (ns_ms > kMaxMs - whole_sec_ms) {
+    return UINT32_MAX;
+  }
+  return static_cast<uint32_t>(whole_sec_ms + ns_ms);
 }
 
 void SetError(std::string *error, const char *message) {
@@ -91,53 +102,57 @@ bool BridgeBackend::Load() {
     return false;
   }
 
-  init_ = reinterpret_cast<int32_t (*)()>(Symbol("MddsBridgeInit"));
-  shutdown_ = reinterpret_cast<void (*)()>(Symbol("MddsBridgeShutdown"));
-  stop_spin_ = reinterpret_cast<void (*)()>(Symbol("MddsBridgeStopSpin"));
-  create_publisher_qos_ = reinterpret_cast<void *(*)(const char *, const char *,
-                                                     const BridgeQos *)>(
-      Symbol("MddsBridgeCreatePublisherQos"));
-  publish_ = reinterpret_cast<int32_t (*)(void *, const void *, uint32_t)>(
-      Symbol("MddsBridgePublish"));
-  borrow_loaned_sample_ =
-      reinterpret_cast<int32_t (*)(void *, uint32_t, void **, void **)>(
-          Symbol("MddsBridgeBorrowLoanedSample"));
-  publish_loaned_ = reinterpret_cast<int32_t (*)(void *, void *, uint32_t)>(
+  init_ = reinterpret_cast<int32_t (*)(void)>(Symbol("MddsBridgeInit"));
+  shutdown_ = reinterpret_cast<void (*)(void)>(Symbol("MddsBridgeShutdown"));
+  stop_spin_ = reinterpret_cast<void (*)(void)>(Symbol("MddsBridgeStopSpin"));
+  create_publisher_qos_ =
+      reinterpret_cast<MddsBridgePublisher *(*)(const char *, const char *,
+                                                const MddsBridgeQos *)>(
+          Symbol("MddsBridgeCreatePublisherQos"));
+  publish_ =
+      reinterpret_cast<int32_t (*)(MddsBridgePublisher *, const void *,
+                                   uint32_t)>(Symbol("MddsBridgePublish"));
+  borrow_loaned_sample_ = reinterpret_cast<int32_t (*)(
+      MddsBridgePublisher *, uint32_t, MddsBridgeLoanedSample **, void **)>(
+      Symbol("MddsBridgeBorrowLoanedSample"));
+  publish_loaned_ = reinterpret_cast<int32_t (*)(
+      MddsBridgePublisher *, MddsBridgeLoanedSample *, uint32_t)>(
       Symbol("MddsBridgePublishLoaned"));
-  return_loaned_sample_ = reinterpret_cast<int32_t (*)(void *, void *)>(
+  return_loaned_sample_ = reinterpret_cast<int32_t (*)(
+      MddsBridgePublisher *, MddsBridgeLoanedSample *)>(
       Symbol("MddsBridgeReturnLoanedSample"));
-  destroy_publisher_ =
-      reinterpret_cast<void (*)(void *)>(Symbol("MddsBridgeDestroyPublisher"));
-  subscribe_qos_ =
-      reinterpret_cast<void *(*)(const char *, const char *, const BridgeQos *,
-                                 BridgeDataCallback, void *)>(
-          Symbol("MddsBridgeSubscribeQos"));
-  subscriber_take_loaned_ =
-      reinterpret_cast<int32_t (*)(void *, BridgeLoanedMessage *)>(
-          Symbol("MddsBridgeSubscriberTakeLoaned"));
-  subscriber_take_loaned_with_storage_ =
-      reinterpret_cast<int32_t (*)(
-          void *, BridgeLoanedMessage *, uint32_t, void **, uint32_t *)>(
-          Symbol("MddsBridgeSubscriberTakeLoanedWithStorage"));
-  subscriber_return_loaned_ =
-      reinterpret_cast<int32_t (*)(void *, BridgeLoanedMessage *)>(
-          Symbol("MddsBridgeSubscriberReturnLoaned"));
-  unsubscribe_ =
-      reinterpret_cast<void (*)(void *)>(Symbol("MddsBridgeUnsubscribe"));
+  destroy_publisher_ = reinterpret_cast<void (*)(MddsBridgePublisher *)>(
+      Symbol("MddsBridgeDestroyPublisher"));
+  subscribe_qos_ = reinterpret_cast<MddsBridgeSubscriber *(
+          *)(const char *, const char *, const MddsBridgeQos *,
+             MddsBridgeDataCallback, void *)>(Symbol("MddsBridgeSubscribeQos"));
+  subscriber_take_loaned_ = reinterpret_cast<int32_t (*)(
+      MddsBridgeSubscriber *, MddsBridgeLoanedMessage *)>(
+      Symbol("MddsBridgeSubscriberTakeLoaned"));
+  subscriber_take_loaned_with_storage_ = reinterpret_cast<int32_t (*)(
+      MddsBridgeSubscriber *, MddsBridgeLoanedMessage *, uint32_t, void **,
+      uint32_t *)>(Symbol("MddsBridgeSubscriberTakeLoanedWithStorage"));
+  subscriber_return_loaned_ = reinterpret_cast<int32_t (*)(
+      MddsBridgeSubscriber *, MddsBridgeLoanedMessage *)>(
+      Symbol("MddsBridgeSubscriberReturnLoaned"));
+  unsubscribe_ = reinterpret_cast<void (*)(MddsBridgeSubscriber *)>(
+      Symbol("MddsBridgeUnsubscribe"));
   // Optional: present only in bridge libs that expose matched-count
   // introspection.
-  publisher_sub_count_ = reinterpret_cast<uint32_t (*)(void *)>(
+  publisher_sub_count_ = reinterpret_cast<uint32_t (*)(MddsBridgePublisher *)>(
       Symbol("MddsBridgePublisherGetSubCount"));
-  publisher_unacked_count_ = reinterpret_cast<uint32_t (*)(void *)>(
-      Symbol("MddsBridgePublisherGetUnackedCount"));
-  publisher_set_on_matched_ =
-      reinterpret_cast<int32_t (*)(void *, void (*)(uint32_t, void *), void *)>(
-          Symbol("MddsBridgePublisherSetOnMatchedCallback"));
-  subscriber_pub_count_ = reinterpret_cast<uint32_t (*)(void *)>(
-      Symbol("MddsBridgeSubscriberGetPubCount"));
-  subscriber_set_on_matched_ =
-      reinterpret_cast<int32_t (*)(void *, void (*)(uint32_t, void *), void *)>(
-          Symbol("MddsBridgeSubscriberSetOnMatchedCallback"));
+  publisher_unacked_count_ =
+      reinterpret_cast<uint32_t (*)(MddsBridgePublisher *)>(
+          Symbol("MddsBridgePublisherGetUnackedCount"));
+  publisher_set_on_matched_ = reinterpret_cast<int32_t (*)(
+      MddsBridgePublisher *, void (*)(uint32_t, void *), void *)>(
+      Symbol("MddsBridgePublisherSetOnMatchedCallback"));
+  subscriber_pub_count_ =
+      reinterpret_cast<uint32_t (*)(MddsBridgeSubscriber *)>(
+          Symbol("MddsBridgeSubscriberGetPubCount"));
+  subscriber_set_on_matched_ = reinterpret_cast<int32_t (*)(
+      MddsBridgeSubscriber *, void (*)(uint32_t, void *), void *)>(
+      Symbol("MddsBridgeSubscriberSetOnMatchedCallback"));
   activate_protected_transport_ = reinterpret_cast<int32_t (*)(uint32_t)>(
       Symbol("MddsBridgeActivateProtectedTransport"));
 
@@ -168,7 +183,7 @@ int32_t BridgeBackend::Publish(void *publisher, const void *data,
   if (!Available() || publisher == nullptr) {
     return -1;
   }
-  return publish_(publisher, data, len);
+  return publish_(static_cast<MddsBridgePublisher *>(publisher), data, len);
 }
 
 bool BridgeBackend::BorrowLoanedSample(void *publisher, uint32_t size,
@@ -177,7 +192,14 @@ bool BridgeBackend::BorrowLoanedSample(void *publisher, uint32_t size,
       data == nullptr || borrow_loaned_sample_ == nullptr) {
     return false;
   }
-  return borrow_loaned_sample_(publisher, size, loan, data) == 0;
+  MddsBridgeLoanedSample *bridge_loan = nullptr;
+  const bool ok =
+      borrow_loaned_sample_(static_cast<MddsBridgePublisher *>(publisher), size,
+                            &bridge_loan, data) == 0;
+  if (ok) {
+    *loan = bridge_loan;
+  }
+  return ok;
 }
 
 bool BridgeBackend::PublishLoaned(void *publisher, void *loan, uint32_t len) {
@@ -185,7 +207,8 @@ bool BridgeBackend::PublishLoaned(void *publisher, void *loan, uint32_t len) {
       publish_loaned_ == nullptr) {
     return false;
   }
-  return publish_loaned_(publisher, loan, len) == 0;
+  return publish_loaned_(static_cast<MddsBridgePublisher *>(publisher),
+                         static_cast<MddsBridgeLoanedSample *>(loan), len) == 0;
 }
 
 bool BridgeBackend::ReturnLoanedSample(void *publisher, void *loan) {
@@ -193,31 +216,34 @@ bool BridgeBackend::ReturnLoanedSample(void *publisher, void *loan) {
       return_loaned_sample_ == nullptr) {
     return false;
   }
-  return return_loaned_sample_(publisher, loan) == 0;
+  return return_loaned_sample_(static_cast<MddsBridgePublisher *>(publisher),
+                               static_cast<MddsBridgeLoanedSample *>(loan)) ==
+         0;
 }
 
 bool BridgeBackend::SupportsPublisherLoanedMessages(void *publisher) {
-  return Available() && publisher != nullptr && borrow_loaned_sample_ != nullptr &&
-         publish_loaned_ != nullptr && return_loaned_sample_ != nullptr;
+  return publisher != nullptr && Available() &&
+         borrow_loaned_sample_ != nullptr && publish_loaned_ != nullptr &&
+         return_loaned_sample_ != nullptr;
 }
 
-bool BridgeBackend::ActivateProtectedTransport(
-    bool require_authenticated, bool require_encrypted, std::string *error) {
+bool BridgeBackend::ActivateProtectedTransport(bool require_authenticated,
+                                               bool require_encrypted,
+                                               std::string *error) {
   if (!require_authenticated && !require_encrypted) {
     return true;
   }
   if (!Available()) {
-    SetError(
-        error,
-        "authenticated encrypted MDDS/DSoftBus transport is required for protected SROS2 "
-        "governance but the MDDS bridge is not available");
+    SetError(error, "authenticated encrypted MDDS/DSoftBus transport is "
+                    "required for protected SROS2 "
+                    "governance but the MDDS bridge is not available");
     return false;
   }
   if (activate_protected_transport_ == nullptr) {
-    SetError(
-        error,
-        "authenticated encrypted MDDS/DSoftBus transport is required for protected SROS2 "
-        "governance but the MDDS bridge cannot activate a protected transport lane");
+    SetError(error, "authenticated encrypted MDDS/DSoftBus transport is "
+                    "required for protected SROS2 "
+                    "governance but the MDDS bridge cannot activate a "
+                    "protected transport lane");
     return false;
   }
 
@@ -229,10 +255,9 @@ bool BridgeBackend::ActivateProtectedTransport(
     flags |= kProtectedTransportEncrypted;
   }
   if (activate_protected_transport_(flags) != 0) {
-    SetError(
-        error,
-        "authenticated encrypted MDDS/DSoftBus transport is required for protected SROS2 "
-        "governance but protected transport activation failed");
+    SetError(error, "authenticated encrypted MDDS/DSoftBus transport is "
+                    "required for protected SROS2 "
+                    "governance but protected transport activation failed");
     return false;
   }
   return true;
@@ -240,7 +265,7 @@ bool BridgeBackend::ActivateProtectedTransport(
 
 void BridgeBackend::DestroyPublisher(void *publisher) {
   if (publisher != nullptr && destroy_publisher_ != nullptr) {
-    destroy_publisher_(publisher);
+    destroy_publisher_(static_cast<MddsBridgePublisher *>(publisher));
   }
 }
 
@@ -261,7 +286,8 @@ bool BridgeBackend::SubscriberTakeLoaned(void *subscription,
       subscriber_take_loaned_ == nullptr) {
     return false;
   }
-  return subscriber_take_loaned_(subscription, message) == 0;
+  return subscriber_take_loaned_(
+             static_cast<MddsBridgeSubscriber *>(subscription), message) == 0;
 }
 
 bool BridgeBackend::SubscriberTakeLoanedWithStorage(
@@ -279,7 +305,8 @@ bool BridgeBackend::SubscriberTakeLoanedWithStorage(
   }
   if (subscriber_take_loaned_with_storage_ != nullptr) {
     return subscriber_take_loaned_with_storage_(
-        subscription, message, storage_size, storage, storage_capacity) == 0;
+               static_cast<MddsBridgeSubscriber *>(subscription), message,
+               storage_size, storage, storage_capacity) == 0;
   }
   return SubscriberTakeLoaned(subscription, message);
 }
@@ -290,17 +317,19 @@ bool BridgeBackend::SubscriberReturnLoaned(void *subscription,
       subscriber_return_loaned_ == nullptr) {
     return false;
   }
-  return subscriber_return_loaned_(subscription, message) == 0;
+  return subscriber_return_loaned_(
+             static_cast<MddsBridgeSubscriber *>(subscription), message) == 0;
 }
 
 bool BridgeBackend::SupportsSubscriberLoanedMessages(void *subscription) {
-  return Available() && subscription != nullptr && subscriber_take_loaned_ != nullptr &&
+  return subscription != nullptr && Available() &&
+         subscriber_take_loaned_ != nullptr &&
          subscriber_return_loaned_ != nullptr;
 }
 
 void BridgeBackend::Unsubscribe(void *subscription) {
   if (subscription != nullptr && unsubscribe_ != nullptr) {
-    unsubscribe_(subscription);
+    unsubscribe_(static_cast<MddsBridgeSubscriber *>(subscription));
   }
 }
 
@@ -308,17 +337,19 @@ uint32_t BridgeBackend::PublisherSubCount(void *publisher) {
   if (!Available() || publisher == nullptr || publisher_sub_count_ == nullptr) {
     return 0u;
   }
-  return publisher_sub_count_(publisher);
+  return publisher_sub_count_(static_cast<MddsBridgePublisher *>(publisher));
 }
 
 bool BridgeBackend::PublisherUnackedCount(void *publisher, uint32_t *count) {
   if (count == nullptr) {
     return false;
   }
-  if (!Available() || publisher == nullptr || publisher_unacked_count_ == nullptr) {
+  if (!Available() || publisher == nullptr ||
+      publisher_unacked_count_ == nullptr) {
     return false;
   }
-  *count = publisher_unacked_count_(publisher);
+  *count =
+      publisher_unacked_count_(static_cast<MddsBridgePublisher *>(publisher));
   return true;
 }
 
@@ -329,7 +360,9 @@ bool BridgeBackend::PublisherSetOnMatched(void *publisher,
       publisher_set_on_matched_ == nullptr) {
     return false;
   }
-  return publisher_set_on_matched_(publisher, callback, user_data) == 0;
+  return publisher_set_on_matched_(
+             static_cast<MddsBridgePublisher *>(publisher), callback,
+             user_data) == 0;
 }
 
 uint32_t BridgeBackend::SubscriberPubCount(void *subscription) {
@@ -337,7 +370,8 @@ uint32_t BridgeBackend::SubscriberPubCount(void *subscription) {
       subscriber_pub_count_ == nullptr) {
     return 0u;
   }
-  return subscriber_pub_count_(subscription);
+  return subscriber_pub_count_(
+      static_cast<MddsBridgeSubscriber *>(subscription));
 }
 
 bool BridgeBackend::SubscriberSetOnMatched(void *subscription,
@@ -347,7 +381,9 @@ bool BridgeBackend::SubscriberSetOnMatched(void *subscription,
       subscriber_set_on_matched_ == nullptr) {
     return false;
   }
-  return subscriber_set_on_matched_(subscription, callback, user_data) == 0;
+  return subscriber_set_on_matched_(
+             static_cast<MddsBridgeSubscriber *>(subscription), callback,
+             user_data) == 0;
 }
 
 void BridgeBackend::Shutdown() {

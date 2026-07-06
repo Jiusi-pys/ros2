@@ -73,6 +73,7 @@ struct EndpointDescriptor
 {
   uint64_t entity_id = 0u;
   uint64_t local_context_id = 0u;
+  uint32_t domain_id = 0u;
   EndpointKind kind = EndpointKind::kPublisher;
   std::string node_name;
   std::string node_namespace;

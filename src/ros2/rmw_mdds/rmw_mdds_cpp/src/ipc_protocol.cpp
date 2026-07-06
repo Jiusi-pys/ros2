@@ -25,6 +25,7 @@ namespace
 {
 constexpr uint32_t kFrameMagic = 0x3149504du;  // "MPI1" in little-endian byte order.
 constexpr uint16_t kFrameVersion = 1u;
+constexpr size_t kTypeHashWireSize = 1u + ROSIDL_TYPE_HASH_SIZE;
 
 void SetError(std::string * error, const char * message)
 {
@@ -336,6 +337,7 @@ std::vector<uint8_t> EncodeEndpointDescriptor(const EndpointDescriptor & endpoin
   AppendString(&out, endpoint.type_name);
   AppendString(&out, endpoint.mdds_type_name);
   AppendTypeHash(&out, endpoint.type_hash);
+  AppendU32(&out, endpoint.domain_id);
   return out;
 }
 
@@ -378,9 +380,24 @@ bool DecodeEndpointDescriptor(
       !ReadString(data, size, &offset, &decoded.mdds_type_name, error)) {
     return false;
   }
-  if (offset < size && !ReadTypeHash(data, size, &offset, &decoded.type_hash)) {
-    SetError(error, "truncated endpoint type hash");
-    return false;
+  size_t remaining = size - offset;
+  if (remaining == sizeof(uint32_t)) {
+    if (!ReadU32(data, size, &offset, &decoded.domain_id)) {
+      SetError(error, "truncated endpoint domain id");
+      return false;
+    }
+  } else if (remaining >= kTypeHashWireSize) {
+    if (!ReadTypeHash(data, size, &offset, &decoded.type_hash)) {
+      SetError(error, "truncated endpoint type hash");
+      return false;
+    }
+    remaining = size - offset;
+    if (remaining == sizeof(uint32_t)) {
+      if (!ReadU32(data, size, &offset, &decoded.domain_id)) {
+        SetError(error, "truncated endpoint domain id");
+        return false;
+      }
+    }
   }
   if (offset != size) {
     SetError(error, "endpoint payload has trailing bytes");

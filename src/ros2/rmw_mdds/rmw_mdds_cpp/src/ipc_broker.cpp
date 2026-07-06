@@ -19,10 +19,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <random>
+#include <string>
 #include <utility>
 
 #include "bridge_backend.hpp"
@@ -71,6 +74,13 @@ namespace
 // Payload = [broker_id:8 LE][epoch:8 LE] + EncodeEndpointList(local endpoints).
 constexpr size_t kGraphSyncHeaderSize = 16u;
 constexpr std::chrono::seconds kGraphPeerTtl{5};
+constexpr std::chrono::seconds kLocalBridgeEchoTtl{5};
+
+bool GraphDebugEnabled()
+{
+  const char * value = std::getenv("RMW_MDDS_GRAPH_DEBUG");
+  return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
 
 void AppendU64Le(std::vector<uint8_t> & out, uint64_t value)
 {
@@ -120,6 +130,9 @@ bool IpcBroker::Start(const std::string & socket_path, std::string * error)
   // without the library / softbus, so local-loopback still works; set
   // RMW_MDDS_BRIDGE=0 to force the bridge off.
   const bool bridge_enabled = BridgeBackend::Instance().Available();
+  if (GraphDebugEnabled()) {
+    std::fprintf(stderr, "[rmw_mdds_graph] broker start bridge_enabled=%d\n", bridge_enabled ? 1 : 0);
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
     socket_path_ = socket_path;
@@ -142,6 +155,13 @@ bool IpcBroker::Start(const std::string & socket_path, std::string * error)
       GraphSyncBridgeCallback, this);
     graph_sync_publisher_ = BridgeBackend::Instance().CreatePublisher(
       "mdds_graph_sync", "mdds_graph_EndpointList", &rmw_qos_profile_default);
+    if (GraphDebugEnabled()) {
+      std::fprintf(
+        stderr,
+        "[rmw_mdds_graph] graph sync init broker_id=%llu sub=%p pub=%p\n",
+        static_cast<unsigned long long>(broker_id_), graph_sync_subscription_,
+        graph_sync_publisher_);
+    }
     // Periodic re-announce: DSoftBus pub/sub is not transient-local, so a board
     // that joins later would miss earlier graph frames. A low-rate heartbeat
     // (plus the immediate publish on every endpoint change) keeps peers current.
@@ -254,10 +274,45 @@ bool CanPublishFrom(EndpointKind kind)
          kind == EndpointKind::kService;
 }
 
+bool ReliabilityCompatible(
+  rmw_qos_reliability_policy_t offered, rmw_qos_reliability_policy_t requested)
+{
+  return !(offered == RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT &&
+           requested == RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+}
+
+bool DurabilityCompatible(
+  rmw_qos_durability_policy_t offered, rmw_qos_durability_policy_t requested)
+{
+  return !(offered == RMW_QOS_POLICY_DURABILITY_VOLATILE &&
+           requested == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL);
+}
+
+bool LivelinessCompatible(
+  rmw_qos_liveliness_policy_t offered, rmw_qos_liveliness_policy_t requested)
+{
+  return !(offered == RMW_QOS_POLICY_LIVELINESS_AUTOMATIC &&
+           requested == RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC);
+}
+
+bool QosProfilesCompatible(
+  const rmw_qos_profile_t & offered, const rmw_qos_profile_t & requested)
+{
+  return ReliabilityCompatible(offered.reliability, requested.reliability) &&
+         DurabilityCompatible(offered.durability, requested.durability) &&
+         LivelinessCompatible(offered.liveliness, requested.liveliness);
+}
+
 bool IsMatchingDeliveryTarget(
   const EndpointDescriptor & source, const EndpointDescriptor & target)
 {
+  if (source.domain_id != target.domain_id) {
+    return false;
+  }
   if (source.topic_name != target.topic_name || source.type_name != target.type_name) {
+    return false;
+  }
+  if (!QosProfilesCompatible(source.qos, target.qos)) {
     return false;
   }
   switch (source.kind) {
@@ -275,7 +330,12 @@ bool IsMatchingDeliveryTarget(
 
 std::string BridgeTopicName(const EndpointDescriptor & endpoint)
 {
-  return ToMddsTopicName(endpoint.topic_name.c_str());
+  std::string topic;
+  if (endpoint.domain_id != 0u) {
+    topic = "d" + std::to_string(endpoint.domain_id) + "/";
+  }
+  topic += ToMddsTopicName(endpoint.topic_name.c_str());
+  return topic;
 }
 
 std::string BridgeTypeName(const EndpointDescriptor & endpoint)
@@ -286,6 +346,9 @@ std::string BridgeTypeName(const EndpointDescriptor & endpoint)
 std::string ServiceBridgeTopicName(const char * prefix, const EndpointDescriptor & endpoint)
 {
   std::string topic(prefix == nullptr ? "" : prefix);
+  if (endpoint.domain_id != 0u) {
+    topic += "d" + std::to_string(endpoint.domain_id) + "/";
+  }
   topic += ToMddsTopicName(endpoint.topic_name.c_str());
   return topic;
 }
@@ -355,6 +418,33 @@ bool ShouldPublishBridgePayload(const EndpointDescriptor & source, const SampleM
     return true;
   }
   return sample.mdds_payload;
+}
+
+bool IsServiceLikeEndpoint(EndpointKind kind)
+{
+  return kind == EndpointKind::kClient || kind == EndpointKind::kService;
+}
+
+bool IsLocalBridgeEchoMatch(
+  const LocalBridgeEcho & echo, const EndpointDescriptor & target,
+  const std::vector<uint8_t> & payload)
+{
+  return echo.payload == payload && IsMatchingDeliveryTarget(echo.source, target);
+}
+
+void PruneExpiredLocalBridgeEchoesLocked(
+  std::vector<LocalBridgeEcho> * echoes, std::chrono::steady_clock::time_point now)
+{
+  if (echoes == nullptr) {
+    return;
+  }
+  echoes->erase(
+    std::remove_if(
+      echoes->begin(), echoes->end(),
+      [now](const LocalBridgeEcho & echo) {
+        return echo.expires_at <= now;
+      }),
+    echoes->end());
 }
 
 bool OffersTransientLocalDurability(const EndpointDescriptor & endpoint)
@@ -492,6 +582,7 @@ void IpcBroker::AcceptLoop()
       std::lock_guard<std::mutex> lock(mutex_);
       connections_.push_back(std::move(connection));
     }
+    BroadcastGraphUpdate();
   }
 }
 
@@ -739,16 +830,69 @@ void IpcBroker::PublishSample(Connection * connection, const Frame & frame)
   for (auto * target : targets) {
     SendFrame(target, delivery);
   }
-  if (bridge_publisher != nullptr) {
-    (void)BridgeBackend::Instance().Publish(
-      bridge_publisher, sample.payload.data(), static_cast<uint32_t>(sample.payload.size()));
+  if (bridge_publisher != nullptr && !(IsServiceLikeEndpoint(source.kind) && !targets.empty())) {
+    RememberLocalBridgeEcho(source, sample.payload);
+    if (BridgeBackend::Instance().Publish(
+          bridge_publisher, sample.payload.data(), static_cast<uint32_t>(sample.payload.size())) != 0) {
+      ForgetLocalBridgeEcho(source, sample.payload);
+    }
   }
+}
+
+void IpcBroker::RememberLocalBridgeEcho(
+  const EndpointDescriptor & source, const std::vector<uint8_t> & payload)
+{
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(mutex_);
+  PruneExpiredLocalBridgeEchoesLocked(&pending_bridge_echoes_, now);
+  pending_bridge_echoes_.push_back(
+    LocalBridgeEcho{source, payload, now + kLocalBridgeEchoTtl});
+}
+
+void IpcBroker::ForgetLocalBridgeEcho(
+  const EndpointDescriptor & source, const std::vector<uint8_t> & payload)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = std::find_if(
+    pending_bridge_echoes_.begin(), pending_bridge_echoes_.end(),
+    [&source, &payload](const LocalBridgeEcho & echo) {
+      return echo.source.entity_id == source.entity_id &&
+             echo.source.domain_id == source.domain_id &&
+             echo.source.topic_name == source.topic_name &&
+             echo.source.type_name == source.type_name &&
+             echo.payload == payload;
+    });
+  if (it != pending_bridge_echoes_.end()) {
+    pending_bridge_echoes_.erase(it);
+  }
+}
+
+bool IpcBroker::ConsumeLocalBridgeEcho(
+  const EndpointDescriptor & target, const std::vector<uint8_t> & payload)
+{
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(mutex_);
+  PruneExpiredLocalBridgeEchoesLocked(&pending_bridge_echoes_, now);
+  auto it = std::find_if(
+    pending_bridge_echoes_.begin(), pending_bridge_echoes_.end(),
+    [&target, &payload](const LocalBridgeEcho & echo) {
+      return IsLocalBridgeEchoMatch(echo, target, payload);
+    });
+  if (it == pending_bridge_echoes_.end()) {
+    return false;
+  }
+  pending_bridge_echoes_.erase(it);
+  return true;
 }
 
 void IpcBroker::DeliverBridgeSample(
   const EndpointDescriptor & subscription_endpoint, const std::vector<uint8_t> & payload,
   uint64_t sequence_number)
 {
+  if (ConsumeLocalBridgeEcho(subscription_endpoint, payload)) {
+    return;
+  }
+
   SampleMessage sample;
   sample.entity_id = 0u;
   sample.sequence_number = sequence_number;
@@ -771,6 +915,7 @@ void IpcBroker::DeliverBridgeSample(
         connection->endpoints.begin(), connection->endpoints.end(),
         [&subscription_endpoint](const EndpointDescriptor & endpoint) {
           return endpoint.kind == subscription_endpoint.kind &&
+                 endpoint.domain_id == subscription_endpoint.domain_id &&
                  endpoint.topic_name == subscription_endpoint.topic_name &&
                  endpoint.type_name == subscription_endpoint.type_name;
         });
@@ -972,6 +1117,12 @@ void IpcBroker::PublishLocalGraph()
     publisher = graph_sync_publisher_;
     broker_id = broker_id_;
     if (publisher == nullptr || broker_id == 0u) {
+      if (GraphDebugEnabled()) {
+        std::fprintf(
+          stderr,
+          "[rmw_mdds_graph] publish skip publisher=%p broker_id=%llu\n", publisher,
+          static_cast<unsigned long long>(broker_id));
+      }
       return;
     }
     for (const auto & connection : connections_) {
@@ -982,22 +1133,40 @@ void IpcBroker::PublishLocalGraph()
     }
   }
   std::vector<uint8_t> payload;
+  const uint64_t epoch = graph_epoch_.fetch_add(1u) + 1u;
   AppendU64Le(payload, broker_id);
-  AppendU64Le(payload, graph_epoch_.fetch_add(1u) + 1u);
+  AppendU64Le(payload, epoch);
   const std::vector<uint8_t> body = EncodeEndpointList(local);
   payload.insert(payload.end(), body.begin(), body.end());
   // Publish outside the broker lock. Stop() joins every thread that can call this
   // (the re-announce timer and the connection threads) before destroying the
   // publisher, so the captured pointer is valid for the duration of this call.
-  (void)BridgeBackend::Instance().Publish(
+  const int32_t rc = BridgeBackend::Instance().Publish(
     publisher, payload.data(), static_cast<uint32_t>(payload.size()));
+  if (GraphDebugEnabled()) {
+    std::fprintf(
+      stderr,
+      "[rmw_mdds_graph] publish broker_id=%llu epoch=%llu endpoints=%zu bytes=%zu rc=%d\n",
+      static_cast<unsigned long long>(broker_id), static_cast<unsigned long long>(epoch),
+      local.size(), payload.size(), rc);
+  }
 }
 
 void IpcBroker::GraphSyncBridgeCallback(const BridgeSample * sample, void * user_data)
 {
   auto * broker = static_cast<IpcBroker *>(user_data);
   if (broker == nullptr || sample == nullptr || (sample->data == nullptr && sample->len != 0u)) {
+    if (GraphDebugEnabled()) {
+      std::fprintf(
+        stderr, "[rmw_mdds_graph] callback drop invalid sample=%p broker=%p\n",
+        static_cast<const void *>(sample), static_cast<void *>(broker));
+    }
     return;
+  }
+  if (GraphDebugEnabled()) {
+    std::fprintf(
+      stderr, "[rmw_mdds_graph] callback len=%u seq=%llu data=%p\n", sample->len,
+      static_cast<unsigned long long>(sample->sequenceNumber), sample->data);
   }
   const auto * data = static_cast<const uint8_t *>(sample->data);
   std::vector<uint8_t> payload;
@@ -1010,11 +1179,21 @@ void IpcBroker::GraphSyncBridgeCallback(const BridgeSample * sample, void * user
 void IpcBroker::OnGraphSync(const std::vector<uint8_t> & payload)
 {
   if (payload.size() < kGraphSyncHeaderSize) {
+    if (GraphDebugEnabled()) {
+      std::fprintf(stderr, "[rmw_mdds_graph] graph sync drop short bytes=%zu\n", payload.size());
+    }
     return;
   }
   const uint64_t src = ReadU64Le(payload.data());
   const uint64_t epoch = ReadU64Le(payload.data() + 8u);
   if (src == 0u || src == broker_id_) {
+    if (GraphDebugEnabled()) {
+      std::fprintf(
+        stderr,
+        "[rmw_mdds_graph] graph sync drop self_or_empty src=%llu self=%llu epoch=%llu bytes=%zu\n",
+        static_cast<unsigned long long>(src), static_cast<unsigned long long>(broker_id_),
+        static_cast<unsigned long long>(epoch), payload.size());
+    }
     return;  // unset source id, or our own echo over the N:N bridge topic
   }
   std::vector<EndpointDescriptor> endpoints;
@@ -1022,8 +1201,16 @@ void IpcBroker::OnGraphSync(const std::vector<uint8_t> & payload)
   if (!DecodeEndpointList(
         payload.data() + kGraphSyncHeaderSize, payload.size() - kGraphSyncHeaderSize, &endpoints,
         &error)) {
+    if (GraphDebugEnabled()) {
+      std::fprintf(
+        stderr,
+        "[rmw_mdds_graph] graph sync decode fail src=%llu epoch=%llu bytes=%zu error=%s\n",
+        static_cast<unsigned long long>(src), static_cast<unsigned long long>(epoch),
+        payload.size(), error.c_str());
+    }
     return;
   }
+  const size_t endpoint_count = endpoints.size();
   {
     std::lock_guard<std::mutex> lock(mutex_);
     auto & bucket = remote_graph_endpoints_[src];
@@ -1032,11 +1219,23 @@ void IpcBroker::OnGraphSync(const std::vector<uint8_t> & payload)
     // epoch 0, so the peer's first frame (epoch >= 1) always lands.
     if (bucket.epoch != 0u && epoch != 0u && epoch <= bucket.epoch) {
       bucket.last_seen = std::chrono::steady_clock::now();
+      if (GraphDebugEnabled()) {
+        std::fprintf(
+          stderr,
+          "[rmw_mdds_graph] graph sync stale src=%llu epoch=%llu current=%llu endpoints=%zu\n",
+          static_cast<unsigned long long>(src), static_cast<unsigned long long>(epoch),
+          static_cast<unsigned long long>(bucket.epoch), endpoint_count);
+      }
       return;
     }
     bucket.epoch = epoch;
     bucket.last_seen = std::chrono::steady_clock::now();
     bucket.endpoints = std::move(endpoints);
+  }
+  if (GraphDebugEnabled()) {
+    std::fprintf(
+      stderr, "[rmw_mdds_graph] graph sync accept src=%llu epoch=%llu endpoints=%zu\n",
+      static_cast<unsigned long long>(src), static_cast<unsigned long long>(epoch), endpoint_count);
   }
   BroadcastGraphUpdate();
 }

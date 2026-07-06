@@ -233,12 +233,16 @@ rmw_publisher_t *rmw_create_publisher(
   publisher->data = data;
   publisher->topic_name = rcutils_strdup(topic_name, allocator);
   publisher->options = *publisher_options;
-  publisher->can_loan_messages =
-      data->adapter.IsValid() &&
-      (data->adapter.SupportsRawLoanedMessage() ||
-       data->adapter.SupportsDynamicLoanedMessage()) &&
+  const bool broker_can_loan = data->broker_client != nullptr;
+  const bool bridge_can_loan =
+      !broker_can_loan &&
       rmw_mdds_cpp::BridgeBackend::Instance().SupportsPublisherLoanedMessages(
           data->bridge_publisher);
+  const bool type_can_loan = data->adapter.SupportsRawLoanedMessage() ||
+                             data->adapter.SupportsDynamicLoanedMessage();
+  publisher->can_loan_messages =
+      data->adapter.IsValid() && type_can_loan &&
+      (bridge_can_loan || broker_can_loan);
   if (publisher->topic_name == nullptr) {
     rmw_mdds_cpp::DestroyBrokerClient(data->broker_client);
     delete data;

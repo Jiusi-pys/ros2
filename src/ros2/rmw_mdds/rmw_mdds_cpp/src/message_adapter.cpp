@@ -1087,8 +1087,16 @@ size_t MessageAdapter::MessageSize() const {
 }
 
 bool MessageAdapter::SupportsRawLoanedMessage() const {
+  if (type_name_ == "std_msgs/msg/String" ||
+      type_name_ == "std_msgs/msg/dds_/String_") {
+    return false;
+  }
+  if (SupportsDynamicStringLoanedMessage() || SupportsDynamicLoanedMessage()) {
+    return false;
+  }
   if (message_members_kind_ == MessageMembersKind::Cpp) {
-    return SupportsFlatRawLoanedMessageCpp(cpp_members_);
+    return !HasDynamicCppMember(cpp_members_) &&
+           SupportsFlatRawLoanedMessageCpp(cpp_members_);
   }
   if (message_members_kind_ == MessageMembersKind::C) {
     return SupportsFlatRawLoanedMessageC(c_members_);

@@ -71,7 +71,7 @@ shapes should add another RED contract before production behavior changes.
 - [x] 4.1 Run `ohos/test_rmw_mdds_delivery_contracts.sh` and confirm markers cover all affected host surfaces.
 - [x] 4.2 Rebuild the OHOS `rmw_mdds_cpp` overlay after parity changes.
 - [x] 4.3 Deploy the refreshed runtime delta to both RK3588/KaihongOS boards.
-- [ ] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and protected-security board lanes with explicit PASS markers that prove current bridge activation.
+- [x] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and protected-security board lanes with explicit PASS markers that prove current bridge activation.
 - [x] 4.5 Decide and execute the delivery endpoint: local handoff only, OpenSpec archive, push, PR, or Gerrit submission.
 
 Fresh host delivery evidence on 2026-07-03: after the security, broker network-flow, dynamic-loaned-message,
@@ -803,3 +803,23 @@ SROS2-policy, zero-copy, and artifact contracts pass independently. The current 
 50-way service stress gate, and allocator, serialized-size, and three loaned-subscription upstream cases remain
 skipped. Full-stack sanitizer, performance, broader security, action-bag, and remaining long-stability gates also
 remain incomplete. Therefore this refresh must not be marked full-feature or production-ready.
+
+Final 2026-07-10 current-artifact refresh: DSoftBus gateway commit `6551d9cb7` and ROS commits `92ff23a` /
+`c06ecd5` were verified with `c086e335...` RMW, `810a97f5...` broker, `f853b438...` bridge,
+`eb195e16...` gateway, and `6aa06d13...` protected probe on both RK3588A boards. Host package CTest passed
+23/23, focused broker/pubsub CTest passed 2/2, gateway logic passed 5/5, and full-parity loaned/security/network
+flow plus independent script/zero-copy/SROS2-policy/artifact contracts passed. The umbrella security contract
+still fails its controlled `execl()` policy check and remains visible.
+
+Current board markers close Task 4.4: native M2M passed 3/3; gateway matrix passed 8/8; gateway service returned
+42; gateway action reached `SUCCEEDED`; real `ros2 param` set/get returned 4242; lifecycle reached inactive;
+strict transient-local replay returned exactly one retained sample; service stress passed 10/10 rounds at 50/50
+plus both supplemental 50-request models; signed protected SROS2 passed policy/activation/authorized/denied cases;
+and the cross-board loaned demo delivered 42 messages with zero allocator/cannot-loan fallback markers. Both boards
+ended with `NO_RELEVANT_PROCESS` and `NO_RMW_SOCKET`. Cross-device loaned delivery is not claimed as network
+zero-copy; that claim remains limited to the existing same-host SHM/copy-count evidence.
+
+Task 5.5 remains open. The earlier transient-local and current-hash 50-way gaps are superseded by this PASS evidence,
+but current-artifact repeated/concurrent/long-soak 16MiB service behavior, oversized/error propagation, the
+`execl()` policy decision, upstream allocator/serialized-size/loaned-subscription skips, full-stack sanitizer,
+valid RMW performance, broader security, action-bag CLI, and remaining P2/P3 stability gates are incomplete.

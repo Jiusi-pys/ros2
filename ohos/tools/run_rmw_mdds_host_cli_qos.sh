@@ -55,6 +55,7 @@ set -u
 
 export LD_LIBRARY_PATH="${ROOT_DIR}/build/rmw_mdds_cpp:${LD_LIBRARY_PATH:-}"
 export RMW_IMPLEMENTATION=rmw_mdds_cpp
+export RMW_MDDS_BROKER_SOCKET="${LOG_DIR}/broker.sock"
 export ROS_DOMAIN_ID="${DOMAIN_ID}"
 export ROS_LOG_DIR="${LOG_DIR}"
 
@@ -74,7 +75,7 @@ trap cleanup EXIT
 
 sleep 2
 
-if ! timeout 20s ros2 topic pub --times 1 -r 5 -w 0 \
+if ! timeout 20s ros2 topic pub --times 1 -r 5 -w 1 \
     --qos-reliability best_effort \
     --qos-durability volatile \
     --qos-history keep_last \

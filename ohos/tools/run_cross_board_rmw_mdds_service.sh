@@ -15,6 +15,11 @@ Environment:
   RMW_MDDS_BRIDGE_LIBRARY         MDDS bridge library, default: /data/local/tmp/libmdds_bridge_shared.z.so
   RMW_MDDS_SERVICE_NAME           Service name, default: /rclpy_mdds_trigger
   RMW_MDDS_SERVICE_WARMUP_SECONDS Client-side spin time before first request, default: 8
+  RMW_MDDS_SERVICE_REQUESTS       Sequential client requests to send, default: 1
+  RMW_MDDS_SERVICE_PROGRESS_INTERVAL
+                                   Progress log interval for multi-request runs, default: 1000
+  RMW_MDDS_SERVICE_INTERVAL_SECONDS
+                                   Optional sleep between requests, default: 0
   RMW_MDDS_SERVICE_TIMEOUT_SECONDS Client request timeout, default: 25
   RMW_MDDS_SERVICE_COMMAND_TIMEOUT_SECONDS Remote client process timeout, default: same as HDC timeout
   RMW_MDDS_HDC_TIMEOUT_SECONDS    HDC shell timeout, default: 120
@@ -36,6 +41,9 @@ REMOTE_PREFIX="${ROS2_OHOS_REMOTE_PREFIX:-/data/local/tmp/ohos-colcon-rk3588a}"
 BRIDGE_LIBRARY="${RMW_MDDS_BRIDGE_LIBRARY:-${REMOTE_PREFIX}/lib/libmdds_bridge_shared.z.so}"
 SERVICE_NAME="${RMW_MDDS_SERVICE_NAME:-/rclpy_mdds_trigger}"
 WARMUP_SECONDS="${RMW_MDDS_SERVICE_WARMUP_SECONDS:-8}"
+SERVICE_REQUESTS="${RMW_MDDS_SERVICE_REQUESTS:-1}"
+SERVICE_PROGRESS_INTERVAL="${RMW_MDDS_SERVICE_PROGRESS_INTERVAL:-1000}"
+SERVICE_INTERVAL_SECONDS="${RMW_MDDS_SERVICE_INTERVAL_SECONDS:-0}"
 SERVICE_TIMEOUT_SECONDS="${RMW_MDDS_SERVICE_TIMEOUT_SECONDS:-25}"
 HDC_TIMEOUT_SECONDS="${RMW_MDDS_HDC_TIMEOUT_SECONDS:-120}"
 HDC_RETRY_ATTEMPTS="${RMW_MDDS_HDC_RETRY_ATTEMPTS:-5}"
@@ -46,6 +54,19 @@ SERVER_SCRIPT_REMOTE="/data/local/tmp/rmw_mdds_trigger_server.py"
 CLIENT_SCRIPT_REMOTE="/data/local/tmp/rmw_mdds_trigger_client.py"
 SERVER_LOG="${LOG_DIR}/server.log"
 CLIENT_LOG="${LOG_DIR}/client.log"
+
+if ! [[ "${SERVICE_REQUESTS}" =~ ^[0-9]+$ ]] || [[ "${SERVICE_REQUESTS}" -le 0 ]]; then
+  echo "RMW_MDDS_SERVICE_REQUESTS must be a positive integer" >&2
+  exit 2
+fi
+if ! [[ "${SERVICE_PROGRESS_INTERVAL}" =~ ^[0-9]+$ ]] || [[ "${SERVICE_PROGRESS_INTERVAL}" -le 0 ]]; then
+  echo "RMW_MDDS_SERVICE_PROGRESS_INTERVAL must be a positive integer" >&2
+  exit 2
+fi
+if ! [[ "${SERVICE_INTERVAL_SECONDS}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "RMW_MDDS_SERVICE_INTERVAL_SECONDS must be a non-negative number" >&2
+  exit 2
+fi
 
 hdc_output_succeeded() {
   local status="$1"
@@ -161,6 +182,7 @@ cat >"${SERVER_SCRIPT_LOCAL}" <<'PY'
 #!/usr/bin/env python3
 
 import os
+import time
 
 import rclpy
 from rclpy.parameter import Parameter
@@ -169,6 +191,9 @@ from std_srvs.srv import Trigger
 
 def main() -> None:
     service_name = os.environ.get("RMW_MDDS_SERVICE_NAME", "/rclpy_mdds_trigger")
+    expected_requests = int(os.environ.get("RMW_MDDS_SERVICE_REQUESTS", "1"))
+    progress_interval = int(os.environ.get("RMW_MDDS_SERVICE_PROGRESS_INTERVAL", "1000"))
+    started = time.monotonic()
     rclpy.init()
     node = rclpy.create_node(
         "rmw_mdds_trigger_server",
@@ -184,13 +209,27 @@ def main() -> None:
         count["value"] += 1
         response.success = True
         response.message = f"trigger_count={count['value']}"
-        print(response.message, flush=True)
+        if (
+            count["value"] == 1
+            or count["value"] == expected_requests
+            or count["value"] % progress_interval == 0
+        ):
+            print(response.message, flush=True)
         return response
 
     node.create_service(Trigger, service_name, handle)
-    print("rmw_mdds_trigger_server_started", flush=True)
+    print(
+        f"rmw_mdds_trigger_server_started expected_requests={expected_requests}",
+        flush=True,
+    )
     try:
-        rclpy.spin(node)
+        while rclpy.ok() and count["value"] < expected_requests:
+            rclpy.spin_once(node, timeout_sec=0.1)
+        print(
+            f"TRIGGER_SERVER_DONE requests={count['value']} expected={expected_requests} "
+            f"elapsed_sec={time.monotonic() - started:.3f}",
+            flush=True,
+        )
     finally:
         node.destroy_node()
         rclpy.shutdown()
@@ -215,6 +254,9 @@ from std_srvs.srv import Trigger
 def main() -> int:
     service_name = os.environ.get("RMW_MDDS_SERVICE_NAME", "/rclpy_mdds_trigger")
     warmup_seconds = float(os.environ.get("RMW_MDDS_SERVICE_WARMUP_SECONDS", "8"))
+    expected_requests = int(os.environ.get("RMW_MDDS_SERVICE_REQUESTS", "1"))
+    progress_interval = int(os.environ.get("RMW_MDDS_SERVICE_PROGRESS_INTERVAL", "1000"))
+    request_interval = float(os.environ.get("RMW_MDDS_SERVICE_INTERVAL_SECONDS", "0"))
     timeout_seconds = float(os.environ.get("RMW_MDDS_SERVICE_TIMEOUT_SECONDS", "25"))
     rclpy.init()
     node = rclpy.create_node(
@@ -230,20 +272,59 @@ def main() -> int:
     deadline = time.monotonic() + warmup_seconds
     while rclpy.ok() and time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.1)
-    future = client.call_async(Trigger.Request())
-    deadline = time.monotonic() + timeout_seconds
-    while rclpy.ok() and not future.done() and time.monotonic() < deadline:
-        rclpy.spin_once(node, timeout_sec=0.1)
-    if not future.done():
-        print("TRIGGER_CLIENT_TIMEOUT", flush=True)
+
+    if not client.wait_for_service(timeout_sec=timeout_seconds):
+        print("TRIGGER_CLIENT_SERVICE_UNAVAILABLE", flush=True)
+        print(
+            f"TRIGGER_CLIENT_DONE expected={expected_requests} sent=0 ok=0 timeout=0 error=1",
+            flush=True,
+        )
         node.destroy_node()
         rclpy.shutdown()
         return 1
-    response = future.result()
-    print(f"TRIGGER_RESPONSE success={response.success} message={response.message}", flush=True)
+
+    sent = 0
+    ok = 0
+    timeouts = 0
+    errors = 0
+    started = time.monotonic()
+    for index in range(1, expected_requests + 1):
+        future = client.call_async(Trigger.Request())
+        sent += 1
+        deadline = time.monotonic() + timeout_seconds
+        while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=0.1)
+        if not future.done():
+            timeouts += 1
+            print(f"TRIGGER_CLIENT_TIMEOUT index={index}", flush=True)
+            break
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001 - board diagnostic script
+            errors += 1
+            print(f"TRIGGER_CLIENT_ERROR index={index} error={exc}", flush=True)
+            continue
+        if response.success and "trigger_count=" in response.message:
+            ok += 1
+        else:
+            errors += 1
+        if index == 1 or index == expected_requests or index % progress_interval == 0:
+            print(
+                f"TRIGGER_RESPONSE success={response.success} message={response.message} "
+                f"elapsed_sec={time.monotonic() - started:.3f}",
+                flush=True,
+            )
+        if request_interval > 0 and index < expected_requests:
+            time.sleep(request_interval)
+
+    print(
+        f"TRIGGER_CLIENT_DONE expected={expected_requests} sent={sent} ok={ok} "
+        f"timeout={timeouts} error={errors} elapsed_sec={time.monotonic() - started:.3f}",
+        flush=True,
+    )
     node.destroy_node()
     rclpy.shutdown()
-    return 0 if response.success and "trigger_count=" in response.message else 2
+    return 0 if sent == expected_requests and ok == expected_requests and timeouts == 0 and errors == 0 else 2
 
 
 if __name__ == "__main__":
@@ -255,14 +336,14 @@ send_file "${CLIENT_DEVICE_ID}" "${CLIENT_SCRIPT_LOCAL}" "${CLIENT_SCRIPT_REMOTE
 
 cleanup
 capture_hdc_shell "${SERVER_DEVICE_ID}" \
-  "$(remote_env) export RMW_MDDS_SERVICE_NAME='${SERVICE_NAME}'; mkdir -p '${LOG_DIR}'; rm -f '${SERVER_LOG}'; nohup /data/local/release/usr/bin/python3.12 '${SERVER_SCRIPT_REMOTE}' > '${SERVER_LOG}' 2>&1 & echo service_server_started" >/dev/null
+  "$(remote_env) export RMW_MDDS_SERVICE_NAME='${SERVICE_NAME}'; export RMW_MDDS_SERVICE_REQUESTS='${SERVICE_REQUESTS}'; export RMW_MDDS_SERVICE_PROGRESS_INTERVAL='${SERVICE_PROGRESS_INTERVAL}'; mkdir -p '${LOG_DIR}'; rm -f '${SERVER_LOG}'; nohup /data/local/release/usr/bin/python3.12 '${SERVER_SCRIPT_REMOTE}' > '${SERVER_LOG}' 2>&1 & echo service_server_started" >/dev/null
 
 sleep 4
 
 set +e
 client_output="$(
   capture_hdc_shell "${CLIENT_DEVICE_ID}" \
-    "$(remote_env) export RMW_MDDS_SERVICE_NAME='${SERVICE_NAME}'; export RMW_MDDS_SERVICE_WARMUP_SECONDS='${WARMUP_SECONDS}'; export RMW_MDDS_SERVICE_TIMEOUT_SECONDS='${SERVICE_TIMEOUT_SECONDS}'; mkdir -p '${LOG_DIR}'; rm -f '${CLIENT_LOG}'; timeout '${SERVICE_COMMAND_TIMEOUT_SECONDS}s' /data/local/release/usr/bin/python3.12 '${CLIENT_SCRIPT_REMOTE}' > '${CLIENT_LOG}' 2>&1; RC=\$?; echo CLIENT_RC:\${RC}; cat '${CLIENT_LOG}' 2>/dev/null || true; exit \${RC}"
+    "$(remote_env) export RMW_MDDS_SERVICE_NAME='${SERVICE_NAME}'; export RMW_MDDS_SERVICE_WARMUP_SECONDS='${WARMUP_SECONDS}'; export RMW_MDDS_SERVICE_REQUESTS='${SERVICE_REQUESTS}'; export RMW_MDDS_SERVICE_PROGRESS_INTERVAL='${SERVICE_PROGRESS_INTERVAL}'; export RMW_MDDS_SERVICE_INTERVAL_SECONDS='${SERVICE_INTERVAL_SECONDS}'; export RMW_MDDS_SERVICE_TIMEOUT_SECONDS='${SERVICE_TIMEOUT_SECONDS}'; mkdir -p '${LOG_DIR}'; rm -f '${CLIENT_LOG}'; timeout '${SERVICE_COMMAND_TIMEOUT_SECONDS}s' /data/local/release/usr/bin/python3.12 '${CLIENT_SCRIPT_REMOTE}' > '${CLIENT_LOG}' 2>&1; RC=\$?; echo CLIENT_RC:\${RC}; cat '${CLIENT_LOG}' 2>/dev/null || true; exit \${RC}"
 )"
 client_status=$?
 set -e
@@ -271,13 +352,32 @@ printf '%s\n' "${client_output}"
 server_output="$(capture_hdc_shell "${SERVER_DEVICE_ID}" "cat '${SERVER_LOG}' 2>/dev/null || true")"
 printf '%s\n' "${server_output}"
 
+client_done="$(sed -n 's/.*TRIGGER_CLIENT_DONE expected=\([0-9][0-9]*\) sent=\([0-9][0-9]*\) ok=\([0-9][0-9]*\) timeout=\([0-9][0-9]*\) error=\([0-9][0-9]*\).*/\1 \2 \3 \4 \5/p' <<< "${client_output}" | tail -1)"
+server_done="$(sed -n 's/.*TRIGGER_SERVER_DONE requests=\([0-9][0-9]*\) expected=\([0-9][0-9]*\).*/\1 \2/p' <<< "${server_output}" | tail -1)"
+read -r client_expected client_sent client_ok client_timeout client_error <<< "${client_done:-0 0 0 0 0}"
+read -r server_requests server_expected <<< "${server_done:-0 0}"
+
 if [[ ${client_status} -eq 0 ]] &&
-    grep -q "TRIGGER_RESPONSE success=True" <<< "${client_output}" &&
-    grep -q "trigger_count=" <<< "${server_output}"; then
-  echo "RESULT|mdds_service_a_to_b|PASS|domain=${DOMAIN_ID}|service=${SERVICE_NAME}"
-  echo "cross_board_rmw_mdds_service_ok"
+    [[ "${client_expected}" == "${SERVICE_REQUESTS}" ]] &&
+    [[ "${client_sent}" == "${SERVICE_REQUESTS}" ]] &&
+    [[ "${client_ok}" == "${SERVICE_REQUESTS}" ]] &&
+    [[ "${client_timeout}" == "0" ]] &&
+    [[ "${client_error}" == "0" ]] &&
+    [[ "${server_requests}" == "${SERVICE_REQUESTS}" ]] &&
+    [[ "${server_expected}" == "${SERVICE_REQUESTS}" ]]; then
+  if [[ "${SERVICE_REQUESTS}" == "1" ]]; then
+    echo "RESULT|mdds_service_a_to_b|PASS|domain=${DOMAIN_ID}|service=${SERVICE_NAME}|requests=${SERVICE_REQUESTS}|client_ok=${client_ok}|server_req=${server_requests}"
+    echo "cross_board_rmw_mdds_service_ok"
+  else
+    echo "RESULT|mdds_service_soak|PASS|domain=${DOMAIN_ID}|service=${SERVICE_NAME}|requests=${SERVICE_REQUESTS}|client_sent=${client_sent}|client_ok=${client_ok}|server_req=${server_requests}|timeout=${client_timeout}|error=${client_error}"
+    echo "cross_board_rmw_mdds_service_soak_ok"
+  fi
   exit 0
 fi
 
-echo "RESULT|mdds_service_a_to_b|FAIL|domain=${DOMAIN_ID}|service=${SERVICE_NAME}" >&2
+if [[ "${SERVICE_REQUESTS}" == "1" ]]; then
+  echo "RESULT|mdds_service_a_to_b|FAIL|domain=${DOMAIN_ID}|service=${SERVICE_NAME}|requests=${SERVICE_REQUESTS}|client_sent=${client_sent}|client_ok=${client_ok}|server_req=${server_requests}|timeout=${client_timeout}|error=${client_error}" >&2
+else
+  echo "RESULT|mdds_service_soak|FAIL|domain=${DOMAIN_ID}|service=${SERVICE_NAME}|requests=${SERVICE_REQUESTS}|client_sent=${client_sent}|client_ok=${client_ok}|server_req=${server_requests}|timeout=${client_timeout}|error=${client_error}" >&2
+fi
 exit 1

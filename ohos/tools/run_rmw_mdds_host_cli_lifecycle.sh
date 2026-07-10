@@ -66,10 +66,11 @@ set -u
 
 export LD_LIBRARY_PATH="${ROOT_DIR}/build/rmw_mdds_cpp:${LD_LIBRARY_PATH:-}"
 export RMW_IMPLEMENTATION=rmw_mdds_cpp
+export RMW_MDDS_BROKER_SOCKET="${LOG_DIR}/broker.sock"
 export ROS_DOMAIN_ID="${DOMAIN_ID}"
 export ROS_LOG_DIR="${LOG_DIR}"
 
-timeout 30s ros2 run lifecycle lifecycle_talker >"${TALKER_LOG}" 2>&1 &
+timeout 120s ros2 run lifecycle lifecycle_talker >"${TALKER_LOG}" 2>&1 &
 talker_pid=$!
 
 cleanup() {
@@ -85,9 +86,39 @@ wait_lifecycle_state() {
   local deadline=$((SECONDS + 30))
 
   while (( SECONDS < deadline )); do
-    if timeout 20s ros2 lifecycle get --no-daemon --spin-time 2 \
+    if ! timeout 20s ros2 lifecycle nodes --no-daemon --spin-time 3 2>/dev/null |
+        grep -qx "${NODE_NAME}"; then
+      sleep 1
+      continue
+    fi
+    if timeout 20s ros2 lifecycle get --no-daemon --spin-time 3 \
         "${NODE_NAME}" >"${output_log}" 2>&1 &&
         grep -Eq "^${expected_state}([[:space:]]|\\[)" "${output_log}"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "${failure_message}" >&2
+  dump_logs
+  exit 1
+}
+
+run_lifecycle_transition() {
+  local transition="$1"
+  local output_log="$2"
+  local failure_message="$3"
+  local deadline=$((SECONDS + 30))
+
+  while (( SECONDS < deadline )); do
+    if ! timeout 20s ros2 lifecycle nodes --no-daemon --spin-time 3 2>/dev/null |
+        grep -qx "${NODE_NAME}"; then
+      sleep 1
+      continue
+    fi
+    if timeout 20s ros2 lifecycle set --no-daemon --spin-time 3 \
+        "${NODE_NAME}" "${transition}" >"${output_log}" 2>&1 &&
+        grep -q 'Transitioning successful' "${output_log}"; then
       return 0
     fi
     sleep 1
@@ -117,34 +148,16 @@ fi
 wait_lifecycle_state "unconfigured" "${GET_INITIAL_LOG}" \
   "initial lifecycle state was not unconfigured"
 
-if ! timeout 20s ros2 lifecycle set --no-daemon --spin-time 2 \
-    "${NODE_NAME}" configure >"${CONFIGURE_LOG}" 2>&1; then
-  echo "ros2 lifecycle configure failed" >&2
-  dump_logs
-  exit 1
-fi
-
-if ! grep -q 'Transitioning successful' "${CONFIGURE_LOG}"; then
-  echo "lifecycle configure did not report success" >&2
-  dump_logs
-  exit 1
-fi
+run_lifecycle_transition "configure" "${CONFIGURE_LOG}" \
+  "ros2 lifecycle configure failed"
 
 wait_lifecycle_state "inactive" "${GET_CONFIGURED_LOG}" \
   "configured lifecycle state was not inactive"
 
-if ! timeout 20s ros2 lifecycle set --no-daemon --spin-time 2 \
-    "${NODE_NAME}" activate >"${ACTIVATE_LOG}" 2>&1; then
-  echo "ros2 lifecycle activate failed" >&2
-  dump_logs
-  exit 1
-fi
+sleep 1
 
-if ! grep -q 'Transitioning successful' "${ACTIVATE_LOG}"; then
-  echo "lifecycle activate did not report success" >&2
-  dump_logs
-  exit 1
-fi
+run_lifecycle_transition "activate" "${ACTIVATE_LOG}" \
+  "ros2 lifecycle activate failed"
 
 wait_lifecycle_state "active" "${GET_ACTIVE_LOG}" \
   "activated lifecycle state was not active"

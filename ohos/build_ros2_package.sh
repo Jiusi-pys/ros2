@@ -38,6 +38,16 @@ fi
 
 COMMAND_LINE_TOOLS_ROOT="${ROS2_OHOS_COMMAND_LINE_TOOLS_ROOT:-${DEFAULT_OHOS_ROOT}/command-line-tools}"
 OPENHARMONY_ROOT="${ROS2_OHOS_OPENHARMONY_ROOT:-${DEFAULT_OHOS_ROOT}/OpenHarmony}"
+if [[ -z "${ROS2_OHOS_OPENHARMONY_ROOT:-}" && ! -d "${OPENHARMONY_ROOT}" ]]; then
+  for openharmony_candidate in \
+    "${DEFAULT_OHOS_ROOT}/OpenHarmony_lyl" \
+    "${HOME}/M-DDS/OpenHarmony_lyl"; do
+    if [[ -d "${openharmony_candidate}" ]]; then
+      OPENHARMONY_ROOT="${openharmony_candidate}"
+      break
+    fi
+  done
+fi
 RELEASE_SITE_PACKAGES_ROOT="${ROS2_OHOS_RELEASE_SITE_PACKAGES:-${OPENHARMONY_ROOT}/out/arm64/khs_3588s_sbc/packages/phone/data/local/release/usr/lib/python3.12/site-packages}"
 
 CMAKE_BIN="${ROS2_OHOS_CMAKE:-${COMMAND_LINE_TOOLS_ROOT}/sdk/default/openharmony/native/build-tools/cmake/bin/cmake}"
@@ -91,7 +101,10 @@ fi
 TINYXML2_INCLUDE_DIR_HINT="${TINYXML2_INCLUDE_DIR:-${PREFIX}/include}"
 TINYXML2_LIBRARY_HINT="${TINYXML2_LIBRARY:-${PREFIX}/lib/libtinyxml2.so}"
 OHOS_ARCH="${ROS2_OHOS_ARCH:-arm64-v8a}"
+OHOS_OUT_ARCH="${ROS2_OHOS_OUT_ARCH:-arm64}"
 OHOS_STL="${ROS2_OHOS_STL:-c++_static}"
+TARGET_OPENSSL_INCLUDE_DIR_HINT="${ROS2_OHOS_OPENSSL_INCLUDE_DIR:-}"
+TARGET_OPENSSL_CRYPTO_LIBRARY_HINT="${ROS2_OHOS_OPENSSL_CRYPTO_LIBRARY:-}"
 BUILD_TYPE="${ROS2_OHOS_BUILD_TYPE:-Release}"
 TOOLCHAIN_FILE="${ROOT_DIR}/ohos/cmake/kaihongos.toolchain.cmake"
 PYTHON_TARGETS_PRELUDE="${ROOT_DIR}/ohos/cmake/ensure_python_targets.cmake"
@@ -214,6 +227,35 @@ if [[ -d "${TINYXML2_INCLUDE_DIR_HINT}" && -f "${TINYXML2_LIBRARY_HINT}" ]]; the
   package_dir_args+=(
     "-DTINYXML2_INCLUDE_DIR=${TINYXML2_INCLUDE_DIR_HINT}"
     "-DTINYXML2_LIBRARY=${TINYXML2_LIBRARY_HINT}"
+  )
+fi
+if [[ -z "${TARGET_OPENSSL_INCLUDE_DIR_HINT}" ]]; then
+  for openssl_include_candidate in \
+    "${OPENHARMONY_ROOT}/extension/communication/kh_iotsdk/include" \
+    "${OPENHARMONY_ROOT}/third_party/openssl/include" \
+    "${OPENHARMONY_ROOT}/extension/security/tee/optee_sdk/export-ta_arm64/host_include" \
+    "${OPENHARMONY_ROOT}/extension/security/tee/optee_sdk/export-ta_arm64/include"; do
+    if [[ -f "${openssl_include_candidate}/openssl/evp.h" &&
+      -f "${openssl_include_candidate}/openssl/err.h" ]]; then
+      TARGET_OPENSSL_INCLUDE_DIR_HINT="${openssl_include_candidate}"
+      break
+    fi
+  done
+fi
+if [[ -z "${TARGET_OPENSSL_CRYPTO_LIBRARY_HINT}" ]]; then
+  for openssl_crypto_candidate in \
+    "${OPENHARMONY_ROOT}/out/${OHOS_OUT_ARCH}/targets/thirdparty/openssl/libcrypto_openssl.z.so" \
+    "${OPENHARMONY_ROOT}/out/${OHOS_OUT_ARCH}/targets/innerkits/ohos-arm64/openssl/libcrypto_shared/libcrypto_openssl.z.so"; do
+    if [[ -f "${openssl_crypto_candidate}" ]]; then
+      TARGET_OPENSSL_CRYPTO_LIBRARY_HINT="${openssl_crypto_candidate}"
+      break
+    fi
+  done
+fi
+if [[ -d "${TARGET_OPENSSL_INCLUDE_DIR_HINT}" && -f "${TARGET_OPENSSL_CRYPTO_LIBRARY_HINT}" ]]; then
+  package_dir_args+=(
+    "-DRMW_MDDS_TARGET_OPENSSL_INCLUDE_DIR=${TARGET_OPENSSL_INCLUDE_DIR_HINT}"
+    "-DRMW_MDDS_TARGET_OPENSSL_CRYPTO_LIBRARY=${TARGET_OPENSSL_CRYPTO_LIBRARY_HINT}"
   )
 fi
 

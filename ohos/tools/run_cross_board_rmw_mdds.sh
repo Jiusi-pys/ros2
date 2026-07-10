@@ -17,6 +17,7 @@ Environment:
   RMW_MDDS_POLL_TIMEOUT_SECONDS   Poll timeout per direction, default: 90
   RMW_MDDS_PUBLISH_COUNT          Number of messages to publish per direction, default: 30
   RMW_MDDS_PUBLISH_RATE           Publish rate in Hz, default: 2
+  RMW_MDDS_BROKER_SOCKET          Broker socket to remove during cleanup, default: /data/local/tmp/rmw_mdds_cpp.sock
   RMW_MDDS_HDC_TIMEOUT_SECONDS    HDC shell timeout, default: 120
 EOF
 }
@@ -36,6 +37,7 @@ TOPIC_NAME="${RMW_MDDS_TOPIC:-/rmw_mdds_native_chatter}"
 POLL_TIMEOUT_SECONDS="${RMW_MDDS_POLL_TIMEOUT_SECONDS:-90}"
 PUBLISH_COUNT="${RMW_MDDS_PUBLISH_COUNT:-30}"
 PUBLISH_RATE="${RMW_MDDS_PUBLISH_RATE:-2}"
+BROKER_SOCKET="${RMW_MDDS_BROKER_SOCKET:-/data/local/tmp/rmw_mdds_cpp.sock}"
 HDC_TIMEOUT_SECONDS="${RMW_MDDS_HDC_TIMEOUT_SECONDS:-120}"
 LOG_DIR="${RMW_MDDS_LOG_DIR:-/data/local/tmp/rmw_mdds_cross_board}"
 
@@ -68,7 +70,7 @@ require_remote_file() {
 cleanup_device() {
   local device_id="$1"
   capture_hdc_shell "${device_id}" \
-    "pkill -f 'topic echo ${TOPIC_NAME}' 2>/dev/null || true; pkill -f 'topic pub .*${TOPIC_NAME}' 2>/dev/null || true" >/dev/null || true
+    "ps -ef | grep -E 'topic echo ${TOPIC_NAME}|topic pub .*${TOPIC_NAME}|rmw_mdds_broker' | grep -v grep | while read -r user pid rest; do kill -9 \"\${pid}\" 2>/dev/null || true; done; rm -f '${BROKER_SOCKET}'; true" >/dev/null || true
 }
 
 run_direction() {

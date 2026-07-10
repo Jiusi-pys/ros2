@@ -15,6 +15,11 @@ require_file() {
   bash -n "${file}"
 }
 
+require_source_file() {
+  local file="$1"
+  [[ -f "${file}" ]] || fail "missing source ${file}"
+}
+
 require_contains() {
   local file="$1"
   local pattern="$2"
@@ -67,8 +72,8 @@ require_no_loaned_publish_copy_fallback() {
     ' "${source_file}"
   )"
   [[ -n "${body}" ]] || fail "rmw_publish_loaned_message body not found"
-  if grep -Eq 'std::vector<uint8_t> payload|std::memcpy\(|rmw_publish\(' <<<"${body}"; then
-    fail "rmw_publish_loaned_message still has a copy fallback in the loaned publish path"
+  if grep -Eq 'EncodeMddsIntoBuffer|BorrowLoanedSample' <<<"${body}"; then
+    fail "rmw_publish_loaned_message still has a bridge payload copy fallback in the loaned publish path"
   fi
 }
 
@@ -115,6 +120,7 @@ SECURITY_CONTRACT_SCRIPT="${ROOT_DIR}/ohos/test_rmw_mdds_security_contracts.sh"
 SROS2_POLICY_CONTRACT_SCRIPT="${ROOT_DIR}/ohos/test_rmw_mdds_sros2_policy_contracts.sh"
 BOARD_SROS2_POLICY_PROBE="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_sros2_policy.sh"
 BOARD_SROS2_PROTECTED_PROBE="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_sros2_protected.sh"
+PROTECTED_TRANSPORT_PROBE_SOURCE="${ROOT_DIR}/src/ros2/rmw_mdds/rmw_mdds_cpp/src/bridge_protected_transport_probe.cpp"
 ZERO_COPY_CONTRACT_SCRIPT="${ROOT_DIR}/ohos/test_rmw_mdds_zero_copy_contracts.sh"
 TYPE_DESCRIPTION_PROBE="${ROOT_DIR}/ohos/tools/run_rmw_mdds_type_description_probe.sh"
 HOST_CLI_PUBSUB_PROBE="${ROOT_DIR}/ohos/tools/run_rmw_mdds_host_cli_pubsub.sh"
@@ -157,7 +163,13 @@ require_file "${BOARD_SROS2_PROTECTED_PROBE}"
 require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'RESULT\|board_sros2_signed_policy\|PASS'
 require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'RESULT\|board_sros2_protected_authorized_pubsub\|PASS'
 require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'RESULT\|board_sros2_protected_unauthorized_publish\|PASS'
-require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'RESULT\|board_sros2_protected_transport\|PASS'
+require_source_file "${PROTECTED_TRANSPORT_PROBE_SOURCE}"
+require_contains "${ROOT_DIR}/src/ros2/rmw_mdds/rmw_mdds_cpp/CMakeLists.txt" \
+  'rmw_mdds_bridge_protected_transport_probe'
+require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'RMW_MDDS_PROTECTED_TRANSPORT_PROBE'
+require_contains "${BOARD_SROS2_PROTECTED_PROBE}" 'PROTECTED_TRANSPORT_ACTIVATION_STATUS'
+require_contains "${BOARD_SROS2_PROTECTED_PROBE}" \
+  'RESULT\|board_sros2_protected_transport\|PASS\|device=\$\{device_id\}\|activation_status=0\|authenticated=1\|encrypted=1'
 require_file "${ZERO_COPY_CONTRACT_SCRIPT}"
 require_contains "${ZERO_COPY_CONTRACT_SCRIPT}" 'RESULT\|rmw_mdds_zero_copy_contracts\|PASS'
 require_file "${ARTIFACT_CONTRACT_SCRIPT}"

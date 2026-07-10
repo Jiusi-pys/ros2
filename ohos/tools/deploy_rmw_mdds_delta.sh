@@ -22,6 +22,10 @@ Environment:
                                   rmw_mdds-over-DSoftBus (broker+bridge default-on); if absent
                                   the rmw_mdds delta still deploys but the DSoftBus data plane
                                   stays disabled (local-loopback only).
+  MDDS_SOFTBUS_CLIENT_SO          Local libsoftbus_client.z.so matching the DSoftBus bridge.
+                                  Default: newest libsoftbus_client.z.so under the dsoftbus
+                                  build output. Deployed beside the bridge so protected
+                                  transport can resolve current DSoftBus client exports.
 EOF
 }
 
@@ -70,6 +74,7 @@ require_local_dir() {
 
 require_local_file "${LOCAL_PREFIX}/lib/librmw_mdds_cpp.so"
 require_local_file "${LOCAL_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker"
+require_local_file "${LOCAL_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_bridge_protected_transport_probe"
 require_local_dir "${LOCAL_PREFIX}/share/rmw_mdds_cpp"
 require_local_file "${LOCAL_PREFIX}/share/ament_index/resource_index/rmw_typesupport/rmw_mdds_cpp"
 require_local_file "${LOCAL_PREFIX}/share/ament_index/resource_index/rmw_typesupport_c/rmw_mdds_cpp"
@@ -82,6 +87,7 @@ trap 'rm -f "${TMP_TARBALL}"' EXIT
 tar -C "${LOCAL_PREFIX}" -czf "${TMP_TARBALL}" \
   lib/librmw_mdds_cpp.so \
   lib/rmw_mdds_cpp/rmw_mdds_broker \
+  lib/rmw_mdds_cpp/rmw_mdds_bridge_protected_transport_probe \
   include/rmw_mdds_cpp \
   share/rmw_mdds_cpp \
   share/ament_index/resource_index/package_run_dependencies/rmw_mdds_cpp \
@@ -93,6 +99,7 @@ tar -C "${LOCAL_PREFIX}" -czf "${TMP_TARBALL}" \
 
 LOCAL_SHA="$(sha256sum "${LOCAL_PREFIX}/lib/librmw_mdds_cpp.so" | cut -d ' ' -f 1)"
 LOCAL_BROKER_SHA="$(sha256sum "${LOCAL_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker" | cut -d ' ' -f 1)"
+LOCAL_PROTECTED_PROBE_SHA="$(sha256sum "${LOCAL_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_bridge_protected_transport_probe" | cut -d ' ' -f 1)"
 
 # Resolve the DSoftBus data-plane bridge library. It is built by the DSoftBus tree
 # (enhance/mdds), not this ROS 2 tree, so it is configurable and may be absent.
@@ -113,19 +120,37 @@ else
   echo "WARN: deploy but the DSoftBus data plane stays OFF (broker local-loopback only)." >&2
 fi
 
+SOFTBUS_CLIENT_SO_NAME="libsoftbus_client.z.so"
+SOFTBUS_CLIENT_SO="${MDDS_SOFTBUS_CLIENT_SO:-}"
+if [[ -z "${SOFTBUS_CLIENT_SO}" ]]; then
+  for cand in \
+    "${HOME}/M-DDS/OpenHarmony_lyl/out/arm64/targets/communication/dsoftbus/${SOFTBUS_CLIENT_SO_NAME}"; do
+    if [[ -f "${cand}" ]]; then SOFTBUS_CLIENT_SO="${cand}"; break; fi
+  done
+fi
+if [[ -n "${SOFTBUS_CLIENT_SO}" && -f "${SOFTBUS_CLIENT_SO}" ]]; then
+  SOFTBUS_CLIENT_SHA="$(sha256sum "${SOFTBUS_CLIENT_SO}" | cut -d ' ' -f 1)"
+else
+  SOFTBUS_CLIENT_SHA=""
+  echo "WARN: ${SOFTBUS_CLIENT_SO_NAME} not found (set MDDS_SOFTBUS_CLIENT_SO); bridge runtime" >&2
+  echo "WARN: will use the board image's DSoftBus client library." >&2
+fi
+
 for device_id in "$@"; do
   OHOS_HDC_BIN="${HDC_BIN}" "${HDC_SEND_VERIFY}" "${device_id}" "${TMP_TARBALL}" "${REMOTE_TARBALL}" >/dev/null
   extract_output="$(
     capture_hdc_shell "${device_id}" \
-      "mkdir -p '${REMOTE_PREFIX}' && tar xzf '${REMOTE_TARBALL}' -C '${REMOTE_PREFIX}' && test -e '${REMOTE_PREFIX}/lib/librmw_mdds_cpp.so' && test -e '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker' && chmod +x '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker' && if command -v sha256sum >/dev/null 2>&1; then sha256sum '${REMOTE_PREFIX}/lib/librmw_mdds_cpp.so' '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker'; else ls -l '${REMOTE_PREFIX}/lib/librmw_mdds_cpp.so' '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker'; fi"
+      "mkdir -p '${REMOTE_PREFIX}' && tar xzf '${REMOTE_TARBALL}' -C '${REMOTE_PREFIX}' && test -e '${REMOTE_PREFIX}/lib/librmw_mdds_cpp.so' && test -e '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker' && test -e '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_bridge_protected_transport_probe' && chmod +x '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker' '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_bridge_protected_transport_probe' && if command -v sha256sum >/dev/null 2>&1; then sha256sum '${REMOTE_PREFIX}/lib/librmw_mdds_cpp.so' '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker' '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_bridge_protected_transport_probe'; else ls -l '${REMOTE_PREFIX}/lib/librmw_mdds_cpp.so' '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker' '${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_bridge_protected_transport_probe'; fi"
   )"
   printf '%s\n' "${extract_output}"
   if command -v sha256sum >/dev/null 2>&1 &&
       grep -q "${LOCAL_SHA}" <<< "${extract_output}" &&
-      grep -q "${LOCAL_BROKER_SHA}" <<< "${extract_output}"; then
-    echo "RESULT|rmw_mdds_deploy|PASS|device=${device_id}|sha=${LOCAL_SHA}|broker_sha=${LOCAL_BROKER_SHA}"
+      grep -q "${LOCAL_BROKER_SHA}" <<< "${extract_output}" &&
+      grep -q "${LOCAL_PROTECTED_PROBE_SHA}" <<< "${extract_output}"; then
+    echo "RESULT|rmw_mdds_deploy|PASS|device=${device_id}|sha=${LOCAL_SHA}|broker_sha=${LOCAL_BROKER_SHA}|protected_probe_sha=${LOCAL_PROTECTED_PROBE_SHA}"
   elif grep -q "librmw_mdds_cpp.so" <<< "${extract_output}" &&
-      grep -q "rmw_mdds_broker" <<< "${extract_output}"; then
+      grep -q "rmw_mdds_broker" <<< "${extract_output}" &&
+      grep -q "rmw_mdds_bridge_protected_transport_probe" <<< "${extract_output}"; then
     echo "RESULT|rmw_mdds_deploy|PASS|device=${device_id}|remote_file_present"
   else
     echo "RESULT|rmw_mdds_deploy|FAIL|device=${device_id}" >&2
@@ -153,6 +178,26 @@ for device_id in "$@"; do
     fi
   else
     echo "RESULT|mdds_bridge_deploy|SKIP|device=${device_id}|reason=bridge_so_not_found"
+  fi
+
+  if [[ -n "${SOFTBUS_CLIENT_SHA}" ]]; then
+    SOFTBUS_CLIENT_REMOTE="${REMOTE_PREFIX}/lib/${SOFTBUS_CLIENT_SO_NAME}"
+    OHOS_HDC_BIN="${HDC_BIN}" "${HDC_SEND_VERIFY}" "${device_id}" "${SOFTBUS_CLIENT_SO}" "${SOFTBUS_CLIENT_REMOTE}" >/dev/null
+    softbus_client_output="$(
+      capture_hdc_shell "${device_id}" \
+        "test -e '${SOFTBUS_CLIENT_REMOTE}' && chmod 755 '${SOFTBUS_CLIENT_REMOTE}' && if command -v sha256sum >/dev/null 2>&1; then sha256sum '${SOFTBUS_CLIENT_REMOTE}'; else ls -l '${SOFTBUS_CLIENT_REMOTE}'; fi"
+    )"
+    printf '%s\n' "${softbus_client_output}"
+    if command -v sha256sum >/dev/null 2>&1 && grep -q "${SOFTBUS_CLIENT_SHA}" <<< "${softbus_client_output}"; then
+      echo "RESULT|softbus_client_deploy|PASS|device=${device_id}|sha=${SOFTBUS_CLIENT_SHA}"
+    elif grep -q "${SOFTBUS_CLIENT_SO_NAME}" <<< "${softbus_client_output}"; then
+      echo "RESULT|softbus_client_deploy|PASS|device=${device_id}|remote_file_present"
+    else
+      echo "RESULT|softbus_client_deploy|FAIL|device=${device_id}" >&2
+      exit 1
+    fi
+  else
+    echo "RESULT|softbus_client_deploy|SKIP|device=${device_id}|reason=softbus_client_so_not_found"
   fi
 done
 

@@ -20,6 +20,10 @@ Environment:
   RMW_MDDS_SROS2_FORBIDDEN_TOPIC  Unauthorized topic, default: /mdds_sros2_protected_forbidden
   RMW_MDDS_HDC_TIMEOUT_SECONDS    HDC shell timeout, default: 120
   RMW_MDDS_HDC_RETRY_ATTEMPTS     HDC retry attempts, default: 5
+  RMW_MDDS_SROS2_AUTH_WARMUP_SECONDS  Authorized subscriber warmup, default: 60
+  RMW_MDDS_SROS2_AUTH_PUB_TIMES       Authorized publish count, default: 60
+  RMW_MDDS_SROS2_AUTH_WAIT_SECONDS    Authorized receive wait, default: 45
+  RMW_MDDS_SROS2_CERT_WAIT_MAX_SECONDS Maximum wait for board clock skew, default: 120
 EOF
 }
 
@@ -40,11 +44,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HDC_BIN="${HDC_BIN:-hdc}"
 REMOTE_PREFIX="${ROS2_OHOS_REMOTE_PREFIX:-/data/local/tmp/ohos-colcon-rk3588a}"
 BRIDGE_LIBRARY="${RMW_MDDS_BRIDGE_LIBRARY:-${REMOTE_PREFIX}/lib/libmdds_bridge_shared.z.so}"
+PROTECTED_TRANSPORT_PROBE="${RMW_MDDS_PROTECTED_TRANSPORT_PROBE:-${REMOTE_PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_bridge_protected_transport_probe}"
 ALLOWED_TOPIC="${RMW_MDDS_SROS2_ALLOWED_TOPIC:-/mdds_sros2_protected_allowed}"
 FORBIDDEN_TOPIC="${RMW_MDDS_SROS2_FORBIDDEN_TOPIC:-/mdds_sros2_protected_forbidden}"
 HDC_TIMEOUT_SECONDS="${RMW_MDDS_HDC_TIMEOUT_SECONDS:-120}"
 HDC_RETRY_ATTEMPTS="${RMW_MDDS_HDC_RETRY_ATTEMPTS:-5}"
 HDC_RETRY_DELAY_SECONDS="${RMW_MDDS_HDC_RETRY_DELAY_SECONDS:-1}"
+AUTH_WARMUP_SECONDS="${RMW_MDDS_SROS2_AUTH_WARMUP_SECONDS:-60}"
+AUTH_PUB_TIMES="${RMW_MDDS_SROS2_AUTH_PUB_TIMES:-60}"
+AUTH_WAIT_SECONDS="${RMW_MDDS_SROS2_AUTH_WAIT_SECONDS:-45}"
+CERT_WAIT_MAX_SECONDS="${RMW_MDDS_SROS2_CERT_WAIT_MAX_SECONDS:-120}"
 LOG_DIR="${RMW_MDDS_LOG_DIR:-/data/local/tmp/rmw_mdds_sros2_protected}"
 REMOTE_KEYSTORE_ROOT="/data/local/tmp/rmw_mdds_sros2_protected_keystore_${DOMAIN_ID}_$$"
 REMOTE_TARBALL="${REMOTE_KEYSTORE_ROOT}.tgz"
@@ -174,6 +183,32 @@ deploy_keystore() {
     "rm -rf '${REMOTE_KEYSTORE_ROOT}' && mkdir -p '${REMOTE_KEYSTORE_ROOT}' && tar xzf '${REMOTE_TARBALL}' -C '${REMOTE_KEYSTORE_ROOT}' && test -e '${REMOTE_KEYSTORE_ROOT}/enclaves/${ENCLAVE_NAME}/governance.xml.sig' && test -e '${REMOTE_KEYSTORE_ROOT}/enclaves/${ENCLAVE_NAME}/permissions.xml.sig' && test -e '${REMOTE_KEYSTORE_ROOT}/enclaves/${ENCLAVE_NAME}/identity.pem' && echo PROTECTED_SROS2_KEYSTORE_READY" >/dev/null
 }
 
+wait_for_certificate_validity() {
+  local certificate_path="$1"
+  local not_before not_before_epoch board_epoch wait_seconds=0
+  not_before="$(openssl x509 -in "${certificate_path}" -noout -startdate)"
+  not_before_epoch="$(date -u -d "${not_before#notBefore=}" +%s)"
+  for device_id in "${SUB_DEVICE_ID}" "${PUB_DEVICE_ID}"; do
+    board_epoch="$(capture_hdc_shell "${device_id}" "date +%s" | grep -E '^[0-9]+$' | tail -1)"
+    if ! [[ "${board_epoch}" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: cannot read board clock from ${device_id}" >&2
+      return 1
+    fi
+    if (( not_before_epoch >= board_epoch )); then
+      local required_wait=$((not_before_epoch - board_epoch + 2))
+      (( required_wait > wait_seconds )) && wait_seconds=${required_wait}
+    fi
+  done
+  if (( wait_seconds > CERT_WAIT_MAX_SECONDS )); then
+    echo "ERROR: board clock skew requires ${wait_seconds}s certificate wait, max is ${CERT_WAIT_MAX_SECONDS}s" >&2
+    return 1
+  fi
+  if (( wait_seconds > 0 )); then
+    echo "INFO: waiting ${wait_seconds}s for generated SROS2 certificates to become valid on both boards"
+    sleep "${wait_seconds}"
+  fi
+}
+
 remote_env() {
   cat <<EOF
 PREFIX='${REMOTE_PREFIX}'; UNDERLAY_PREFIX='/data/local/tmp/ohos-prefix'; FASTDDS_PREFIX='/data/local/tmp/ohos-fastdds'; BR='${BRIDGE_LIBRARY}'; VENDOR_LIB_PATH=; for dir in \${PREFIX}/opt/*/lib; do [ -d \${dir} ] && VENDOR_LIB_PATH=\${VENDOR_LIB_PATH:+\${VENDOR_LIB_PATH}:}\${dir}; done; UNDERLAY_VENDOR_LIB_PATH=; for dir in \${UNDERLAY_PREFIX}/opt/*/lib; do [ -d \${dir} ] && UNDERLAY_VENDOR_LIB_PATH=\${UNDERLAY_VENDOR_LIB_PATH:+\${UNDERLAY_VENDOR_LIB_PATH}:}\${dir}; done; unset RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED; unset RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED; export LD_PRELOAD=/data/local/release/usr/lib/libpython3.12.so.1.0; export PYTHONHOME='/data/local/release/usr'; export HOME='/data/local/tmp'; export ROS_LOG_DIR='${LOG_DIR}'; export LD_LIBRARY_PATH=\${PREFIX}/lib:\${UNDERLAY_PREFIX}/lib:\${FASTDDS_PREFIX}/lib\${VENDOR_LIB_PATH:+:\${VENDOR_LIB_PATH}}\${UNDERLAY_VENDOR_LIB_PATH:+:\${UNDERLAY_VENDOR_LIB_PATH}}:/data/local/tmp:/data/local/release/usr/lib:/system/lib64/platformsdk:/system/lib64/chipset-pub-sdk:/system/lib64; export AMENT_PREFIX_PATH=\${PREFIX}:\${UNDERLAY_PREFIX}; export CMAKE_PREFIX_PATH=\${PREFIX}:\${UNDERLAY_PREFIX}:\${FASTDDS_PREFIX}; export COLCON_PREFIX_PATH=\${PREFIX}:\${UNDERLAY_PREFIX}; export PYTHONPATH=\${PREFIX}/lib/python3.12/site-packages:\${UNDERLAY_PREFIX}/lib/python3.12/site-packages:\${UNDERLAY_PREFIX}/lib/python3.11/site-packages; export ROS_DOMAIN_ID='${DOMAIN_ID}'; export RMW_IMPLEMENTATION='rmw_mdds_cpp'; export RMW_MDDS_BROKER=1; export RMW_MDDS_BRIDGE_LIBRARY=\${BR}; export ROS_SECURITY_ENABLE=true; export ROS_SECURITY_STRATEGY=Enforce; export ROS_SECURITY_KEYSTORE='${REMOTE_KEYSTORE_ROOT}'; export ROS_SECURITY_ENCLAVE_OVERRIDE='/${ENCLAVE_NAME}';
@@ -191,11 +226,29 @@ cleanup() {
   kill_remote_pattern "${SUB_DEVICE_ID}" "topic echo ${ALLOWED_TOPIC}"
   kill_remote_pattern "${PUB_DEVICE_ID}" "topic pub .*${ALLOWED_TOPIC}"
   kill_remote_pattern "${PUB_DEVICE_ID}" "topic pub .*${FORBIDDEN_TOPIC}"
+  kill_remote_pattern "${SUB_DEVICE_ID}" "rmw_mdds_broker"
+  kill_remote_pattern "${PUB_DEVICE_ID}" "rmw_mdds_broker"
+  capture_hdc_shell "${SUB_DEVICE_ID}" \
+    "rm -f /data/local/tmp/rmw_mdds_cpp.sock /data/local/tmp/rmw_mdds_cpp.sock.protected" >/dev/null || true
+  capture_hdc_shell "${PUB_DEVICE_ID}" \
+    "rm -f /data/local/tmp/rmw_mdds_cpp.sock /data/local/tmp/rmw_mdds_cpp.sock.protected" >/dev/null || true
 }
 
 verify_signed_policy_and_transport() {
   local device_id="$1"
   local probe_log="${LOG_DIR}/sros2_protected_probe.log"
+  local activation_output
+  activation_output="$(
+    capture_hdc_shell "${device_id}" \
+      "mkdir -p '${LOG_DIR}'; $(remote_env) '${PROTECTED_TRANSPORT_PROBE}' '${BRIDGE_LIBRARY}' > '${LOG_DIR}/sros2_protected_transport_probe.log' 2>&1; status=\$?; cat '${LOG_DIR}/sros2_protected_transport_probe.log'; echo PROTECTED_TRANSPORT_ACTIVATION_STATUS=\${status}; exit 0"
+  )"
+  if ! grep -q 'PROTECTED_TRANSPORT_ACTIVATION_STATUS=0' <<<"${activation_output}"; then
+    echo "RESULT|board_sros2_signed_policy|FAIL|device=${device_id}|transport_unavailable" >&2
+    echo "RESULT|board_sros2_protected_transport|FAIL|device=${device_id}|activation_status=nonzero" >&2
+    printf '%s\n' "${activation_output}" >&2
+    return 1
+  fi
+
   local output
   output="$(
     capture_hdc_shell "${device_id}" \
@@ -203,7 +256,7 @@ verify_signed_policy_and_transport() {
   )"
   if grep -q 'PROTECTED_PROBE_STATUS=0' <<<"${output}"; then
     echo "RESULT|board_sros2_signed_policy|PASS|device=${device_id}"
-    echo "RESULT|board_sros2_protected_transport|PASS|device=${device_id}|authenticated=1|encrypted=1"
+    echo "RESULT|board_sros2_protected_transport|PASS|device=${device_id}|activation_status=0|authenticated=1|encrypted=1"
     return 0
   fi
   echo "RESULT|board_sros2_signed_policy|FAIL|device=${device_id}" >&2
@@ -219,10 +272,10 @@ run_authorized_cross_board() {
 
   capture_hdc_shell "${SUB_DEVICE_ID}" \
     "mkdir -p '${LOG_DIR}'; rm -f '${echo_log}'; $(remote_env) nohup sh -c '${REMOTE_PREFIX}/bin/ros2 topic echo ${ALLOWED_TOPIC} std_msgs/msg/String --no-daemon > ${echo_log} 2>&1' >/dev/null 2>&1 & echo PROTECTED_SROS2_ECHO_STARTED" >/dev/null
-  sleep 15
+  sleep "${AUTH_WARMUP_SECONDS}"
   capture_hdc_shell "${PUB_DEVICE_ID}" \
-    "mkdir -p '${LOG_DIR}'; rm -f '${pub_log}'; $(remote_env) nohup sh -c '${REMOTE_PREFIX}/bin/ros2 topic pub --times 20 -r 2 -w 0 ${ALLOWED_TOPIC} std_msgs/msg/String '\\''{data: ${payload}}'\\'' > ${pub_log} 2>&1' >/dev/null 2>&1 & echo PROTECTED_SROS2_PUB_STARTED" >/dev/null
-  sleep 22
+    "mkdir -p '${LOG_DIR}'; rm -f '${pub_log}'; $(remote_env) nohup sh -c '${REMOTE_PREFIX}/bin/ros2 topic pub --times ${AUTH_PUB_TIMES} -r 2 -w 0 ${ALLOWED_TOPIC} std_msgs/msg/String '\\''{data: ${payload}}'\\'' > ${pub_log} 2>&1' >/dev/null 2>&1 & echo PROTECTED_SROS2_PUB_STARTED" >/dev/null
+  sleep "${AUTH_WAIT_SECONDS}"
 
   local rx
   rx="$(capture_hdc_shell "${SUB_DEVICE_ID}" "grep -c '${payload}' '${echo_log}' 2>/dev/null || true")"
@@ -270,9 +323,11 @@ command -v openssl >/dev/null 2>&1 || { echo "Missing openssl" >&2; exit 1; }
 require_remote_file "${SUB_DEVICE_ID}" "${REMOTE_PREFIX}/bin/ros2"
 require_remote_file "${SUB_DEVICE_ID}" "${REMOTE_PREFIX}/lib/librmw_mdds_cpp.so"
 require_remote_file "${SUB_DEVICE_ID}" "${BRIDGE_LIBRARY}"
+require_remote_file "${SUB_DEVICE_ID}" "${PROTECTED_TRANSPORT_PROBE}"
 require_remote_file "${PUB_DEVICE_ID}" "${REMOTE_PREFIX}/bin/ros2"
 require_remote_file "${PUB_DEVICE_ID}" "${REMOTE_PREFIX}/lib/librmw_mdds_cpp.so"
 require_remote_file "${PUB_DEVICE_ID}" "${BRIDGE_LIBRARY}"
+require_remote_file "${PUB_DEVICE_ID}" "${PROTECTED_TRANSPORT_PROBE}"
 
 WORK_DIR="$(mktemp -d /tmp/rmw_mdds_sros2_protected.XXXXXX)"
 KEYSTORE_TARBALL="${WORK_DIR}/keystore.tgz"
@@ -280,6 +335,7 @@ trap 'rm -rf "${WORK_DIR}"; cleanup' EXIT
 make_signed_protected_keystore_tarball "${KEYSTORE_TARBALL}" "${WORK_DIR}"
 deploy_keystore "${SUB_DEVICE_ID}"
 deploy_keystore "${PUB_DEVICE_ID}"
+wait_for_certificate_validity "${WORK_DIR}/keystore/enclaves/${ENCLAVE_NAME}/permissions_ca.cert.pem"
 
 cleanup
 capture_hdc_shell "${SUB_DEVICE_ID}" "mkdir -p '${LOG_DIR}'; rm -f '${LOG_DIR}'/sros2_protected_*.log; true" >/dev/null

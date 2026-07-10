@@ -62,6 +62,7 @@ source "${ROOT_DIR}/install/setup.bash"
 set -u
 
 export RMW_IMPLEMENTATION=rmw_mdds_cpp
+export RMW_MDDS_BROKER_SOCKET="${LOG_DIR}/broker.sock"
 export ROS_DOMAIN_ID="${DOMAIN_ID}"
 export ROS_LOG_DIR="${LOG_DIR}"
 mkdir -p "${ROS_LOG_DIR}"

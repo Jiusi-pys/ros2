@@ -59,6 +59,7 @@ set -u
 
 export LD_LIBRARY_PATH="${ROOT_DIR}/build/rmw_mdds_cpp:${LD_LIBRARY_PATH:-}"
 export RMW_IMPLEMENTATION=rmw_mdds_cpp
+export RMW_MDDS_BROKER_SOCKET="${LOG_DIR}/broker.sock"
 export ROS_DOMAIN_ID="${DOMAIN_ID}"
 export ROS_LOG_DIR="${LOG_DIR}"
 

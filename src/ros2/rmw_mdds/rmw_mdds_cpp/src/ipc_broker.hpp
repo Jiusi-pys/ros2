@@ -74,6 +74,14 @@ private:
     std::unique_ptr<BridgeSubscriptionState> subscription_state;
     size_t ref_count = 0u;
   };
+  struct SharedBridgePublisher {
+    EndpointDescriptor endpoint;
+    std::string bridge_topic;
+    std::string bridge_type;
+    void *bridge_publisher = nullptr;
+    std::shared_ptr<std::mutex> publish_mutex;
+    size_t ref_count = 0u;
+  };
 
   void AcceptLoop();
   void ClientLoop(Connection *connection);
@@ -87,7 +95,11 @@ private:
                            const std::vector<uint8_t> &payload,
                            uint64_t sequence_number);
   void BroadcastGraphUpdate();
-  void RemoveBridgeEndpointForEntity(Connection *connection, uint64_t entity_id);
+  void ReleaseBridgePublisher(void *bridge_publisher, bool shared,
+                              const std::string &bridge_topic,
+                              const std::string &bridge_type);
+  void RemoveBridgeEndpointForEntity(Connection *connection,
+                                     uint64_t entity_id);
   void DestroyBridgeEndpoints(Connection *connection);
   static void BridgeSampleCallback(const BridgeSample *sample, void *user_data);
   /* Matched-count listener on a local client's rq/ bridge publisher;
@@ -122,9 +134,11 @@ private:
   std::vector<std::unique_ptr<Connection>> connections_;
   std::vector<RetainedSample> retained_samples_;
   std::vector<BridgeDeliveryDedupe> recent_bridge_deliveries_;
+  std::vector<SharedBridgePublisher> shared_bridge_publishers_;
   std::vector<SharedBridgeSubscription> shared_bridge_subscriptions_;
   bool bridge_enabled_ = false;
   void *node_sync_subscription_ = nullptr;
+  uint32_t node_sync_domain_id_ = 0u;
   std::vector<EndpointDescriptor> remote_node_endpoints_;
 
   // Cross-board graph sync state. Each peer broker is keyed by a random

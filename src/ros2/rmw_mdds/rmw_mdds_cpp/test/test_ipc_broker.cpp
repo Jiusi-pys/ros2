@@ -163,8 +163,9 @@ std::vector<uint8_t> MakeServiceWirePayload(uint64_t client_entity_id,
   AppendI64(&payload, sequence_number);
   uint8_t guid[RMW_GID_STORAGE_SIZE] = {};
   const uintptr_t address = static_cast<uintptr_t>(client_entity_id);
-  std::memcpy(guid, &address,
-              std::min(sizeof(address), static_cast<size_t>(RMW_GID_STORAGE_SIZE)));
+  std::memcpy(
+      guid, &address,
+      std::min(sizeof(address), static_cast<size_t>(RMW_GID_STORAGE_SIZE)));
   payload.insert(payload.end(), guid, guid + RMW_GID_STORAGE_SIZE);
   AppendI64(&payload, 123456789);
   payload.insert(payload.end(), body.begin(), body.end());
@@ -405,6 +406,78 @@ bool WaitForPayload(int fd, const std::vector<uint8_t> &expected_payload,
   return false;
 }
 } // namespace
+
+TEST(RmwMddsIpcBroker, UsesConfiguredNodeSyncTopic) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  EnvVarGuard node_sync_guard("RMW_MDDS_NODE_SYNC_TOPIC");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_NODE_SYNC_TOPIC", "d171/mdds_node_sync", 1));
+  FakeMddsBridgeReset();
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  EXPECT_EQ(1, FakeMddsBridgeHasSubscriber("d171/mdds_node_sync",
+                                           "mdds_graph_NodeList"));
+  EXPECT_EQ(
+      0, FakeMddsBridgeHasSubscriber("mdds_node_sync", "mdds_graph_NodeList"));
+}
+
+TEST(RmwMddsIpcBroker, AssignsConfiguredDomainToRemoteNodeSyncEndpoints) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  EnvVarGuard node_sync_guard("RMW_MDDS_NODE_SYNC_TOPIC");
+  EnvVarGuard domain_guard("ROS_DOMAIN_ID");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_NODE_SYNC_TOPIC", "d171/mdds_node_sync", 1));
+  ASSERT_EQ(0, setenv("ROS_DOMAIN_ID", "7", 1));
+  FakeMddsBridgeReset();
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  rmw_mdds_cpp::ipc::UniqueFd observer =
+      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(observer) << error;
+  DrainReadableFrames(observer.get(), std::chrono::milliseconds(100));
+
+  const std::string payload = "/parameter_blackboard\n";
+  ASSERT_EQ(1, FakeMddsBridgeInjectFor(
+                   "d171/mdds_node_sync", "mdds_graph_NodeList", payload.data(),
+                   static_cast<uint32_t>(payload.size()), 1u));
+
+  rmw_mdds_cpp::ipc::EndpointDescriptor remote_node;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  bool found = false;
+  while (std::chrono::steady_clock::now() < deadline && !found) {
+    if (!HasReadableData(observer.get())) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+    rmw_mdds_cpp::ipc::Frame frame;
+    ASSERT_EQ(rmw_mdds_cpp::ipc::ReadFrameStatus::kOk,
+              rmw_mdds_cpp::ipc::ReadFrame(observer.get(), &frame, &error))
+        << error;
+    found = FindGraphEndpoint(
+        frame, rmw_mdds_cpp::ipc::EndpointKind::kSubscription,
+        "_mdds_remote_node", "mdds_graph/msg/RemoteNode", &remote_node);
+  }
+
+  ASSERT_TRUE(found);
+  EXPECT_EQ("parameter_blackboard", remote_node.node_name);
+  EXPECT_EQ("/", remote_node.node_namespace);
+  EXPECT_EQ(171u, remote_node.domain_id);
+}
 
 TEST(RmwMddsIpcBroker, RoutesPublishedSamplesToMatchingSubscriptions) {
   TempSocketPath socket_path;
@@ -675,13 +748,12 @@ TEST(RmwMddsIpcBroker, RelaysPeerBrokerGraphOverBridgeSync) {
                    "/broker/peer_graph", "std_msgs/msg/String");
   const std::vector<rmw_mdds_cpp::ipc::EndpointDescriptor> peer_endpoints{
       peer_publisher};
-  const std::vector<uint8_t> peer_graph =
-      rmw_mdds_cpp::ipc::EncodeGraphUpdate(0x1122334455667788u, 1u,
-                                           peer_endpoints);
-  ASSERT_EQ(1, FakeMddsBridgeInjectFor(
-                   "mdds_graph_sync", "mdds_graph_EndpointList",
-                   peer_graph.data(),
-                   static_cast<uint32_t>(peer_graph.size()), 1u));
+  const std::vector<uint8_t> peer_graph = rmw_mdds_cpp::ipc::EncodeGraphUpdate(
+      0x1122334455667788u, 1u, peer_endpoints);
+  ASSERT_EQ(
+      1, FakeMddsBridgeInjectFor("mdds_graph_sync", "mdds_graph_EndpointList",
+                                 peer_graph.data(),
+                                 static_cast<uint32_t>(peer_graph.size()), 1u));
 
   EXPECT_TRUE(WaitForGraphEndpoint(
       observer.get(), rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
@@ -891,23 +963,20 @@ TEST(RmwMddsIpcBroker, IgnoreLocalBridgeUsesDirectIpcOnly) {
   local_sample.payload = {'l', 'o', 'c', 'a', 'l'};
   ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
       publisher.get(),
-      rmw_mdds_cpp::ipc::Frame{rmw_mdds_cpp::ipc::MessageKind::kPublishSample,
-                               4u,
-                               rmw_mdds_cpp::ipc::EncodeSampleMessage(local_sample)},
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kPublishSample, 4u,
+          rmw_mdds_cpp::ipc::EncodeSampleMessage(local_sample)},
       &error))
       << error;
 
   ASSERT_TRUE(WaitForPayload(normal_subscription.get(), local_sample.payload,
-                             nullptr, &error,
-                             std::chrono::milliseconds(500)))
+                             nullptr, &error, std::chrono::milliseconds(500)))
       << error;
   EXPECT_FALSE(WaitForPayload(normal_subscription.get(), local_sample.payload,
-                              nullptr, &error,
-                              std::chrono::milliseconds(200)))
+                              nullptr, &error, std::chrono::milliseconds(200)))
       << "normal subscription must receive one direct IPC copy";
   EXPECT_FALSE(WaitForPayload(ignored_subscription.get(), local_sample.payload,
-                              nullptr, &error,
-                              std::chrono::milliseconds(200)))
+                              nullptr, &error, std::chrono::milliseconds(200)))
       << "same-context ignore-local subscription must not receive the bridge "
          "loopback";
 
@@ -919,8 +988,7 @@ TEST(RmwMddsIpcBroker, IgnoreLocalBridgeUsesDirectIpcOnly) {
                              &error, std::chrono::milliseconds(500)))
       << error;
   EXPECT_TRUE(WaitForPayload(ignored_subscription.get(), remote_payload,
-                             nullptr, &error,
-                             std::chrono::milliseconds(500)))
+                             nullptr, &error, std::chrono::milliseconds(500)))
       << error;
 }
 
@@ -929,8 +997,8 @@ TEST(RmwMddsIpcBroker, RejectsBridgeWithoutRemoteOnlyPublisherCapability) {
   EnvVarGuard library_guard("RMW_MDDS_BRIDGE_LIBRARY");
   rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
   unsetenv("RMW_MDDS_BRIDGE");
-  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY",
-                      FAKE_MDDS_BRIDGE_LEGACY_PATH, 1));
+  ASSERT_EQ(0,
+            setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_LEGACY_PATH, 1));
 
   TempSocketPath socket_path;
   ASSERT_FALSE(socket_path.path().empty());
@@ -1116,34 +1184,34 @@ TEST(RmwMddsIpcBroker, RoutesBridgeResponseToOwningClientEndpointOnly) {
   RegisterEndpoint(client_a.get(), endpoint_a, 1u);
   RegisterEndpoint(client_b.get(), endpoint_b, 2u);
 
-  const std::vector<uint8_t> external_response = {'f', 'a', 'n',
-                                                  'o', 'u', 't'};
+  const std::vector<uint8_t> external_response = {'f', 'a', 'n', 'o', 'u', 't'};
   ASSERT_EQ(1, FakeMddsBridgeInjectFor(
-                   "rr/broker_bridge_fanout",
-                   "std_srvs::srv::Trigger_Response",
+                   "rr/broker_bridge_fanout", "std_srvs::srv::Trigger_Response",
                    external_response.data(),
                    static_cast<uint32_t>(external_response.size()), 77u));
 
   rmw_mdds_cpp::ipc::SampleMessage delivered_a;
-  ASSERT_TRUE(ReadUntilPayload(client_a.get(), external_response, &delivered_a,
-                               &error))
+  ASSERT_TRUE(
+      ReadUntilPayload(client_a.get(), external_response, &delivered_a, &error))
       << error;
   EXPECT_TRUE(delivered_a.mdds_payload);
   EXPECT_EQ(77u, delivered_a.sequence_number);
 
   rmw_mdds_cpp::ipc::SampleMessage delivered_b;
-  ASSERT_TRUE(ReadUntilPayload(client_b.get(), external_response, &delivered_b,
-                               &error))
+  ASSERT_TRUE(
+      ReadUntilPayload(client_b.get(), external_response, &delivered_b, &error))
       << error;
   EXPECT_TRUE(delivered_b.mdds_payload);
   EXPECT_EQ(77u, delivered_b.sequence_number);
 
   EXPECT_FALSE(WaitForPayload(client_a.get(), external_response, nullptr,
                               &error, std::chrono::milliseconds(200)))
-      << "bridge response callback for client B must not be replayed to client A";
+      << "bridge response callback for client B must not be replayed to client "
+         "A";
   EXPECT_FALSE(WaitForPayload(client_b.get(), external_response, nullptr,
                               &error, std::chrono::milliseconds(200)))
-      << "bridge response callback for client A must not be replayed to client B";
+      << "bridge response callback for client A must not be replayed to client "
+         "B";
 }
 
 TEST(RmwMddsIpcBroker, RoutesBridgeResponseByWriterGuidWithSharedSubscriber) {
@@ -1181,22 +1249,21 @@ TEST(RmwMddsIpcBroker, RoutesBridgeResponseByWriterGuidWithSharedSubscriber) {
       MakeServiceWirePayload(endpoint_a.entity_id, 2, response_body);
   ASSERT_EQ(1, FakeMddsBridgeInjectFor(
                    "rr/broker_bridge_guid_route",
-                   "std_srvs::srv::Trigger_Response",
-                   response_payload.data(),
+                   "std_srvs::srv::Trigger_Response", response_payload.data(),
                    static_cast<uint32_t>(response_payload.size()), 88u));
 
   rmw_mdds_cpp::ipc::SampleMessage delivered_a;
-  ASSERT_TRUE(ReadUntilPayload(client_a.get(), response_payload, &delivered_a,
-                               &error))
+  ASSERT_TRUE(
+      ReadUntilPayload(client_a.get(), response_payload, &delivered_a, &error))
       << error;
   EXPECT_TRUE(delivered_a.mdds_payload);
   EXPECT_EQ(88u, delivered_a.sequence_number);
 
-  EXPECT_FALSE(WaitForPayload(client_a.get(), response_payload, nullptr,
-                              &error, std::chrono::milliseconds(200)))
+  EXPECT_FALSE(WaitForPayload(client_a.get(), response_payload, nullptr, &error,
+                              std::chrono::milliseconds(200)))
       << "duplicate bridge callbacks must not enqueue duplicate responses";
-  EXPECT_FALSE(WaitForPayload(client_b.get(), response_payload, nullptr,
-                              &error, std::chrono::milliseconds(200)))
+  EXPECT_FALSE(WaitForPayload(client_b.get(), response_payload, nullptr, &error,
+                              std::chrono::milliseconds(200)))
       << "response payload writer_guid targets client A, not client B";
 }
 
@@ -1244,15 +1311,83 @@ TEST(RmwMddsIpcBroker, SharesServiceResponseBridgeSubscriberAcrossClients) {
                    static_cast<uint32_t>(response_payload.size()), 101u));
 
   rmw_mdds_cpp::ipc::SampleMessage delivered_b;
-  ASSERT_TRUE(ReadUntilPayload(client_b.get(), response_payload, &delivered_b,
-                               &error))
+  ASSERT_TRUE(
+      ReadUntilPayload(client_b.get(), response_payload, &delivered_b, &error))
       << error;
   EXPECT_TRUE(delivered_b.mdds_payload);
   EXPECT_EQ(101u, delivered_b.sequence_number);
 
-  EXPECT_FALSE(WaitForPayload(client_a.get(), response_payload, nullptr,
-                              &error, std::chrono::milliseconds(200)))
+  EXPECT_FALSE(WaitForPayload(client_a.get(), response_payload, nullptr, &error,
+                              std::chrono::milliseconds(200)))
       << "shared response bridge subscriber must still route by writer_guid";
+}
+
+TEST(RmwMddsIpcBroker, SharesServiceRequestBridgePublisherAcrossClients) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  EnvVarGuard max_unacked_guard("RMW_MDDS_SERVICE_BRIDGE_MAX_UNACKED");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_SERVICE_BRIDGE_MAX_UNACKED", "0", 1));
+  FakeMddsBridgeReset();
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  rmw_mdds_cpp::ipc::UniqueFd client_a =
+      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(client_a) << error;
+  rmw_mdds_cpp::ipc::UniqueFd client_b =
+      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(client_b) << error;
+
+  auto endpoint_a =
+      MakeEndpoint(6703u, rmw_mdds_cpp::ipc::EndpointKind::kClient,
+                   "/broker_bridge_shared_rq", "std_srvs::srv::Trigger");
+  auto endpoint_b =
+      MakeEndpoint(6704u, rmw_mdds_cpp::ipc::EndpointKind::kClient,
+                   "/broker_bridge_shared_rq", "std_srvs::srv::Trigger");
+
+  RegisterEndpoint(client_a.get(), endpoint_a, 1u);
+  const int publisher_count_after_first = FakeMddsBridgePublisherCount();
+  RegisterEndpoint(client_b.get(), endpoint_b, 2u);
+
+  const char *request_topic = "rq/broker_bridge_shared_rq";
+  const char *request_type = "std_srvs::srv::Trigger_Request";
+  ASSERT_EQ(1, FakeMddsBridgeHasPublisher(request_topic, request_type));
+  EXPECT_EQ(publisher_count_after_first, FakeMddsBridgePublisherCount())
+      << "same-broker service clients must share one request bridge publisher";
+
+  rmw_mdds_cpp::ipc::SampleMessage request_a;
+  request_a.entity_id = endpoint_a.entity_id;
+  request_a.sequence_number = 1u;
+  request_a.payload = MakeServiceWirePayload(endpoint_a.entity_id, 1, {'a'});
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+      client_a.get(),
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kPublishSample, 3u,
+          rmw_mdds_cpp::ipc::EncodeSampleMessage(request_a)},
+      &error))
+      << error;
+
+  rmw_mdds_cpp::ipc::SampleMessage request_b;
+  request_b.entity_id = endpoint_b.entity_id;
+  request_b.sequence_number = 1u;
+  request_b.payload = MakeServiceWirePayload(endpoint_b.entity_id, 1, {'b'});
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+      client_b.get(),
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kPublishSample, 4u,
+          rmw_mdds_cpp::ipc::EncodeSampleMessage(request_b)},
+      &error))
+      << error;
+
+  EXPECT_TRUE(WaitForFakePublisherPublishCountAtLeast(
+      request_topic, request_type, 2, std::chrono::milliseconds(500)))
+      << "both clients must publish requests through the shared bridge writer";
 }
 
 TEST(RmwMddsIpcBroker, RoutesLocalServiceResponseToOwningClientOnly) {
@@ -1300,15 +1435,15 @@ TEST(RmwMddsIpcBroker, RoutesLocalServiceResponseToOwningClientOnly) {
   response.payload = response_payload;
   ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
       service.get(),
-      rmw_mdds_cpp::ipc::Frame{rmw_mdds_cpp::ipc::MessageKind::kPublishSample,
-                               4u,
-                               rmw_mdds_cpp::ipc::EncodeSampleMessage(response)},
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kPublishSample, 4u,
+          rmw_mdds_cpp::ipc::EncodeSampleMessage(response)},
       &error))
       << error;
 
   rmw_mdds_cpp::ipc::SampleMessage delivered_a;
-  ASSERT_TRUE(ReadUntilPayload(client_a.get(), response_payload, &delivered_a,
-                               &error))
+  ASSERT_TRUE(
+      ReadUntilPayload(client_a.get(), response_payload, &delivered_a, &error))
       << error;
   EXPECT_EQ(response.sequence_number, delivered_a.sequence_number);
 
@@ -1429,8 +1564,7 @@ TEST(RmwMddsIpcBroker, PublishesServiceSamplesToBridgeWhenNoLocalTarget) {
                            request.payload.size()));
 }
 
-TEST(RmwMddsIpcBroker,
-     ServiceBridgePublishWaitsForReliableAckBackpressure) {
+TEST(RmwMddsIpcBroker, ServiceBridgePublishWaitsForReliableAckBackpressure) {
   EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
   EnvVarGuard max_unacked_guard("RMW_MDDS_SERVICE_BRIDGE_MAX_UNACKED");
   EnvVarGuard timeout_guard("RMW_MDDS_SERVICE_BRIDGE_BACKPRESSURE_TIMEOUT_MS");
@@ -1438,8 +1572,7 @@ TEST(RmwMddsIpcBroker,
   ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
   unsetenv("RMW_MDDS_SERVICE_BRIDGE_MAX_UNACKED");
   ASSERT_EQ(0,
-            setenv("RMW_MDDS_SERVICE_BRIDGE_BACKPRESSURE_TIMEOUT_MS", "50",
-                   1));
+            setenv("RMW_MDDS_SERVICE_BRIDGE_BACKPRESSURE_TIMEOUT_MS", "50", 1));
   FakeMddsBridgeReset();
 
   TempSocketPath socket_path;
@@ -1473,9 +1606,9 @@ TEST(RmwMddsIpcBroker,
   response.payload = response_payload;
   ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
       service.get(),
-      rmw_mdds_cpp::ipc::Frame{rmw_mdds_cpp::ipc::MessageKind::kPublishSample,
-                               2u,
-                               rmw_mdds_cpp::ipc::EncodeSampleMessage(response)},
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kPublishSample, 2u,
+          rmw_mdds_cpp::ipc::EncodeSampleMessage(response)},
       &error))
       << error;
 
@@ -1489,9 +1622,8 @@ TEST(RmwMddsIpcBroker,
   EXPECT_TRUE(WaitForFakePublisherPublishCountAtLeast(
       response_topic, response_type, publish_count_before + 1,
       std::chrono::seconds(1)));
-  EXPECT_EQ(response_payload.size(),
-            FakeMddsBridgePublisherLastPayloadLen(response_topic,
-                                                  response_type));
+  EXPECT_EQ(response_payload.size(), FakeMddsBridgePublisherLastPayloadLen(
+                                         response_topic, response_type));
 }
 
 TEST(RmwMddsIpcBroker, SynthesizesRemoteServiceGraphFromBridgeMatchedClient) {
@@ -1659,20 +1791,20 @@ TEST(RmwMddsIpcBroker, MarksRemoteGraphServicesAsNonLocal) {
   remote_service.local_context_id = 0x12345678u;
   const std::vector<rmw_mdds_cpp::ipc::EndpointDescriptor> remote_endpoints{
       remote_service};
-  const std::vector<uint8_t> graph_sync =
-      rmw_mdds_cpp::ipc::EncodeGraphUpdate(0x5152535455565758u, 1u,
-                                           remote_endpoints);
+  const std::vector<uint8_t> graph_sync = rmw_mdds_cpp::ipc::EncodeGraphUpdate(
+      0x5152535455565758u, 1u, remote_endpoints);
 
-  ASSERT_EQ(1, FakeMddsBridgeInjectFor(
-                   "mdds_graph_sync", "mdds_graph_EndpointList",
-                   graph_sync.data(), static_cast<uint32_t>(graph_sync.size()),
-                   1u));
+  ASSERT_EQ(
+      1, FakeMddsBridgeInjectFor("mdds_graph_sync", "mdds_graph_EndpointList",
+                                 graph_sync.data(),
+                                 static_cast<uint32_t>(graph_sync.size()), 1u));
 
   rmw_mdds_cpp::ipc::UniqueFd observer =
       rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
   ASSERT_TRUE(observer) << error;
   rmw_mdds_cpp::ipc::EndpointDescriptor observed_service;
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(1);
   bool found = false;
   while (std::chrono::steady_clock::now() < deadline && !found) {
     if (!HasReadableData(observer.get())) {
@@ -1688,12 +1820,14 @@ TEST(RmwMddsIpcBroker, MarksRemoteGraphServicesAsNonLocal) {
                               &observed_service);
   }
 
-  ASSERT_TRUE(found) << "remote graph service should still be visible for graph "
-                        "introspection";
+  ASSERT_TRUE(found)
+      << "remote graph service should still be visible for graph "
+         "introspection";
   EXPECT_EQ(0u, observed_service.local_context_id)
       << "remote graph-sync endpoints must not carry a peer process context id "
          "into this broker's local graph; service availability uses non-zero "
-         "local_context_id to distinguish local/synthetic matched services from "
+         "local_context_id to distinguish local/synthetic matched services "
+         "from "
          "remote graph-only services";
 }
 

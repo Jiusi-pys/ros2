@@ -693,6 +693,8 @@ TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsSignedPolicyWithoutAuthentica
 TEST(RmwMddsPubSub, DISABLED_FullParitySros2ActivatesBridgeProtectedTransport)
 {
   const std::string security_root = CreateSignedProtectedSros2PolicyContractRoot("bridge_transport");
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER", "0", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE", "1", 1));
   unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
   unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
   ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
@@ -725,6 +727,7 @@ TEST(RmwMddsPubSub, DISABLED_FullParitySros2ActivatesBridgeProtectedTransport)
   EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
   FakeMddsBridgeReset();
   unsetenv("RMW_MDDS_BRIDGE_LIBRARY");
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE", "0", 1));
   std::filesystem::remove_all(security_root);
 }
 

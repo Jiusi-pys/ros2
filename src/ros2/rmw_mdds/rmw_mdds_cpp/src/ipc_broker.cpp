@@ -48,6 +48,10 @@ struct IpcBroker::Connection {
   struct BridgeEndpoint {
     EndpointDescriptor endpoint;
     void *bridge_publisher = nullptr;
+    bool shared_bridge_publisher = false;
+    std::string bridge_publisher_topic;
+    std::string bridge_publisher_type;
+    std::shared_ptr<std::mutex> bridge_publisher_mutex;
     void *bridge_subscription = nullptr;
     bool shared_bridge_subscription = false;
     std::string bridge_subscription_topic;
@@ -82,6 +86,48 @@ static_assert(
 bool GraphDebugEnabled() {
   const char *value = std::getenv("RMW_MDDS_GRAPH_DEBUG");
   return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+std::string NodeSyncTopicFromEnvironment() {
+  const char *configured = std::getenv("RMW_MDDS_NODE_SYNC_TOPIC");
+  return configured == nullptr || configured[0] == '\0' ? "mdds_node_sync"
+                                                        : configured;
+}
+
+bool ParseDomainId(const char *begin, const char *end, uint32_t *domain_id) {
+  if (begin == nullptr || end == nullptr || domain_id == nullptr ||
+      begin >= end) {
+    return false;
+  }
+  uint64_t value = 0u;
+  for (const char *cursor = begin; cursor < end; ++cursor) {
+    if (*cursor < '0' || *cursor > '9') {
+      return false;
+    }
+    value = value * 10u + static_cast<uint64_t>(*cursor - '0');
+    if (value > std::numeric_limits<uint32_t>::max()) {
+      return false;
+    }
+  }
+  *domain_id = static_cast<uint32_t>(value);
+  return true;
+}
+
+uint32_t NodeSyncDomainFromEnvironment(const std::string &topic) {
+  const size_t slash = topic.find('/');
+  uint32_t domain_id = 0u;
+  if (topic.size() > 2u && topic.front() == 'd' && slash != std::string::npos &&
+      ParseDomainId(topic.data() + 1u, topic.data() + slash, &domain_id)) {
+    return domain_id;
+  }
+
+  const char *configured = std::getenv("ROS_DOMAIN_ID");
+  if (configured != nullptr && configured[0] != '\0' &&
+      ParseDomainId(configured, configured + std::strlen(configured),
+                    &domain_id)) {
+    return domain_id;
+  }
+  return 0u;
 }
 
 bool ProtectedTransportFlagEnabled(const char *name) {
@@ -210,20 +256,20 @@ uint64_t HashPayload(const std::vector<uint8_t> &payload) {
   return hash;
 }
 
-uint64_t ClientEntityFromServiceWirePayload(
-    const std::vector<uint8_t> &payload) {
+uint64_t
+ClientEntityFromServiceWirePayload(const std::vector<uint8_t> &payload) {
   constexpr size_t kServiceSequenceSize = sizeof(int64_t);
   constexpr size_t kServiceSourceTimestampSize = sizeof(int64_t);
   constexpr size_t kServiceGuidOffset = kServiceSequenceSize;
-  if (payload.size() <
-      kServiceSequenceSize + RMW_GID_STORAGE_SIZE + kServiceSourceTimestampSize) {
+  if (payload.size() < kServiceSequenceSize + RMW_GID_STORAGE_SIZE +
+                           kServiceSourceTimestampSize) {
     return 0u;
   }
 
   uint64_t entity_id = 0u;
-  std::memcpy(&entity_id, payload.data() + kServiceGuidOffset,
-              std::min(sizeof(entity_id),
-                       static_cast<size_t>(RMW_GID_STORAGE_SIZE)));
+  std::memcpy(
+      &entity_id, payload.data() + kServiceGuidOffset,
+      std::min(sizeof(entity_id), static_cast<size_t>(RMW_GID_STORAGE_SIZE)));
   return entity_id;
 }
 
@@ -319,9 +365,17 @@ bool IpcBroker::Start(const std::string &socket_path, std::string *error) {
   if (bridge_enabled) {
     // Ingest the DDS-side node list a gateway publishes, so cross-board nodes
     // (and thus `ros2 param`/`ros2 lifecycle`/`ros2 node list`) resolve here.
+    const std::string node_sync_topic = NodeSyncTopicFromEnvironment();
+    node_sync_domain_id_ = NodeSyncDomainFromEnvironment(node_sync_topic);
     node_sync_subscription_ = BridgeBackend::Instance().Subscribe(
-        "mdds_node_sync", "mdds_graph_NodeList", &rmw_qos_profile_default,
-        NodeSyncBridgeCallback, this);
+        node_sync_topic.c_str(), "mdds_graph_NodeList",
+        &rmw_qos_profile_default, NodeSyncBridgeCallback, this);
+    if (GraphDebugEnabled()) {
+      std::fprintf(
+          stderr, "[rmw_mdds_graph] node sync init topic=%s domain=%u sub=%p\n",
+          node_sync_topic.c_str(), node_sync_domain_id_,
+          node_sync_subscription_);
+    }
 
     // Cross-board graph introspection (every rmw_mdds broker participates, no
     // gateway required): subscribe to peers' endpoint-graph announcements and
@@ -620,6 +674,10 @@ bool ShouldShareBridgeSubscription(const EndpointDescriptor &endpoint) {
   return endpoint.kind == EndpointKind::kClient;
 }
 
+bool ShouldShareBridgePublisher(const EndpointDescriptor &endpoint) {
+  return endpoint.kind == EndpointKind::kClient;
+}
+
 constexpr size_t kServiceBridgeHistoryDepth = 16u * 1024u;
 constexpr uint32_t kDefaultServiceBridgeMaxUnacked = 1u;
 constexpr uint32_t kDefaultServiceBridgeBackpressureTimeoutMs = 30000u;
@@ -646,9 +704,9 @@ uint32_t ServiceBridgeMaxUnacked() {
 }
 
 std::chrono::milliseconds ServiceBridgeBackpressureTimeout() {
-  return std::chrono::milliseconds(ReadEnvUint32(
-      "RMW_MDDS_SERVICE_BRIDGE_BACKPRESSURE_TIMEOUT_MS",
-      kDefaultServiceBridgeBackpressureTimeoutMs, 300000u));
+  return std::chrono::milliseconds(
+      ReadEnvUint32("RMW_MDDS_SERVICE_BRIDGE_BACKPRESSURE_TIMEOUT_MS",
+                    kDefaultServiceBridgeBackpressureTimeoutMs, 300000u));
 }
 
 void WaitForServiceBridgeBackpressure(const EndpointDescriptor &source,
@@ -709,9 +767,10 @@ void WaitForServiceBridgeBackpressure(const EndpointDescriptor &source,
   }
 
   if (GraphDebugEnabled()) {
-    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now() - started)
-                                .count();
+    const auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started)
+            .count();
     std::fprintf(stderr,
                  "[rmw_mdds_graph] broker bridge_backpressure_resume "
                  "entity=%llu kind=%u seq=%llu bytes=%zu unacked=%u max=%u "
@@ -734,6 +793,24 @@ BridgeTransportQosForEndpoint(const EndpointDescriptor &endpoint) {
     }
   }
   return qos;
+}
+
+bool SameQosDuration(const rmw_time_t &lhs, const rmw_time_t &rhs) {
+  return lhs.sec == rhs.sec && lhs.nsec == rhs.nsec;
+}
+
+bool SameBridgeTransportQos(const rmw_qos_profile_t &lhs,
+                            const rmw_qos_profile_t &rhs) {
+  return lhs.history == rhs.history && lhs.depth == rhs.depth &&
+         lhs.reliability == rhs.reliability &&
+         lhs.durability == rhs.durability &&
+         SameQosDuration(lhs.deadline, rhs.deadline) &&
+         SameQosDuration(lhs.lifespan, rhs.lifespan) &&
+         lhs.liveliness == rhs.liveliness &&
+         SameQosDuration(lhs.liveliness_lease_duration,
+                         rhs.liveliness_lease_duration) &&
+         lhs.avoid_ros_namespace_conventions ==
+             rhs.avoid_ros_namespace_conventions;
 }
 
 bool OffersTransientLocalDurability(const EndpointDescriptor &endpoint) {
@@ -996,7 +1073,12 @@ void IpcBroker::RegisterEndpoint(Connection *connection, const Frame &frame,
                      });
     if (bridge_it != connection->bridge_endpoints.end()) {
       if (bridge_it->bridge_publisher != nullptr) {
-        BridgeBackend::Instance().DestroyPublisher(bridge_it->bridge_publisher);
+        ReleaseBridgePublisher(bridge_it->bridge_publisher,
+                               bridge_it->shared_bridge_publisher,
+                               bridge_it->bridge_publisher_topic,
+                               bridge_it->bridge_publisher_type);
+        bridge_it->bridge_publisher = nullptr;
+        bridge_it->bridge_publisher_mutex.reset();
       }
       if (bridge_it->bridge_subscription != nullptr) {
         if (bridge_it->shared_bridge_subscription) {
@@ -1038,11 +1120,53 @@ void IpcBroker::RegisterEndpoint(Connection *connection, const Frame &frame,
       std::string bridge_topic;
       std::string bridge_type;
       if (BridgePublisherTopicAndType(endpoint, &bridge_topic, &bridge_type)) {
-        bridge_endpoint.bridge_publisher =
-            BridgeBackend::Instance().CreatePublisher(bridge_topic.c_str(),
-                                                      bridge_type.c_str(),
-                                                      &bridge_transport_qos,
-                                                      BridgePublisherMode::kRemoteOnly);
+        if (ShouldShareBridgePublisher(endpoint)) {
+          bridge_endpoint.shared_bridge_publisher = true;
+          bridge_endpoint.bridge_publisher_topic = bridge_topic;
+          bridge_endpoint.bridge_publisher_type = bridge_type;
+          auto shared_it = std::find_if(
+              shared_bridge_publishers_.begin(),
+              shared_bridge_publishers_.end(),
+              [&endpoint, &bridge_topic, &bridge_type,
+               &bridge_transport_qos](const SharedBridgePublisher &shared) {
+                return shared.endpoint.kind == endpoint.kind &&
+                       shared.endpoint.domain_id == endpoint.domain_id &&
+                       shared.endpoint.topic_name == endpoint.topic_name &&
+                       shared.endpoint.type_name == endpoint.type_name &&
+                       shared.bridge_topic == bridge_topic &&
+                       shared.bridge_type == bridge_type &&
+                       SameBridgeTransportQos(
+                           BridgeTransportQosForEndpoint(shared.endpoint),
+                           bridge_transport_qos);
+              });
+          if (shared_it != shared_bridge_publishers_.end()) {
+            ++shared_it->ref_count;
+            bridge_endpoint.bridge_publisher = shared_it->bridge_publisher;
+            bridge_endpoint.bridge_publisher_mutex = shared_it->publish_mutex;
+          } else {
+            void *publisher = BridgeBackend::Instance().CreatePublisher(
+                bridge_topic.c_str(), bridge_type.c_str(),
+                &bridge_transport_qos, BridgePublisherMode::kRemoteOnly);
+            if (publisher != nullptr) {
+              SharedBridgePublisher shared;
+              shared.endpoint = endpoint;
+              shared.bridge_topic = bridge_topic;
+              shared.bridge_type = bridge_type;
+              shared.bridge_publisher = publisher;
+              shared.publish_mutex = std::make_shared<std::mutex>();
+              shared.ref_count = 1u;
+              shared_bridge_publishers_.push_back(std::move(shared));
+              bridge_endpoint.bridge_publisher = publisher;
+              bridge_endpoint.bridge_publisher_mutex =
+                  shared_bridge_publishers_.back().publish_mutex;
+            }
+          }
+        } else {
+          bridge_endpoint.bridge_publisher =
+              BridgeBackend::Instance().CreatePublisher(
+                  bridge_topic.c_str(), bridge_type.c_str(),
+                  &bridge_transport_qos, BridgePublisherMode::kRemoteOnly);
+        }
       }
       if (BridgeSubscriptionTopicAndType(endpoint, &bridge_topic,
                                          &bridge_type)) {
@@ -1220,6 +1344,7 @@ void IpcBroker::PublishSample(Connection *connection, const Frame &frame) {
   EndpointDescriptor source;
   bool source_found = false;
   void *bridge_publisher = nullptr;
+  std::shared_ptr<std::mutex> bridge_publisher_mutex;
   uint64_t target_client_entity = 0u;
   std::vector<Connection *> targets;
   {
@@ -1236,7 +1361,8 @@ void IpcBroker::PublishSample(Connection *connection, const Frame &frame) {
     }
     if (source_found) {
       if (source.kind == EndpointKind::kService) {
-        target_client_entity = ClientEntityFromServiceWirePayload(sample.payload);
+        target_client_entity =
+            ClientEntityFromServiceWirePayload(sample.payload);
       }
       StoreRetainedTransientLocalSampleLocked(&retained_samples_, connection,
                                               source, sample);
@@ -1249,6 +1375,7 @@ void IpcBroker::PublishSample(Connection *connection, const Frame &frame) {
             });
         if (bridge_it != connection->bridge_endpoints.end()) {
           bridge_publisher = bridge_it->bridge_publisher;
+          bridge_publisher_mutex = bridge_it->bridge_publisher_mutex;
         }
       }
       for (const auto &current_connection : connections_) {
@@ -1258,7 +1385,8 @@ void IpcBroker::PublishSample(Connection *connection, const Frame &frame) {
         const bool matches = std::any_of(
             current_connection->endpoints.begin(),
             current_connection->endpoints.end(),
-            [&source, target_client_entity](const EndpointDescriptor &endpoint) {
+            [&source,
+             target_client_entity](const EndpointDescriptor &endpoint) {
               if (source.kind == EndpointKind::kService &&
                   target_client_entity != 0u &&
                   endpoint.entity_id != target_client_entity) {
@@ -1307,6 +1435,10 @@ void IpcBroker::PublishSample(Connection *connection, const Frame &frame) {
   }
   if (bridge_publisher != nullptr &&
       !(IsServiceLikeEndpoint(source.kind) && !targets.empty())) {
+    std::unique_lock<std::mutex> publish_lock;
+    if (bridge_publisher_mutex != nullptr) {
+      publish_lock = std::unique_lock<std::mutex>(*bridge_publisher_mutex);
+    }
     WaitForServiceBridgeBackpressure(source, sample, bridge_publisher);
     const int32_t rc = BridgeBackend::Instance().Publish(
         bridge_publisher, sample.payload.data(),
@@ -1326,8 +1458,9 @@ void IpcBroker::PublishSample(Connection *connection, const Frame &frame) {
         "[rmw_mdds_graph] broker bridge_publish_skip entity=%llu seq=%llu "
         "bridge=%p targets=%zu service_like=%d\n",
         static_cast<unsigned long long>(sample.entity_id),
-        static_cast<unsigned long long>(sample.sequence_number), bridge_publisher,
-        targets.size(), IsServiceLikeEndpoint(source.kind) ? 1 : 0);
+        static_cast<unsigned long long>(sample.sequence_number),
+        bridge_publisher, targets.size(),
+        IsServiceLikeEndpoint(source.kind) ? 1 : 0);
   }
 }
 
@@ -1386,8 +1519,8 @@ void IpcBroker::DeliverBridgeSample(
       }
       const bool matches = std::any_of(
           connection->endpoints.begin(), connection->endpoints.end(),
-          [&subscription_endpoint, has_owning_endpoint, target_client_entity](
-              const EndpointDescriptor &endpoint) {
+          [&subscription_endpoint, has_owning_endpoint,
+           target_client_entity](const EndpointDescriptor &endpoint) {
             return endpoint.kind == subscription_endpoint.kind &&
                    endpoint.domain_id == subscription_endpoint.domain_id &&
                    (target_client_entity == 0u ||
@@ -1428,8 +1561,8 @@ void IpcBroker::BroadcastGraphUpdate() {
       // Synthesize a kService for each local client only when both service
       // directions have matched over the bridge. A response publisher match
       // alone can make wait_for_service return before rq/ request delivery is
-      // ready, which lets rmw_send_request report success while the server never
-      // observes the request.
+      // ready, which lets rmw_send_request report success while the server
+      // never observes the request.
       if (!bridge_enabled_) {
         continue;
       }
@@ -1445,12 +1578,10 @@ void IpcBroker::BroadcastGraphUpdate() {
                 ? 0u
                 : BridgeBackend::Instance().SubscriberPubCount(
                       bridge_endpoint.bridge_subscription);
-        const bool remote_service_request_matched =
-            request_match_count != 0u;
-        const bool remote_service_response_matched =
-            response_match_count != 0u;
-        if (GraphDebugEnabled() && (kind == EndpointKind::kClient ||
-                                   kind == EndpointKind::kService)) {
+        const bool remote_service_request_matched = request_match_count != 0u;
+        const bool remote_service_response_matched = response_match_count != 0u;
+        if (GraphDebugEnabled() &&
+            (kind == EndpointKind::kClient || kind == EndpointKind::kService)) {
           std::fprintf(stderr,
                        "[rmw_mdds_graph] bridge match kind=%u name=%s type=%s "
                        "rq=%u rr=%u\n",
@@ -1459,8 +1590,7 @@ void IpcBroker::BroadcastGraphUpdate() {
                        bridge_endpoint.endpoint.type_name.c_str(),
                        request_match_count, response_match_count);
         }
-        if (kind == EndpointKind::kClient &&
-            remote_service_request_matched &&
+        if (kind == EndpointKind::kClient && remote_service_request_matched &&
             remote_service_response_matched) {
           EndpointDescriptor service = bridge_endpoint.endpoint;
           service.kind = EndpointKind::kService;
@@ -1523,19 +1653,52 @@ void IpcBroker::BroadcastGraphUpdate() {
   }
 }
 
+void IpcBroker::ReleaseBridgePublisher(void *bridge_publisher, bool shared,
+                                       const std::string &bridge_topic,
+                                       const std::string &bridge_type) {
+  if (bridge_publisher == nullptr) {
+    return;
+  }
+  if (shared) {
+    auto shared_it = std::find_if(
+        shared_bridge_publishers_.begin(), shared_bridge_publishers_.end(),
+        [bridge_publisher, &bridge_topic,
+         &bridge_type](const SharedBridgePublisher &candidate) {
+          return candidate.bridge_publisher == bridge_publisher &&
+                 candidate.bridge_topic == bridge_topic &&
+                 candidate.bridge_type == bridge_type;
+        });
+    if (shared_it != shared_bridge_publishers_.end()) {
+      if (shared_it->ref_count > 0u) {
+        --shared_it->ref_count;
+      }
+      if (shared_it->ref_count != 0u) {
+        return;
+      }
+      std::lock_guard<std::mutex> publish_lock(*shared_it->publish_mutex);
+      BridgeBackend::Instance().PublisherSetOnMatched(
+          shared_it->bridge_publisher, nullptr, nullptr);
+      BridgeBackend::Instance().DestroyPublisher(shared_it->bridge_publisher);
+      shared_bridge_publishers_.erase(shared_it);
+      return;
+    }
+  }
+  BridgeBackend::Instance().PublisherSetOnMatched(bridge_publisher, nullptr,
+                                                  nullptr);
+  BridgeBackend::Instance().DestroyPublisher(bridge_publisher);
+}
+
 void IpcBroker::DestroyBridgeEndpoints(Connection *connection) {
   if (connection == nullptr) {
     return;
   }
   for (auto &endpoint : connection->bridge_endpoints) {
     if (endpoint.bridge_publisher != nullptr) {
-      // Clear the matched listener before destroying the publisher so a final
-      // unmatch notification can never re-enter BroadcastGraphUpdate against a
-      // publisher that is being torn down (callback is a no-op if never set).
-      BridgeBackend::Instance().PublisherSetOnMatched(endpoint.bridge_publisher,
-                                                      nullptr, nullptr);
-      BridgeBackend::Instance().DestroyPublisher(endpoint.bridge_publisher);
+      ReleaseBridgePublisher(
+          endpoint.bridge_publisher, endpoint.shared_bridge_publisher,
+          endpoint.bridge_publisher_topic, endpoint.bridge_publisher_type);
       endpoint.bridge_publisher = nullptr;
+      endpoint.bridge_publisher_mutex.reset();
     }
     if (endpoint.bridge_subscription != nullptr) {
       if (endpoint.shared_bridge_subscription) {
@@ -1545,7 +1708,8 @@ void IpcBroker::DestroyBridgeEndpoints(Connection *connection) {
             [&endpoint](const SharedBridgeSubscription &shared) {
               return shared.bridge_subscription ==
                          endpoint.bridge_subscription &&
-                     shared.bridge_topic == endpoint.bridge_subscription_topic &&
+                     shared.bridge_topic ==
+                         endpoint.bridge_subscription_topic &&
                      shared.bridge_type == endpoint.bridge_subscription_type;
             });
         if (shared_it != shared_bridge_subscriptions_.end()) {
@@ -1583,10 +1747,11 @@ void IpcBroker::RemoveBridgeEndpointForEntity(Connection *connection,
       continue;
     }
     if (it->bridge_publisher != nullptr) {
-      BridgeBackend::Instance().PublisherSetOnMatched(it->bridge_publisher,
-                                                      nullptr, nullptr);
-      BridgeBackend::Instance().DestroyPublisher(it->bridge_publisher);
+      ReleaseBridgePublisher(it->bridge_publisher, it->shared_bridge_publisher,
+                             it->bridge_publisher_topic,
+                             it->bridge_publisher_type);
       it->bridge_publisher = nullptr;
+      it->bridge_publisher_mutex.reset();
     }
     if (it->bridge_subscription != nullptr) {
       if (it->shared_bridge_subscription) {
@@ -1649,6 +1814,11 @@ void IpcBroker::NodeSyncBridgeCallback(const BridgeSample *sample,
   if (data != nullptr && sample->len != 0u) {
     payload.assign(data, data + sample->len);
   }
+  if (GraphDebugEnabled()) {
+    std::fprintf(
+        stderr, "[rmw_mdds_graph] node sync receive bytes=%u seq=%llu\n",
+        sample->len, static_cast<unsigned long long>(sample->sequenceNumber));
+  }
   broker->OnNodeSync(payload);
 }
 
@@ -1674,6 +1844,7 @@ void IpcBroker::OnNodeSync(const std::vector<uint8_t> &payload) {
       continue;
     }
     EndpointDescriptor ep;
+    ep.domain_id = node_sync_domain_id_;
     ep.kind = EndpointKind::kSubscription;
     ep.node_name = name;
     ep.node_namespace = ns;
@@ -1681,6 +1852,12 @@ void IpcBroker::OnNodeSync(const std::vector<uint8_t> &payload) {
         "_mdds_remote_node"; // hidden topic, filtered from `ros2 topic list`
     ep.type_name = "mdds_graph/msg/RemoteNode";
     endpoints.push_back(std::move(ep));
+  }
+  if (GraphDebugEnabled()) {
+    std::fprintf(stderr,
+                 "[rmw_mdds_graph] node sync parsed domain=%u bytes=%zu "
+                 "nodes=%zu\n",
+                 node_sync_domain_id_, payload.size(), endpoints.size());
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1736,13 +1913,13 @@ void IpcBroker::PublishLocalGraph() {
   uint32_t graph_sub_matches = 0u;
   if (GraphDebugEnabled()) {
     graph_pub_matches =
-        publisher == nullptr ? 0u
-                             : BridgeBackend::Instance().PublisherSubCount(
-                                   publisher);
+        publisher == nullptr
+            ? 0u
+            : BridgeBackend::Instance().PublisherSubCount(publisher);
     graph_sub_matches =
-        subscription == nullptr ? 0u
-                                : BridgeBackend::Instance().SubscriberPubCount(
-                                      subscription);
+        subscription == nullptr
+            ? 0u
+            : BridgeBackend::Instance().SubscriberPubCount(subscription);
   }
 
   const std::vector<uint8_t> body = EncodeEndpointList(local);

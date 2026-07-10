@@ -1,8 +1,9 @@
 # Unified MDDS<->DDS gateway config for the rmw_mdds<->rmw_fastrtps cross-board
 # pub/sub-class lane matrix. Each mapping bridges one MDDS (DSoftBus) topic with
-# one DDS (rmw_fastrtps) topic. mddsTopicName = rmw_mdds node ROS topic without
-# leading '/'(e.g. ROS '/rt/mx_chatter' -> MDDS 'rt/mx_chatter'); ddsTopicName =
-# stock rmw_fastrtps node ROS topic (rmw mangles '/mx_chatter' -> 'rt/mx_chatter').
+# one DDS (rmw_fastrtps) topic. These mddsTopicName values are domain-neutral
+# templates. run_cross_board_rmw_mdds_matrix.sh adds rmw_mdds' d<domain>/
+# namespace before verified deployment to the gateway board. ddsTopicName is
+# the stock rmw_fastrtps node ROS topic.
 mappings:
   - mddsTopicName: rt/mx_chatter
     ddsTopicName: /mx_chatter

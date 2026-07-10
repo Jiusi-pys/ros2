@@ -523,7 +523,7 @@ fi
 # ---- TRANSIENT_LOCAL retained replay to a TRUE late joiner ----
 # Publisher (transient_local, kept alive) publishes ONE sample at t~0 and stays alive.
 # The subscriber joins LATE (t~12s), so any sample it has can ONLY be retained history.
-# received>0 => retention works.
+# Exactly one received sample proves retained replay without duplicate endpoint-refresh replay.
 if run_lane_group transient; then
   kill_all; cap "$A" "mkdir -p ${LOG}; rm -f ${LOG}/tl_*.log; true" >/dev/null
   cap "$B" "mkdir -p ${LOG}; rm -f ${LOG}/tl_*.log; true" >/dev/null; sleep 2
@@ -533,11 +533,11 @@ if run_lane_group transient; then
   sleep 12
   cap "$B" "nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/bin/ros2 topic echo ${TLQ} /cov_tlreplay std_msgs/msg/String --no-daemon > ${LOG}/tl_e.log 2>&1' >/dev/null 2>&1 & echo s" >/dev/null
   sleep 9   # check at pub+~21s, before the next real publish at pub+30s
-  TLRX="$(cap "$B" "grep -c TLRETAIN ${LOG}/tl_e.log 2>/dev/null" | tr -d '[:space:]')"
-  if [[ "${TLRX:-0}" =~ ^[0-9]+$ && "${TLRX:-0}" -gt 0 ]]; then
-    echo "RESULT|cov2_transient_local_replay|PASS|late_joiner_got_retained=${TLRX}"; PASS=$((PASS+1))
+  TLRX="$(cap "$B" "grep -c '^data: TLRETAIN$' ${LOG}/tl_e.log 2>/dev/null" | tr -d '[:space:]')"
+  if [[ "${TLRX:-0}" =~ ^[0-9]+$ && "${TLRX:-0}" -eq 1 ]]; then
+    echo "RESULT|cov2_transient_local_replay|PASS|late_joiner_got_retained=${TLRX}|expected=1"; PASS=$((PASS+1))
   else
-    echo "RESULT|cov2_transient_local_replay|FAIL|late_joiner_got=${TLRX:-0} (no retained history replay)"; FAIL=$((FAIL+1))
+    echo "RESULT|cov2_transient_local_replay|FAIL|late_joiner_got=${TLRX:-0}|expected=1"; FAIL=$((FAIL+1))
   fi
 fi
 
@@ -585,3 +585,6 @@ if run_lane_group bag; then
 fi
 
 echo "COVERAGE2_SUMMARY|pass=${PASS}|fail=${FAIL}"
+if (( FAIL > 0 )); then
+  exit 1
+fi

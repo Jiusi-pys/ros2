@@ -2,6 +2,7 @@
 # The 3 action services (send_goal/cancel_goal/get_result) are configured via the
 # MDDS_GATEWAY_SERVICES env (client-side bridges); the 2 action topics are here.
 # Both feedback and status flow server->client, i.e. DDS->MDDS (TO_MDDS).
+# Topic names are domain-neutral templates; the board runner adds d<domain>/.
 mappings:
   - mddsTopicName: fibonacci/_action/feedback
     ddsTopicName: /fibonacci/_action/feedback

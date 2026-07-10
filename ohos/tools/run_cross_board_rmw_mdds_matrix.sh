@@ -22,6 +22,7 @@ EOF
 if [[ $# -lt 2 || $# -gt 3 ]]; then usage; exit 2; fi
 
 MDDS_DEVICE_ID="$1"; FASTDDS_DEVICE_ID="$2"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Split domains: the rmw_mdds node and the fastrtps node + gateway run on DIFFERENT
 # ROS_DOMAIN_IDs so rmw_mdds' always-on RTPS leg cannot directly discover the
 # fastrtps peer. This forces ALL cross-RMW traffic through gateway->MDDS->DSoftBus
@@ -31,6 +32,7 @@ MDDS_DEVICE_ID="$1"; FASTDDS_DEVICE_ID="$2"
 DDS_DOMAIN="${3:-${ROS_DOMAIN_ID:-101}}"
 [[ "${DDS_DOMAIN}" =~ ^[0-9]+$ ]] && (( DDS_DOMAIN <= 231 )) || { echo "dds domain 0..231" >&2; exit 2; }
 MDDS_DOMAIN="${MDDS_DOMAIN:-$(( DDS_DOMAIN + 1 ))}"
+[[ "${MDDS_DOMAIN}" =~ ^[0-9]+$ ]] && (( MDDS_DOMAIN <= 232 )) || { echo "mdds domain 0..232" >&2; exit 2; }
 
 HDC_BIN="${HDC_BIN:-hdc}"
 REMOTE_PREFIX="${ROS2_OHOS_REMOTE_PREFIX:-/data/local/tmp/ohos-colcon-rk3588a}"
@@ -38,10 +40,14 @@ BRIDGE_LIBRARY="${RMW_MDDS_BRIDGE_LIBRARY:-${REMOTE_PREFIX}/lib/libmdds_bridge_s
 GATEWAY_ENV="${MDDS_GATEWAY_ENV:-/data/local/tmp/device_gateway_env.sh}"
 GATEWAY_BIN="${MDDS_GATEWAY_BIN:-/data/local/tmp/mdds_dds_gateway}"
 GATEWAY_CONFIG="${MDDS_GATEWAY_CONFIG:-/data/local/tmp/gateway_rmw_mdds_matrix.yaml}"
+GATEWAY_CONFIG_TEMPLATE="${MDDS_GATEWAY_CONFIG_TEMPLATE:-${ROOT_DIR}/ohos/tools/gateway_rmw_mdds_matrix.yaml}"
+GATEWAY_DOMAIN_RENDERER="${ROOT_DIR}/ohos/tools/render_rmw_mdds_gateway_config.py"
+HDC_SEND_VERIFY="${ROOT_DIR}/ohos/tools/hdc_send_verify.sh"
 POLL_TIMEOUT_SECONDS="${RMW_MDDS_POLL_TIMEOUT_SECONDS:-50}"
 LOG_DIR="${RMW_MDDS_LOG_DIR:-/data/local/tmp/rmw_mdds_matrix}"
 GATEWAY_LOG="${LOG_DIR}/gateway.log"
 BRIDGE_ENV="RMW_MDDS_BROKER=1 RMW_MDDS_BRIDGE_LIBRARY=${BRIDGE_LIBRARY}"
+LOCAL_RENDERED_GATEWAY_CONFIG=""
 
 capture_hdc_shell() {
   local device_id="$1" command="$2" output_file status
@@ -54,6 +60,19 @@ capture_hdc_shell() {
 require_remote_file() {
   local out; out="$(capture_hdc_shell "$1" "test -e '$2' && echo OK || echo MISSING:$2")"
   grep -q '^OK$' <<< "${out}" || { echo "${out}" >&2; exit 1; }
+}
+gateway_topic() {
+  local topic="$1"
+  if (( MDDS_DOMAIN == 0 )); then
+    printf '%s' "${topic}"
+  else
+    printf 'd%s/%s' "${MDDS_DOMAIN}" "${topic}"
+  fi
+}
+render_gateway_config() {
+  local output_path="$1"
+  python3 "${GATEWAY_DOMAIN_RENDERER}" --template "${GATEWAY_CONFIG_TEMPLATE}" \
+    --output "${output_path}" --domain "${MDDS_DOMAIN}"
 }
 # toybox-safe process kill by PID (no awk, no pkill -f).
 kill_ros2() {
@@ -103,6 +122,9 @@ msg_for_type() {
 cleanup() {
   kill_ros2 "${FASTDDS_DEVICE_ID}" 'mdds_dds_gateway'
   kill_topic_clients
+  if [[ -n "${LOCAL_RENDERED_GATEWAY_CONFIG}" ]]; then
+    rm -f "${LOCAL_RENDERED_GATEWAY_CONFIG}"
+  fi
 }
 trap cleanup EXIT
 
@@ -161,7 +183,15 @@ require_remote_file "${MDDS_DEVICE_ID}" "${REMOTE_PREFIX}/lib/librmw_mdds_cpp.so
 require_remote_file "${MDDS_DEVICE_ID}" "${BRIDGE_LIBRARY}"
 require_remote_file "${FASTDDS_DEVICE_ID}" "${REMOTE_PREFIX}/lib/librmw_fastrtps_cpp.so"
 require_remote_file "${FASTDDS_DEVICE_ID}" "${GATEWAY_BIN}"
+[[ -f "${GATEWAY_CONFIG_TEMPLATE}" ]] || { echo "missing gateway config template: ${GATEWAY_CONFIG_TEMPLATE}" >&2; exit 1; }
+[[ -f "${GATEWAY_DOMAIN_RENDERER}" ]] || { echo "missing gateway domain renderer: ${GATEWAY_DOMAIN_RENDERER}" >&2; exit 1; }
+[[ -x "${HDC_SEND_VERIFY}" ]] || { echo "missing HDC verified-send helper: ${HDC_SEND_VERIFY}" >&2; exit 1; }
+LOCAL_RENDERED_GATEWAY_CONFIG="$(mktemp /tmp/rmw_mdds_gateway_matrix.XXXXXX.yaml)"
+render_gateway_config "${LOCAL_RENDERED_GATEWAY_CONFIG}"
+OHOS_HDC_BIN="${HDC_BIN}" "${HDC_SEND_VERIFY}" "${FASTDDS_DEVICE_ID}" \
+  "${LOCAL_RENDERED_GATEWAY_CONFIG}" "${GATEWAY_CONFIG}" >/dev/null
 require_remote_file "${FASTDDS_DEVICE_ID}" "${GATEWAY_CONFIG}"
+echo "RESULT|gateway_domain_config|PASS|mdds_domain=${MDDS_DOMAIN}|sample_topic=$(gateway_topic 'rt/mx_chatter')"
 
 # Clean slate on both boards (critical), then start gateway on the fastdds device.
 kill_ros2 "${MDDS_DEVICE_ID}" '/bin/ros2|ros2cli|topic pub|topic echo'
@@ -187,6 +217,7 @@ LANES=(
 ts="$(date +%s)"
 for spec in "${LANES[@]}"; do
   IFS='|' read -r name rtype mtopic dtopic gwtopic <<< "${spec}"
+  gwtopic="$(gateway_topic "${gwtopic}")"
   if run_direction "${name}" "m2f" \
       "${FASTDDS_DEVICE_ID}" "rmw_fastrtps_cpp" "${dtopic}" \
       "${MDDS_DEVICE_ID}" "rmw_mdds_cpp" "${mtopic}" \

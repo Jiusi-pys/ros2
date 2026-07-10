@@ -16,6 +16,8 @@ GATEWAY_SERVICE_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_service_
 GATEWAY_ACTION_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_action_gw.sh"
 GATEWAY_LIFECYCLE_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_lifecycle_gw.sh"
 GATEWAY_PARAMS_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_params_gw.sh"
+GATEWAY_DOMAIN_RENDERER="${ROOT_DIR}/ohos/tools/render_rmw_mdds_gateway_config.py"
+GATEWAY_MATRIX_TEMPLATE="${ROOT_DIR}/ohos/tools/gateway_rmw_mdds_matrix.yaml"
 DOCTOR_SCRIPT="${ROOT_DIR}/ohos/tools/run_rmw_mdds_doctor.sh"
 COVERAGE2_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_coverage2.sh"
 DEPLOY_SCRIPT="${ROOT_DIR}/ohos/tools/deploy_rmw_mdds_delta.sh"
@@ -95,6 +97,23 @@ if stats['lo'].mtu <= 0:
 PY
 }
 
+require_gateway_domain_renderer() {
+  local rendered domain_zero
+  [[ -f "${GATEWAY_DOMAIN_RENDERER}" ]] || fail "missing gateway domain renderer ${GATEWAY_DOMAIN_RENDERER}"
+  python3 -m py_compile "${GATEWAY_DOMAIN_RENDERER}"
+  rendered="$(mktemp)"
+  domain_zero="$(mktemp)"
+  python3 "${GATEWAY_DOMAIN_RENDERER}" \
+    --template "${GATEWAY_MATRIX_TEMPLATE}" --output "${rendered}" --domain 42
+  python3 "${GATEWAY_DOMAIN_RENDERER}" \
+    --template "${GATEWAY_MATRIX_TEMPLATE}" --output "${domain_zero}" --domain 0
+  grep -q 'mddsTopicName: d42/rt/mx_chatter' "${rendered}" ||
+    fail "gateway renderer did not add the requested domain namespace"
+  grep -q 'mddsTopicName: rt/mx_chatter' "${domain_zero}" ||
+    fail "gateway renderer did not preserve the domain-zero topic contract"
+  rm -f "${rendered}" "${domain_zero}"
+}
+
 require_colcon_overlay_package_dir_override() {
   local package_name="$1"
   local body
@@ -133,6 +152,7 @@ require_file "${SINGLE_PACKAGE_BUILD_SCRIPT}"
 require_file "${ARTIFACT_CONTRACT_SCRIPT}"
 [[ -f "${PSUTIL_STUB}" ]] || fail "missing psutil stub ${PSUTIL_STUB}"
 require_psutil_stub_network_report_shape
+require_gateway_domain_renderer
 require_no_rmw_implementation_preload_dependency
 require_colcon_overlay_package_dir_override "rmw_implementation"
 require_colcon_overlay_package_dir_override "rcl"
@@ -227,6 +247,10 @@ require_contains "${MATRIX_SCRIPT}" "MATRIX_SUMMARY pass="
 require_contains "${MATRIX_SCRIPT}" "wait_gateway_counter"
 require_contains "${MATRIX_SCRIPT}" "toDds"
 require_contains "${MATRIX_SCRIPT}" "toMdds"
+require_contains "${MATRIX_SCRIPT}" "MDDS_GATEWAY_CONFIG_TEMPLATE"
+require_contains "${MATRIX_SCRIPT}" "GATEWAY_DOMAIN_RENDERER"
+require_contains "${MATRIX_SCRIPT}" 'OHOS_HDC_BIN="\$\{HDC_BIN\}"'
+require_contains "${MATRIX_SCRIPT}" 'gateway_topic\(\)'
 require_fail_path_exits_nonzero "${MATRIX_SCRIPT}"
 
 require_contains "${CROSS_MDDS_SCRIPT}" "RMW_IMPLEMENTATION=rmw_mdds_cpp"
@@ -277,7 +301,10 @@ require_contains "${COVERAGE2_SCRIPT}" "RMW_MDDS_COVERAGE2_SKIP_DEFAULT_SERVICE_
 require_contains "${COVERAGE2_SCRIPT}" '"\$\{sent:-0\}" -eq "\$\{times\}"'
 require_contains "${COVERAGE2_SCRIPT}" '"\$\{requests:-0\}" -eq "\$\{times\}"'
 require_contains "${COVERAGE2_SCRIPT}" '"\$\{valid:-0\}" -eq "\$\{times\}"'
+require_contains "${COVERAGE2_SCRIPT}" "grep -c '\\^data: TLRETAIN\\\$'"
+require_contains "${COVERAGE2_SCRIPT}" '"\$\{TLRX:-0\}" -eq 1'
 require_contains "${COVERAGE2_SCRIPT}" "parse_extra_case"
+require_fail_path_exits_nonzero "${COVERAGE2_SCRIPT}"
 require_absent "${M2M_SCRIPT}" "ros2 run demo_nodes_cpp add_two_ints_server"
 require_absent "${M2M_SCRIPT}" "ros2 run action_tutorials_cpp fibonacci_action_server"
 require_fail_path_exits_nonzero "${M2M_SCRIPT}"
@@ -285,6 +312,8 @@ require_fail_path_exits_nonzero "${M2M_SCRIPT}"
 require_contains "${GATEWAY_SERVICE_SCRIPT}" "RMW_IMPLEMENTATION=rmw_mdds_cpp"
 require_contains "${GATEWAY_SERVICE_SCRIPT}" "RMW_IMPLEMENTATION=rmw_fastrtps_cpp"
 require_contains "${GATEWAY_SERVICE_SCRIPT}" "MDDS_GATEWAY_SERVICES"
+require_contains "${GATEWAY_SERVICE_SCRIPT}" "GATEWAY_DOMAIN_RENDERER"
+require_contains "${GATEWAY_SERVICE_SCRIPT}" 'gateway_name\(\)'
 require_contains "${GATEWAY_SERVICE_SCRIPT}" "wait_gateway_service_stats"
 require_contains "${GATEWAY_SERVICE_SCRIPT}" "requests="
 require_contains "${GATEWAY_SERVICE_SCRIPT}" "replies="
@@ -294,6 +323,8 @@ require_fail_path_exits_nonzero "${GATEWAY_SERVICE_SCRIPT}"
 require_contains "${GATEWAY_ACTION_SCRIPT}" "RMW_IMPLEMENTATION=rmw_mdds_cpp"
 require_contains "${GATEWAY_ACTION_SCRIPT}" "RMW_IMPLEMENTATION=rmw_fastrtps_cpp"
 require_contains "${GATEWAY_ACTION_SCRIPT}" "MDDS_GATEWAY_SERVICES"
+require_contains "${GATEWAY_ACTION_SCRIPT}" "GATEWAY_DOMAIN_RENDERER"
+require_contains "${GATEWAY_ACTION_SCRIPT}" 'gateway_name\(\)'
 require_contains "${GATEWAY_ACTION_SCRIPT}" "action_tutorials_interfaces/action/Fibonacci"
 require_contains "${GATEWAY_ACTION_SCRIPT}" "wait_gateway_action_stats"
 require_contains "${GATEWAY_ACTION_SCRIPT}" "fibonacci/_action/send_goal"
@@ -306,12 +337,21 @@ require_fail_path_exits_nonzero "${GATEWAY_ACTION_SCRIPT}"
 require_contains "${GATEWAY_LIFECYCLE_SCRIPT}" "RMW_IMPLEMENTATION=rmw_mdds_cpp"
 require_contains "${GATEWAY_LIFECYCLE_SCRIPT}" "RMW_IMPLEMENTATION=rmw_fastrtps_cpp"
 require_contains "${GATEWAY_LIFECYCLE_SCRIPT}" "lifecycle_msgs/srv"
+require_contains "${GATEWAY_LIFECYCLE_SCRIPT}" "GATEWAY_DOMAIN_RENDERER"
+require_contains "${GATEWAY_LIFECYCLE_SCRIPT}" 'gateway_name\(\)'
 require_contains "${GATEWAY_LIFECYCLE_SCRIPT}" "RESULT\\|lifecycle_mdds_client_to_fastrtps_node\\|PASS"
 require_fail_path_exits_nonzero "${GATEWAY_LIFECYCLE_SCRIPT}"
 
 require_contains "${GATEWAY_PARAMS_SCRIPT}" "RMW_IMPLEMENTATION=rmw_mdds_cpp"
 require_contains "${GATEWAY_PARAMS_SCRIPT}" "RMW_IMPLEMENTATION=rmw_fastrtps_cpp"
 require_contains "${GATEWAY_PARAMS_SCRIPT}" "rcl_interfaces/srv"
+require_contains "${GATEWAY_PARAMS_SCRIPT}" "GATEWAY_DOMAIN_RENDERER"
+require_contains "${GATEWAY_PARAMS_SCRIPT}" 'gateway_name\(\)'
+require_contains "${GATEWAY_PARAMS_SCRIPT}" "RMW_MDDS_NODE_SYNC_TOPIC"
+require_contains "${GATEWAY_PARAMS_SCRIPT}" "RMW_MDDS_BROKER_SOCKET"
+require_contains "${GATEWAY_PARAMS_SCRIPT}" "RMW_MDDS_BROKER_LOG"
+require_contains "${GATEWAY_PARAMS_SCRIPT}" "RMW_MDDS_GRAPH_DEBUG=1"
+require_contains "${GATEWAY_PARAMS_SCRIPT}" 'sh_cap "\$A" "mkdir -p \$\{LOG\}'
 require_contains "${GATEWAY_PARAMS_SCRIPT}" "RESULT\\|params_cli_mdds_client_to_fastrtps_node\\|PASS"
 require_fail_path_exits_nonzero "${GATEWAY_PARAMS_SCRIPT}"
 

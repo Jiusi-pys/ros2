@@ -15,23 +15,36 @@ set -euo pipefail
 usage() { echo "Usage: $0 <mdds-device-id> <fastdds-device-id> [dds-domain]" >&2; }
 [[ $# -ge 2 && $# -le 3 ]] || { usage; exit 2; }
 
-A="$1"; B="$2"; DDS_DOMAIN="${3:-101}"; MDDS_DOMAIN="$(( DDS_DOMAIN + 1 ))"
+A="$1"; B="$2"; DDS_DOMAIN="${3:-101}"
+[[ "${DDS_DOMAIN}" =~ ^[0-9]+$ ]] && (( DDS_DOMAIN <= 231 )) || { echo "dds domain 0..231" >&2; exit 2; }
+MDDS_DOMAIN="${MDDS_DOMAIN:-$(( DDS_DOMAIN + 1 ))}"
+[[ "${MDDS_DOMAIN}" =~ ^[0-9]+$ ]] && (( MDDS_DOMAIN <= 232 )) || { echo "mdds domain 0..232" >&2; exit 2; }
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HDC="${HDC_BIN:-hdc}"
 PFX=/data/local/tmp/ohos-colcon-rk3588a
 BR="${RMW_MDDS_BRIDGE_LIBRARY:-${PFX}/lib/libmdds_bridge_shared.z.so}"
 GWENV=/data/local/tmp/device_gateway_env.sh
 GW=/data/local/tmp/mdds_dds_gateway
 CFG=/data/local/tmp/gateway_rmw_mdds_matrix.yaml
+CFG_TEMPLATE="${MDDS_GATEWAY_CONFIG_TEMPLATE:-${ROOT_DIR}/ohos/tools/gateway_rmw_mdds_matrix.yaml}"
+GATEWAY_DOMAIN_RENDERER="${ROOT_DIR}/ohos/tools/render_rmw_mdds_gateway_config.py"
+HDC_SEND_VERIFY="${ROOT_DIR}/ohos/tools/hdc_send_verify.sh"
 SVC=/add_two_ints
 SRVTYPE=example_interfaces/srv/AddTwoInts
 LOG=/data/local/tmp/svc_gw
 A_VAL=41
 B_VAL=1  # expect sum 42
+LOCAL_RENDERED_GATEWAY_CONFIG=""
 
 sh_cap() { timeout 45s "${HDC}" -t "$1" shell "$2" 2>&1 | grep -v "dumped core" || true; }
+gateway_name() {
+  local name="$1"
+  if (( MDDS_DOMAIN == 0 )); then printf '%s' "${name}"; else printf 'd%s/%s' "${MDDS_DOMAIN}" "${name}"; fi
+}
+MDDS_SERVICE_NAME="$(gateway_name add_two_ints)"
 gateway_service_stat() {
   local field="$1" line value
-  line="$(sh_cap "$B" "grep 'stats service mdds=add_two_ints' ${LOG}/gw.log 2>/dev/null | tail -1")"
+  line="$(sh_cap "$B" "grep 'stats service mdds=${MDDS_SERVICE_NAME}' ${LOG}/gw.log 2>/dev/null | tail -1")"
   value="$(grep -oE "${field}=[0-9]+" <<< "${line}" | head -1 | cut -d= -f2 || true)"
   [[ "${value}" =~ ^[0-9]+$ ]] || value=0
   printf '%s' "${value}"
@@ -40,7 +53,7 @@ wait_gateway_service_stats() {
   local before_requests="$1" before_replies="$2" deadline line requests replies
   deadline=$(( $(date +%s) + 20 ))
   while (( $(date +%s) < deadline )); do
-    line="$(sh_cap "$B" "grep 'stats service mdds=add_two_ints' ${LOG}/gw.log 2>/dev/null | tail -1")"
+    line="$(sh_cap "$B" "grep 'stats service mdds=${MDDS_SERVICE_NAME}' ${LOG}/gw.log 2>/dev/null | tail -1")"
     requests="$(grep -oE 'requests=[0-9]+' <<< "${line}" | head -1 | cut -d= -f2 || true)"
     replies="$(grep -oE 'replies=[0-9]+' <<< "${line}" | head -1 | cut -d= -f2 || true)"
     [[ "${requests}" =~ ^[0-9]+$ ]] || requests=0
@@ -51,7 +64,7 @@ wait_gateway_service_stats() {
     fi
     sleep 1
   done
-  sh_cap "$B" "grep 'stats service mdds=add_two_ints' ${LOG}/gw.log 2>/dev/null | tail -1"
+  sh_cap "$B" "grep 'stats service mdds=${MDDS_SERVICE_NAME}' ${LOG}/gw.log 2>/dev/null | tail -1"
   return 1
 }
 kill_all() {
@@ -60,7 +73,20 @@ kill_all() {
     sh_cap "$d" "ps -ef | grep -E \"${pat}\" | grep -v grep | while read -r u pid r; do kill -9 \"\${pid}\" 2>/dev/null; done; true" >/dev/null
   done
 }
-trap kill_all EXIT
+cleanup() {
+  kill_all
+  if [[ -n "${LOCAL_RENDERED_GATEWAY_CONFIG}" ]]; then rm -f "${LOCAL_RENDERED_GATEWAY_CONFIG}"; fi
+}
+trap cleanup EXIT
+
+[[ -f "${CFG_TEMPLATE}" ]] || { echo "missing gateway config template: ${CFG_TEMPLATE}" >&2; exit 1; }
+[[ -f "${GATEWAY_DOMAIN_RENDERER}" ]] || { echo "missing gateway domain renderer: ${GATEWAY_DOMAIN_RENDERER}" >&2; exit 1; }
+[[ -x "${HDC_SEND_VERIFY}" ]] || { echo "missing HDC verified-send helper: ${HDC_SEND_VERIFY}" >&2; exit 1; }
+LOCAL_RENDERED_GATEWAY_CONFIG="$(mktemp /tmp/rmw_mdds_gateway_service.XXXXXX.yaml)"
+python3 "${GATEWAY_DOMAIN_RENDERER}" --template "${CFG_TEMPLATE}" \
+  --output "${LOCAL_RENDERED_GATEWAY_CONFIG}" --domain "${MDDS_DOMAIN}"
+OHOS_HDC_BIN="${HDC}" "${HDC_SEND_VERIFY}" "$B" "${LOCAL_RENDERED_GATEWAY_CONFIG}" "${CFG}" >/dev/null
+echo "RESULT|gateway_domain_config|PASS|lane=service|mdds_domain=${MDDS_DOMAIN}|service=${MDDS_SERVICE_NAME}"
 
 kill_all; sleep 2
 
@@ -68,7 +94,7 @@ kill_all; sleep 2
 sh_cap "$B" "mkdir -p ${LOG}; nohup sh -c 'ROS_DOMAIN_ID=${DDS_DOMAIN} RMW_IMPLEMENTATION=rmw_fastrtps_cpp ${GWENV} ${PFX}/bin/ros2 run demo_nodes_cpp add_two_ints_server > ${LOG}/server.log 2>&1' >/dev/null 2>&1 & echo srv" >/dev/null
 
 # 2) gateway on B with the service bridge (pub/sub config still required to boot)
-sh_cap "$B" "rm -f ${LOG}/gw.log; old=\$(pidof mdds_dds_gateway); [ -z \"\$old\" ]||kill -9 \$old; nohup sh -c 'ROS_DOMAIN_ID=${DDS_DOMAIN} RMW_IMPLEMENTATION=rmw_fastrtps_cpp MDDS_GATEWAY_SERVICES=add_two_ints:${SVC}:${SRVTYPE} ${GWENV} ${GW} ${CFG} > ${LOG}/gw.log 2>&1' >/dev/null 2>&1 & echo gw" >/dev/null
+sh_cap "$B" "rm -f ${LOG}/gw.log; old=\$(pidof mdds_dds_gateway); [ -z \"\$old\" ]||kill -9 \$old; nohup sh -c 'ROS_DOMAIN_ID=${DDS_DOMAIN} RMW_IMPLEMENTATION=rmw_fastrtps_cpp MDDS_GATEWAY_SERVICES=${MDDS_SERVICE_NAME}:${SVC}:${SRVTYPE} ${GWENV} ${GW} ${CFG} > ${LOG}/gw.log 2>&1' >/dev/null 2>&1 & echo gw" >/dev/null
 
 # wait for gateway service bridge ready
 for i in $(seq 1 30); do

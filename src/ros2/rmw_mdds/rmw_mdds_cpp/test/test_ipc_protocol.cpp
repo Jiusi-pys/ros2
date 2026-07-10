@@ -120,6 +120,48 @@ TEST(RmwMddsIpcProtocol, SampleRoundTripPreservesEntitySequenceAndPayload)
   EXPECT_EQ(sample.payload, decoded_sample.payload);
 }
 
+TEST(RmwMddsIpcProtocol, PublishSampleFrameAcceptsMaxUserPayloadWithSampleEnvelope)
+{
+  rmw_mdds_cpp::ipc::SampleMessage sample;
+  sample.entity_id = 17u;
+  sample.sequence_number = 20260707u;
+  sample.mdds_payload = true;
+  sample.payload.assign(rmw_mdds_cpp::ipc::kMaxSampleUserPayloadSize, 0xabu);
+
+  const std::vector<uint8_t> sample_payload =
+    rmw_mdds_cpp::ipc::EncodeSampleMessage(sample);
+  ASSERT_EQ(
+    rmw_mdds_cpp::ipc::kMaxFramePayloadSize,
+    sample_payload.size());
+
+  const std::vector<uint8_t> frame = rmw_mdds_cpp::ipc::EncodeFrame(
+    rmw_mdds_cpp::ipc::Frame{
+      rmw_mdds_cpp::ipc::MessageKind::kPublishSample, 1002u,
+      sample_payload});
+  ASSERT_FALSE(frame.empty());
+
+  rmw_mdds_cpp::ipc::Frame decoded_frame;
+  std::string error;
+  ASSERT_EQ(
+    rmw_mdds_cpp::ipc::DecodeStatus::kOk,
+    rmw_mdds_cpp::ipc::DecodeFrame(frame.data(), frame.size(), &decoded_frame, &error))
+    << error;
+  EXPECT_EQ(rmw_mdds_cpp::ipc::MessageKind::kPublishSample, decoded_frame.kind);
+  EXPECT_EQ(1002u, decoded_frame.request_id);
+
+  rmw_mdds_cpp::ipc::SampleMessage decoded_sample;
+  ASSERT_TRUE(
+    rmw_mdds_cpp::ipc::DecodeSampleMessage(
+      decoded_frame.payload.data(), decoded_frame.payload.size(), &decoded_sample, &error))
+    << error;
+  EXPECT_EQ(sample.entity_id, decoded_sample.entity_id);
+  EXPECT_EQ(sample.sequence_number, decoded_sample.sequence_number);
+  EXPECT_EQ(sample.mdds_payload, decoded_sample.mdds_payload);
+  EXPECT_EQ(sample.payload.size(), decoded_sample.payload.size());
+  EXPECT_EQ(0xabu, decoded_sample.payload.front());
+  EXPECT_EQ(0xabu, decoded_sample.payload.back());
+}
+
 TEST(RmwMddsIpcProtocol, DecodeFrameDistinguishesNeedMoreFromCorruptData)
 {
   const std::vector<uint8_t> frame = rmw_mdds_cpp::ipc::EncodeFrame(
@@ -153,5 +195,20 @@ TEST(RmwMddsIpcProtocol, DecodeFrameDistinguishesNeedMoreFromCorruptData)
   EXPECT_EQ(
     rmw_mdds_cpp::ipc::DecodeStatus::kError,
     rmw_mdds_cpp::ipc::DecodeFrame(oversized.data(), oversized.size(), &decoded_frame, &error));
+}
+
+TEST(RmwMddsIpcProtocol, DecodeEndpointListRejectsImpossibleCountBeforeReserve)
+{
+  std::vector<uint8_t> impossible_count = {
+    0xffu, 0xffu, 0xffu, 0x7fu,  // endpoint count: INT32_MAX
+    0x00u, 0x00u, 0x00u, 0x00u   // one empty entry header at most
+  };
+
+  std::vector<rmw_mdds_cpp::ipc::EndpointDescriptor> endpoints;
+  std::string error;
+  EXPECT_FALSE(rmw_mdds_cpp::ipc::DecodeEndpointList(
+    impossible_count.data(), impossible_count.size(), &endpoints, &error));
+  EXPECT_TRUE(endpoints.empty());
+  EXPECT_EQ("endpoint list count exceeds payload size", error);
 }
 }  // namespace

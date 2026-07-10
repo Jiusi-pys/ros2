@@ -439,6 +439,10 @@ bool DecodeEndpointList(
     SetError(error, "truncated endpoint list header");
     return false;
   }
+  if (endpoint_count > (size - offset) / sizeof(uint32_t)) {
+    SetError(error, "endpoint list count exceeds payload size");
+    return false;
+  }
   std::vector<EndpointDescriptor> decoded;
   decoded.reserve(endpoint_count);
   for (uint32_t i = 0; i < endpoint_count; ++i) {
@@ -463,6 +467,85 @@ bool DecodeEndpointList(
     return false;
   }
   *endpoints = std::move(decoded);
+  return true;
+}
+
+std::vector<uint8_t> EncodeGraphUpdate(
+  uint64_t broker_id, uint64_t epoch, const std::vector<EndpointDescriptor> & endpoints)
+{
+  std::vector<uint8_t> out;
+  AppendU64(&out, broker_id);
+  AppendU64(&out, epoch);
+  std::vector<uint8_t> body = EncodeEndpointList(endpoints);
+  out.insert(out.end(), body.begin(), body.end());
+  return out;
+}
+
+bool DecodeGraphUpdate(
+  const uint8_t * data, size_t size, GraphUpdateMessage * update, std::string * error)
+{
+  if (update == nullptr) {
+    SetError(error, "graph update output is null");
+    return false;
+  }
+  size_t offset = 0u;
+  uint64_t broker_id = 0u;
+  uint64_t epoch = 0u;
+  std::vector<EndpointDescriptor> endpoints;
+  std::string framed_error;
+  if (ReadU64(data, size, &offset, &broker_id) &&
+      ReadU64(data, size, &offset, &epoch) &&
+      DecodeEndpointList(data + offset, size - offset, &endpoints, &framed_error))
+  {
+    update->broker_id = broker_id;
+    update->epoch = epoch;
+    update->endpoints = std::move(endpoints);
+    return true;
+  }
+
+  // Compatibility with graph frames produced before broker_id/epoch existed.
+  // Legacy frames cannot be ordered safely, so callers treat epoch 0 as always
+  // acceptable while same-version peers use monotonic epoch filtering.
+  endpoints.clear();
+  std::string legacy_error;
+  if (DecodeEndpointList(data, size, &endpoints, &legacy_error)) {
+    update->broker_id = 0u;
+    update->epoch = 0u;
+    update->endpoints = std::move(endpoints);
+    return true;
+  }
+
+  if (error != nullptr) {
+    *error = framed_error.empty() ? legacy_error : framed_error;
+  }
+  return false;
+}
+
+std::vector<uint8_t> EncodeEntityId(uint64_t entity_id)
+{
+  std::vector<uint8_t> out;
+  out.reserve(sizeof(entity_id));
+  AppendU64(&out, entity_id);
+  return out;
+}
+
+bool DecodeEntityId(const uint8_t * data, size_t size, uint64_t * entity_id, std::string * error)
+{
+  if (entity_id == nullptr) {
+    SetError(error, "entity id output is null");
+    return false;
+  }
+  size_t offset = 0u;
+  uint64_t decoded = 0u;
+  if (!ReadU64(data, size, &offset, &decoded)) {
+    SetError(error, "truncated entity id payload");
+    return false;
+  }
+  if (offset != size) {
+    SetError(error, "entity id payload has trailing bytes");
+    return false;
+  }
+  *entity_id = decoded;
   return true;
 }
 

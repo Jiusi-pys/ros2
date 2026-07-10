@@ -40,6 +40,7 @@
 
 #include "bridge_backend.hpp"
 #include "broker.hpp"
+#include "ipc_client.hpp"
 #include "rmw/error_handling.h"
 
 #include "rmw_mdds_cpp/identifier.hpp"
@@ -166,31 +167,59 @@ bool EnvFlagEnabled(const char * name)
          normalized == "YES";
 }
 
-bool ProtectedTransportAvailable(std::string * error)
-{
-  if (
-    EnvFlagEnabled("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED") &&
-    EnvFlagEnabled("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED")) {
+bool ProtectedTransportAvailable(std::string *error) {
+  const bool broker_mode = BrokerModeEnabled();
+  auto configure_protected_broker = [error]() {
+    if (setenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED", "1", 1) != 0 ||
+        setenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED", "1", 1) != 0) {
+      SetError(error,
+               "cannot configure protected MDDS broker transport environment");
+      return false;
+    }
+
+    std::string socket_path = BrokerSocketPath();
+    constexpr const char *suffix = ".protected";
+    constexpr size_t suffix_length = 10u;
+    if (socket_path.size() < suffix_length ||
+        socket_path.compare(socket_path.size() - suffix_length, suffix_length,
+                            suffix) != 0) {
+      socket_path += suffix;
+    }
+    if (setenv("RMW_MDDS_BROKER_SOCKET", socket_path.c_str(), 1) != 0) {
+      SetError(error, "cannot isolate the protected MDDS broker socket");
+      return false;
+    }
+      return true;
+  };
+
+  if (broker_mode) {
+    if (!BridgeBackend::Instance().SupportsProtectedTransportActivation(error)) {
+      return false;
+    }
+    return configure_protected_broker();
+  }
+
+  if (EnvFlagEnabled("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED") &&
+      EnvFlagEnabled("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED")) {
     return true;
   }
   std::string protected_transport_error;
-  if (BridgeBackend::Instance().ActivateProtectedTransport(true, true, &protected_transport_error)) {
+  if (BridgeBackend::Instance().ActivateProtectedTransport(
+          true, true, &protected_transport_error)) {
     return true;
   }
   if (!protected_transport_error.empty()) {
     SetError(error, protected_transport_error);
     return false;
   }
-  SetError(
-    error,
-    "authenticated encrypted MDDS/DSoftBus transport is required for protected SROS2 "
-    "governance but is not active");
+  SetError(error, "authenticated encrypted MDDS/DSoftBus transport is required "
+                  "for protected SROS2 "
+                  "governance but is not active");
   return false;
 }
 
 #ifdef RMW_MDDS_HAS_OPENSSL
-std::string OpenSslError()
-{
+std::string OpenSslError() {
   const unsigned long err = ERR_get_error();
   if (err == 0u) {
     return "unknown OpenSSL error";

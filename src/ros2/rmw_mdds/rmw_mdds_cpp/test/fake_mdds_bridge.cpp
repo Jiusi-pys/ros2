@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <string>
@@ -25,9 +25,22 @@ extern "C" {
 typedef void (*MddsBridgeOnMatchedCallback)(uint32_t matchedCount,
                                             void *userData);
 
+static constexpr uint32_t kPublisherFlagRemoteOnly = 0x1u;
+
+typedef struct {
+  int reliability;
+  int durability;
+  int historyKind;
+  uint32_t historyDepth;
+  uint32_t deadlineMs;
+  uint32_t lifespanMs;
+} MddsBridgeQos;
+
 struct MddsBridgePublisher {
   std::string topic;
   std::string type;
+  MddsBridgeQos qos = {};
+  uint32_t publisher_flags = 0u;
   std::vector<uint8_t> last_payload;
   int publish_count = 0;
   uint32_t unacked_count = 0;
@@ -68,21 +81,13 @@ typedef struct {
   uint8_t senderGuid[16];
 } MddsBridgeSample;
 
-typedef struct {
-  int reliability;
-  int durability;
-  int historyKind;
-  uint32_t historyDepth;
-  uint32_t deadlineMs;
-  uint32_t lifespanMs;
-} MddsBridgeQos;
-
 typedef void (*MddsBridgeDataCallback)(const MddsBridgeSample *sample,
                                        void *userData);
 
 struct MddsBridgeSubscriber {
   std::string topic;
   std::string type;
+  MddsBridgeQos qos = {};
   MddsBridgeDataCallback callback = nullptr;
   void *user_data = nullptr;
   MddsBridgeOnMatchedCallback matched_callback = nullptr;
@@ -300,6 +305,24 @@ int FakeMddsBridgePublisherPublishCount(const char *topicName,
   return publisher == nullptr ? 0 : publisher->publish_count;
 }
 
+uint32_t FakeMddsBridgePublisherHistoryDepth(const char *topicName,
+                                             const char *typeName) {
+  const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
+  return publisher == nullptr ? 0u : publisher->qos.historyDepth;
+}
+
+int FakeMddsBridgePublisherHistoryKind(const char *topicName,
+                                       const char *typeName) {
+  const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
+  return publisher == nullptr ? -1 : publisher->qos.historyKind;
+}
+
+int FakeMddsBridgePublisherReliability(const char *topicName,
+                                       const char *typeName) {
+  const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
+  return publisher == nullptr ? -1 : publisher->qos.reliability;
+}
+
 void FakeMddsBridgeSetPublisherUnackedCount(const char *topicName,
                                             const char *typeName,
                                             uint32_t count) {
@@ -313,16 +336,16 @@ const uint8_t *FakeMddsBridgePublisherLastPayloadData(const char *topicName,
                                                       const char *typeName) {
   const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
   return publisher == nullptr || publisher->last_payload.empty()
-           ? nullptr
-           : publisher->last_payload.data();
+             ? nullptr
+             : publisher->last_payload.data();
 }
 
 uint32_t FakeMddsBridgePublisherLastPayloadLen(const char *topicName,
                                                const char *typeName) {
   const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
   return publisher == nullptr
-           ? 0u
-           : static_cast<uint32_t>(publisher->last_payload.size());
+             ? 0u
+             : static_cast<uint32_t>(publisher->last_payload.size());
 }
 
 int FakeMddsBridgeHasSubscriber(const char *topicName, const char *typeName) {
@@ -336,6 +359,50 @@ int FakeMddsBridgeHasSubscriber(const char *topicName, const char *typeName) {
                      })
              ? 1
              : 0;
+}
+
+int FakeMddsBridgeSubscriberCountFor(const char *topicName,
+                                     const char *typeName) {
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  return static_cast<int>(std::count_if(
+      g_subscribers.begin(), g_subscribers.end(),
+      [&topic, &type](const MddsBridgeSubscriber *subscriber) {
+        return subscriber != nullptr && subscriber->topic == topic &&
+               subscriber->type == type;
+      }));
+}
+
+MddsBridgeSubscriber *FakeMddsBridgeFindSubscriber(const char *topicName,
+                                                   const char *typeName) {
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  auto it =
+      std::find_if(g_subscribers.begin(), g_subscribers.end(),
+                   [&topic, &type](const MddsBridgeSubscriber *subscriber) {
+                     return subscriber != nullptr &&
+                            subscriber->topic == topic &&
+                            subscriber->type == type;
+                   });
+  return it == g_subscribers.end() ? nullptr : *it;
+}
+
+uint32_t FakeMddsBridgeSubscriberHistoryDepth(const char *topicName,
+                                              const char *typeName) {
+  const auto *subscriber = FakeMddsBridgeFindSubscriber(topicName, typeName);
+  return subscriber == nullptr ? 0u : subscriber->qos.historyDepth;
+}
+
+int FakeMddsBridgeSubscriberHistoryKind(const char *topicName,
+                                        const char *typeName) {
+  const auto *subscriber = FakeMddsBridgeFindSubscriber(topicName, typeName);
+  return subscriber == nullptr ? -1 : subscriber->qos.historyKind;
+}
+
+int FakeMddsBridgeSubscriberReliability(const char *topicName,
+                                        const char *typeName) {
+  const auto *subscriber = FakeMddsBridgeFindSubscriber(topicName, typeName);
+  return subscriber == nullptr ? -1 : subscriber->qos.reliability;
 }
 
 void FakeMddsBridgeInject(const void *data, uint32_t len) {
@@ -430,23 +497,45 @@ int32_t MddsBridgeActivateProtectedTransport(uint32_t flags) {
   g_protected_transport_authenticated = (flags & 0x1u) != 0u ? 1 : 0;
   g_protected_transport_encrypted = (flags & 0x2u) != 0u ? 1 : 0;
   return g_protected_transport_authenticated != 0 &&
-         g_protected_transport_encrypted != 0
-           ? 0
-           : -1;
+                 g_protected_transport_encrypted != 0
+             ? 0
+             : -1;
 }
 
-MddsBridgePublisher *MddsBridgeCreatePublisherQos(const char *topicName,
-                                                  const char *typeName,
-                                                  const MddsBridgeQos *qos) {
-  (void)qos;
+static MddsBridgePublisher *CreatePublisherQos(const char *topicName,
+                                               const char *typeName,
+                                               const MddsBridgeQos *qos,
+                                               uint32_t publisherFlags) {
+  if (topicName == nullptr || typeName == nullptr ||
+      (publisherFlags & ~kPublisherFlagRemoteOnly) != 0u) {
+    return nullptr;
+  }
   auto *publisher = new MddsBridgePublisher;
   publisher->topic = topicName;
   g_publisher_topic = topicName;
   publisher->type = typeName;
   g_publisher_type = typeName;
+  if (qos != nullptr) {
+    publisher->qos = *qos;
+  }
+  publisher->publisher_flags = publisherFlags;
   g_publishers.push_back(publisher);
   return publisher;
 }
+
+MddsBridgePublisher *MddsBridgeCreatePublisherQos(const char *topicName,
+                                                  const char *typeName,
+                                                  const MddsBridgeQos *qos) {
+  return CreatePublisherQos(topicName, typeName, qos, 0u);
+}
+
+#ifndef FAKE_MDDS_BRIDGE_LEGACY_ABI
+MddsBridgePublisher *MddsBridgeCreatePublisherQosEx(
+    const char *topicName, const char *typeName, const MddsBridgeQos *qos,
+    uint32_t publisherFlags) {
+  return CreatePublisherQos(topicName, typeName, qos, publisherFlags);
+}
+#endif
 
 int32_t MddsBridgePublish(MddsBridgePublisher *pub, const void *data,
                           uint32_t len) {
@@ -469,7 +558,8 @@ int32_t MddsBridgePublish(MddsBridgePublisher *pub, const void *data,
       pub->last_payload.clear();
     }
   }
-  if (pub != nullptr) {
+  if (pub != nullptr &&
+      (pub->publisher_flags & kPublisherFlagRemoteOnly) == 0u) {
     MddsBridgeSample sample = {};
     sample.data = data;
     sample.len = len;
@@ -538,10 +628,12 @@ MddsBridgeSubscriber *MddsBridgeSubscribeQos(const char *topicName,
                                              const MddsBridgeQos *qos,
                                              MddsBridgeDataCallback cb,
                                              void *userData) {
-  (void)qos;
   auto *subscriber = new MddsBridgeSubscriber;
   subscriber->topic = topicName;
   subscriber->type = typeName;
+  if (qos != nullptr) {
+    subscriber->qos = *qos;
+  }
   subscriber->callback = cb;
   subscriber->user_data = userData;
   g_subscriber_topic = topicName;
@@ -562,9 +654,10 @@ uint32_t MddsBridgePublisherGetSubCount(MddsBridgePublisher *pub) {
   return CountSubscribersForPublisher(pub);
 }
 
-int32_t MddsBridgePublisherSetOnMatchedCallback(
-    MddsBridgePublisher *pub, MddsBridgeOnMatchedCallback callback,
-    void *userData) {
+int32_t
+MddsBridgePublisherSetOnMatchedCallback(MddsBridgePublisher *pub,
+                                        MddsBridgeOnMatchedCallback callback,
+                                        void *userData) {
   if (pub == nullptr) {
     return -1;
   }
@@ -578,9 +671,10 @@ uint32_t MddsBridgeSubscriberGetPubCount(MddsBridgeSubscriber *sub) {
   return CountPublishersForSubscriber(sub);
 }
 
-int32_t MddsBridgeSubscriberSetOnMatchedCallback(
-    MddsBridgeSubscriber *sub, MddsBridgeOnMatchedCallback callback,
-    void *userData) {
+int32_t
+MddsBridgeSubscriberSetOnMatchedCallback(MddsBridgeSubscriber *sub,
+                                         MddsBridgeOnMatchedCallback callback,
+                                         void *userData) {
   if (sub == nullptr) {
     return -1;
   }
@@ -595,13 +689,15 @@ int32_t MddsBridgeSubscriberTakeLoaned(MddsBridgeSubscriber *sub,
   if (sub == nullptr || message == nullptr || sub->loaned_messages.empty()) {
     return -1;
   }
-  auto *loan = new MddsBridgeLoanedPayload(std::move(sub->loaned_messages.front()));
+  auto *loan =
+      new MddsBridgeLoanedPayload(std::move(sub->loaned_messages.front()));
   sub->loaned_messages.pop_front();
   message->data = loan->data.data();
   message->len = static_cast<uint32_t>(loan->data.size());
   message->timestamp = loan->timestamp;
   message->sequenceNumber = loan->sequenceNumber;
-  std::memcpy(message->senderGuid, loan->senderGuid, sizeof(message->senderGuid));
+  std::memcpy(message->senderGuid, loan->senderGuid,
+              sizeof(message->senderGuid));
   message->loanHandle = loan;
   message->loanKind = loan->loanKind;
   ++g_subscriber_take_loaned_count;

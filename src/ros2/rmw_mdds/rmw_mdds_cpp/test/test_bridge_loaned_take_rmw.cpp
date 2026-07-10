@@ -716,6 +716,7 @@ TEST(RmwMddsBridgeLoanedTakeRmw,
 TEST(RmwMddsBridgeLoanedTakeRmw,
      SubscriptionDoesNotHeapBackLoanedTakeWithoutBridge) {
   ASSERT_EQ(0, setenv("RMW_IMPLEMENTATION", "rmw_mdds_cpp", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER", "0", 1));
   ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE", "0", 1));
   unsetenv("RMW_MDDS_BRIDGE_LIBRARY");
 
@@ -773,5 +774,6 @@ TEST(RmwMddsBridgeLoanedTakeRmw,
   EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
   EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
   unsetenv("RMW_MDDS_BRIDGE");
+  unsetenv("RMW_MDDS_BROKER");
   unsetenv("RMW_IMPLEMENTATION");
 }

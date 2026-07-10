@@ -38,9 +38,15 @@ struct RetainedSample {
   SampleMessage sample;
 };
 
-struct LocalBridgeEcho {
-  EndpointDescriptor source;
-  std::vector<uint8_t> payload;
+struct BridgeDeliveryDedupe {
+  uint64_t target_entity_id = 0u;
+  uint32_t domain_id = 0u;
+  EndpointKind kind = EndpointKind::kClient;
+  std::string topic_name;
+  std::string type_name;
+  uint64_t sequence_number = 0u;
+  uint64_t payload_hash = 0u;
+  size_t payload_size = 0u;
   std::chrono::steady_clock::time_point expires_at{};
 };
 
@@ -55,27 +61,33 @@ public:
   bool Start(const std::string &socket_path, std::string *error);
   void Stop();
   bool IsRunning() const;
+  size_t ConnectionCountForTesting() const;
 
 private:
   struct Connection;
   struct BridgeSubscriptionState;
+  struct SharedBridgeSubscription {
+    EndpointDescriptor endpoint;
+    std::string bridge_topic;
+    std::string bridge_type;
+    void *bridge_subscription = nullptr;
+    std::unique_ptr<BridgeSubscriptionState> subscription_state;
+    size_t ref_count = 0u;
+  };
 
   void AcceptLoop();
   void ClientLoop(Connection *connection);
+  void ReapInactiveConnections();
   void HandleFrame(Connection *connection, const Frame &frame);
   void RegisterEndpoint(Connection *connection, const Frame &frame,
                         EndpointKind expected_kind);
+  void UnregisterEntity(Connection *connection, const Frame &frame);
   void PublishSample(Connection *connection, const Frame &frame);
   void DeliverBridgeSample(const EndpointDescriptor &subscription_endpoint,
                            const std::vector<uint8_t> &payload,
                            uint64_t sequence_number);
-  void RememberLocalBridgeEcho(const EndpointDescriptor &source,
-                               const std::vector<uint8_t> &payload);
-  void ForgetLocalBridgeEcho(const EndpointDescriptor &source,
-                             const std::vector<uint8_t> &payload);
-  bool ConsumeLocalBridgeEcho(const EndpointDescriptor &target,
-                              const std::vector<uint8_t> &payload);
   void BroadcastGraphUpdate();
+  void RemoveBridgeEndpointForEntity(Connection *connection, uint64_t entity_id);
   void DestroyBridgeEndpoints(Connection *connection);
   static void BridgeSampleCallback(const BridgeSample *sample, void *user_data);
   /* Matched-count listener on a local client's rq/ bridge publisher;
@@ -109,7 +121,8 @@ private:
   std::thread accept_thread_;
   std::vector<std::unique_ptr<Connection>> connections_;
   std::vector<RetainedSample> retained_samples_;
-  std::vector<LocalBridgeEcho> pending_bridge_echoes_;
+  std::vector<BridgeDeliveryDedupe> recent_bridge_deliveries_;
+  std::vector<SharedBridgeSubscription> shared_bridge_subscriptions_;
   bool bridge_enabled_ = false;
   void *node_sync_subscription_ = nullptr;
   std::vector<EndpointDescriptor> remote_node_endpoints_;
@@ -127,6 +140,10 @@ private:
   std::atomic<uint64_t> graph_epoch_{0u};
   void *graph_sync_publisher_ = nullptr;
   void *graph_sync_subscription_ = nullptr;
+  uint64_t last_graph_sync_body_hash_ = 0u;
+  size_t last_graph_sync_body_size_ = 0u;
+  std::chrono::steady_clock::time_point last_graph_sync_publish_{};
+  bool graph_sync_publish_dirty_ = false;
   std::map<uint64_t, RemoteGraphBucket> remote_graph_endpoints_;
   std::thread graph_reannounce_thread_;
 };

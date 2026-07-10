@@ -115,6 +115,13 @@ target_link_libraries(rmw_mdds_broker PRIVATE
   Threads::Threads
 )
 
+add_executable(rmw_mdds_bridge_protected_transport_probe
+  src/bridge_protected_transport_probe.cpp
+)
+target_link_libraries(rmw_mdds_bridge_protected_transport_probe PRIVATE
+  ${CMAKE_DL_LIBS}
+)
+
 ament_export_include_directories("include/${PROJECT_NAME}")
 ament_export_libraries(rmw_mdds_cpp)
 ament_export_dependencies(
@@ -412,6 +419,9 @@ if(BUILD_TESTING)
   )
 
   add_library(fake_mdds_bridge SHARED test/fake_mdds_bridge.cpp)
+  add_library(fake_mdds_bridge_legacy SHARED test/fake_mdds_bridge.cpp)
+  target_compile_definitions(fake_mdds_bridge_legacy PRIVATE
+    FAKE_MDDS_BRIDGE_LEGACY_ABI=1)
 
   ament_add_gtest(test_pubsub_inproc test/test_pubsub_inproc.cpp)
   target_compile_definitions(test_pubsub_inproc PRIVATE
@@ -536,7 +546,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_ipc_broker test/test_ipc_broker.cpp)
   target_compile_definitions(test_ipc_broker PRIVATE
-    "FAKE_MDDS_BRIDGE_PATH=\"$<TARGET_FILE:fake_mdds_bridge>\"")
+    "FAKE_MDDS_BRIDGE_PATH=\"$<TARGET_FILE:fake_mdds_bridge>\""
+    "FAKE_MDDS_BRIDGE_LEGACY_PATH=\"$<TARGET_FILE:fake_mdds_bridge_legacy>\"")
+  add_dependencies(test_ipc_broker fake_mdds_bridge_legacy)
   target_sources(test_ipc_broker PRIVATE
     src/bridge_backend.cpp
     src/ipc_broker.cpp
@@ -554,6 +566,8 @@ if(BUILD_TESTING)
   )
 
   ament_add_gtest(test_broker_mode test/test_broker_mode.cpp)
+  target_compile_definitions(test_broker_mode PRIVATE
+    "FAKE_MDDS_BRIDGE_PATH=\"$<TARGET_FILE:fake_mdds_bridge>\"")
   target_sources(test_broker_mode PRIVATE
     src/bridge_backend.cpp
     src/ipc_broker.cpp
@@ -563,9 +577,11 @@ if(BUILD_TESTING)
   target_include_directories(test_broker_mode PRIVATE
     src
     ${RMW_MDDS_STD_MSGS_INCLUDE_DIR}
+    ${RMW_MDDS_STD_SRVS_INCLUDE_DIR}
   )
   target_link_libraries(test_broker_mode
     ${CMAKE_DL_LIBS}
+    fake_mdds_bridge
     rmw::rmw
     rmw_mdds_cpp
     rosidl_runtime_cpp::rosidl_runtime_cpp
@@ -573,6 +589,9 @@ if(BUILD_TESTING)
     ${RMW_MDDS_STD_MSGS_TYPESUPPORT_CPP}
     ${RMW_MDDS_STD_MSGS_TYPESUPPORT_INTROSPECTION_CPP}
     ${RMW_MDDS_STD_MSGS_GENERATOR_C}
+    ${RMW_MDDS_STD_SRVS_TYPESUPPORT_CPP}
+    ${RMW_MDDS_STD_SRVS_TYPESUPPORT_INTROSPECTION_CPP}
+    ${RMW_MDDS_STD_SRVS_GENERATOR_C}
   )
 
   ament_add_gtest(
@@ -607,7 +626,12 @@ if(BUILD_TESTING)
   )
 
   ament_add_gtest(test_service_inproc test/test_service_inproc.cpp)
+  target_sources(test_service_inproc PRIVATE
+    src/ipc_protocol.cpp
+    src/ipc_transport.cpp
+  )
   target_include_directories(test_service_inproc PRIVATE
+    src
     ${RMW_MDDS_EXAMPLE_INTERFACES_INCLUDE_DIR}
     ${RMW_MDDS_STD_MSGS_INCLUDE_DIR}
     ${RMW_MDDS_STD_SRVS_INCLUDE_DIR}
@@ -743,5 +767,10 @@ install(
 
 install(
   TARGETS rmw_mdds_broker
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  TARGETS rmw_mdds_bridge_protected_transport_probe
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )

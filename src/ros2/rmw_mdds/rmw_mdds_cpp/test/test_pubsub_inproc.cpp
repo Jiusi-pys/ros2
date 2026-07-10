@@ -74,6 +74,7 @@ public:
   void SetUp() override
   {
     setenv("RMW_MDDS_BROKER", "0", 1);
+    setenv("RMW_MDDS_BRIDGE", "0", 1);
     unsetenv("RMW_MDDS_BROKER_SOCKET");
     unsetenv("RMW_MDDS_BRIDGE_LIBRARY");
   }
@@ -727,8 +728,57 @@ TEST(RmwMddsPubSub, DISABLED_FullParitySros2ActivatesBridgeProtectedTransport)
   std::filesystem::remove_all(security_root);
 }
 
-TEST(RmwMddsPubSub, CreatePublisherRejectsUnsupportedTypeSupport)
-{
+TEST(RmwMddsPubSub, BrokerModeProtectedPolicyPreparesProtectedBroker) {
+  const std::string security_root =
+      CreateSignedProtectedSros2PolicyContractRoot("broker_transport");
+  unsetenv("RMW_MDDS_BRIDGE");
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER", "1", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_SOCKET",
+                      "/tmp/rmw_mdds_security_base.sock", 1));
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
+  FakeMddsBridgeReset();
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_sros2_broker_transport");
+  SetSecurityRoot(&options, security_root);
+  options.security_options.enforce_security = RMW_SECURITY_ENFORCEMENT_ENFORCE;
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  const rmw_ret_t init_ret = rmw_init(&options, &context);
+  EXPECT_EQ(RMW_RET_OK, init_ret) << rmw_get_error_string().str;
+  if (init_ret == RMW_RET_OK) {
+    const char *authenticated =
+        std::getenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
+    const char *encrypted =
+        std::getenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
+    const char *broker_socket = std::getenv("RMW_MDDS_BROKER_SOCKET");
+    EXPECT_STREQ("1", authenticated);
+    EXPECT_STREQ("1", encrypted);
+    EXPECT_STREQ("/tmp/rmw_mdds_security_base.sock.protected", broker_socket);
+    EXPECT_EQ(0, FakeMddsBridgeProtectedTransportActivateCount())
+      << "broker mode must not initialize a second MDDS bridge in the client process";
+    EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+    EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  } else {
+    rmw_reset_error();
+  }
+
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_ENCRYPTED");
+  unsetenv("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
+  unsetenv("RMW_MDDS_BROKER_SOCKET");
+  unsetenv("RMW_MDDS_BRIDGE_LIBRARY");
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER", "0", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE", "0", 1));
+  FakeMddsBridgeReset();
+  std::filesystem::remove_all(security_root);
+}
+
+TEST(RmwMddsPubSub, CreatePublisherRejectsUnsupportedTypeSupport) {
   rcutils_allocator_t allocator = rcutils_get_default_allocator();
   rmw_init_options_t options = rmw_get_zero_initialized_init_options();
   ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
@@ -736,17 +786,20 @@ TEST(RmwMddsPubSub, CreatePublisherRejectsUnsupportedTypeSupport)
 
   rmw_context_t context = rmw_get_zero_initialized_context();
   ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
-  rmw_node_t * node = rmw_create_node(&context, "mdds_invalid_publisher_node", "/mdds");
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_invalid_publisher_node", "/mdds");
   ASSERT_NE(nullptr, node);
 
   rosidl_message_type_support_t unsupported_type_support{};
-  unsupported_type_support.typesupport_identifier = "rmw_mdds_invalid_type_support";
+  unsupported_type_support.typesupport_identifier =
+      "rmw_mdds_invalid_type_support";
   unsupported_type_support.func = UnsupportedMessageTypeSupportHandle;
-  rmw_publisher_options_t publisher_options = rmw_get_default_publisher_options();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
 
-  rmw_publisher_t * publisher = rmw_create_publisher(
-    node, &unsupported_type_support, "/mdds_test_invalid_type_support",
-    &rmw_qos_profile_default, &publisher_options);
+  rmw_publisher_t *publisher = rmw_create_publisher(
+      node, &unsupported_type_support, "/mdds_test_invalid_type_support",
+      &rmw_qos_profile_default, &publisher_options);
   EXPECT_EQ(nullptr, publisher);
   if (publisher != nullptr) {
     EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));

@@ -63,14 +63,22 @@ using BridgeSample = ::MddsBridgeSample;
 using BridgeLoanedMessage = ::MddsBridgeLoanedMessage;
 using BridgeDataCallback = ::MddsBridgeDataCallback;
 
+enum class BridgePublisherMode {
+  kDefault,
+  kRemoteOnly,
+};
+
 class BridgeBackend {
 public:
   static BridgeBackend &Instance();
 
   bool Available();
   bool Required() const;
+  bool SupportsRemoteOnlyPublishers();
   void *CreatePublisher(const char *topic_name, const char *type_name,
-                        const rmw_qos_profile_t *qos);
+                        const rmw_qos_profile_t *qos,
+                        BridgePublisherMode mode =
+                            BridgePublisherMode::kDefault);
   int32_t Publish(void *publisher, const void *data, uint32_t len);
   bool BorrowLoanedSample(void *publisher, uint32_t size, void **loan,
                           void **data);
@@ -105,6 +113,7 @@ public:
   bool SubscriberSetOnMatched(void *subscription,
                               void (*callback)(uint32_t, void *),
                               void *user_data);
+  bool SupportsProtectedTransportActivation(std::string *error);
   bool ActivateProtectedTransport(bool require_authenticated,
                                   bool require_encrypted, std::string *error);
   /* Stop the MDDS spin + lane-worker threads and tear down the runtime while
@@ -134,6 +143,8 @@ private:
   void (*stop_spin_)(void) = nullptr;
   MddsBridgePublisher *(*create_publisher_qos_)(
       const char *, const char *, const MddsBridgeQos *) = nullptr;
+  MddsBridgePublisher *(*create_publisher_qos_ex_)(
+      const char *, const char *, const MddsBridgeQos *, uint32_t) = nullptr;
   int32_t (*publish_)(MddsBridgePublisher *, const void *, uint32_t) = nullptr;
   int32_t (*borrow_loaned_sample_)(MddsBridgePublisher *, uint32_t,
                                    MddsBridgeLoanedSample **,

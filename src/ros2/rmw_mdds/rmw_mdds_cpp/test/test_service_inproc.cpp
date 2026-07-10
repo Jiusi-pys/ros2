@@ -15,15 +15,23 @@
 #include <gtest/gtest.h>
 #include <std_srvs/srv/detail/trigger__functions.h>
 #include <std_srvs/srv/detail/trigger__type_support.h>
+#include <unistd.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <example_interfaces/srv/detail/add_two_ints__type_support.hpp>
+#include <string>
 #include <std_srvs/srv/detail/trigger__type_support.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <test_msgs/srv/arrays.hpp>
+#include <thread>
+#include <vector>
 
+#include "ipc_protocol.hpp"
+#include "ipc_transport.hpp"
 #include "rcutils/allocator.h"
 #include "rcutils/strdup.h"
 #include "rmw/error_handling.h"
@@ -63,6 +71,67 @@ struct AddTwoIntsResponse
   int64_t sum;
 };
 
+class EnvVarGuard
+{
+public:
+  explicit EnvVarGuard(const char * name)
+  : name_(name)
+  {
+    const char * value = std::getenv(name);
+    if (value != nullptr) {
+      had_value_ = true;
+      value_ = value;
+    }
+  }
+
+  ~EnvVarGuard()
+  {
+    if (had_value_) {
+      setenv(name_.c_str(), value_.c_str(), 1);
+    } else {
+      unsetenv(name_.c_str());
+    }
+  }
+
+private:
+  std::string name_;
+  bool had_value_ = false;
+  std::string value_;
+};
+
+class TempSocketPath
+{
+public:
+  TempSocketPath()
+  {
+    char templ[] = "/tmp/rmw_mdds_service_inproc_XXXXXX";
+    char * dir = mkdtemp(templ);
+    if (dir != nullptr) {
+      dir_ = dir;
+      path_ = dir_ + "/broker.sock";
+    }
+  }
+
+  ~TempSocketPath()
+  {
+    if (!path_.empty()) {
+      unlink(path_.c_str());
+    }
+    if (!dir_.empty()) {
+      rmdir(dir_.c_str());
+    }
+  }
+
+  const std::string & path() const
+  {
+    return path_;
+  }
+
+private:
+  std::string dir_;
+  std::string path_;
+};
+
 void SetEnclave(rmw_init_options_t * options, const char * enclave)
 {
   options->allocator.deallocate(options->enclave, options->allocator.state);
@@ -83,7 +152,356 @@ const rosidl_service_type_support_t * UnsupportedServiceTypeSupportHandle(
 {
   return nullptr;
 }
+
+void AppendI64(std::vector<uint8_t> * out, int64_t value)
+{
+  ASSERT_NE(nullptr, out);
+  for (size_t i = 0; i < sizeof(value); ++i) {
+    out->push_back(static_cast<uint8_t>(
+      (static_cast<uint64_t>(value) >> (8u * i)) & 0xffu));
+  }
+}
+
+std::vector<uint8_t> MakeAddTwoIntsRequestPayload(int64_t a, int64_t b)
+{
+  std::vector<uint8_t> payload;
+  AppendI64(&payload, a);
+  AppendI64(&payload, b);
+  return payload;
+}
+
+std::vector<uint8_t> MakeServiceWirePayload(
+  const uint8_t writer_guid[RMW_GID_STORAGE_SIZE],
+  int64_t sequence_number,
+  const std::vector<uint8_t> & body)
+{
+  std::vector<uint8_t> payload;
+  AppendI64(&payload, sequence_number);
+  payload.insert(payload.end(), writer_guid, writer_guid + RMW_GID_STORAGE_SIZE);
+  AppendI64(&payload, 123456789);
+  payload.insert(payload.end(), body.begin(), body.end());
+  return payload;
+}
+
+void ServeRegistrationAckAndWaitForPrimaryClose(
+  int listener_fd,
+  std::atomic<bool> * registration_seen,
+  std::atomic<bool> * primary_closed)
+{
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd client =
+    rmw_mdds_cpp::ipc::AcceptUnixSocket(listener_fd, &error);
+  if (!client) {
+    return;
+  }
+
+  rmw_mdds_cpp::ipc::Frame frame;
+  if (rmw_mdds_cpp::ipc::ReadFrame(client.get(), &frame, &error) !=
+    rmw_mdds_cpp::ipc::ReadFrameStatus::kOk)
+  {
+    return;
+  }
+  if (frame.kind != rmw_mdds_cpp::ipc::MessageKind::kRegisterClient) {
+    return;
+  }
+  registration_seen->store(true);
+  if (!rmw_mdds_cpp::ipc::WriteFrame(
+      client.get(),
+      rmw_mdds_cpp::ipc::Frame{
+        rmw_mdds_cpp::ipc::MessageKind::kAck, frame.request_id, {}},
+      &error))
+  {
+    return;
+  }
+  if (rmw_mdds_cpp::ipc::ReadFrame(client.get(), &frame, &error) !=
+    rmw_mdds_cpp::ipc::ReadFrameStatus::kOk)
+  {
+    primary_closed->store(true);
+  }
+}
+
+void ServeDeliveryBeforeRegistrationAck(
+  int listener_fd,
+  std::atomic<bool> * registration_seen,
+  std::atomic<bool> * primary_closed)
+{
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd client =
+    rmw_mdds_cpp::ipc::AcceptUnixSocket(listener_fd, &error);
+  if (!client) {
+    return;
+  }
+
+  rmw_mdds_cpp::ipc::Frame frame;
+  if (rmw_mdds_cpp::ipc::ReadFrame(client.get(), &frame, &error) !=
+    rmw_mdds_cpp::ipc::ReadFrameStatus::kOk)
+  {
+    return;
+  }
+  if (frame.kind != rmw_mdds_cpp::ipc::MessageKind::kRegisterClient) {
+    return;
+  }
+  registration_seen->store(true);
+
+  rmw_mdds_cpp::ipc::SampleMessage sample;
+  sample.entity_id = 0u;
+  sample.sequence_number = 1u;
+  sample.mdds_payload = false;
+  sample.payload = {0u, 1u, 2u, 3u};
+  if (!rmw_mdds_cpp::ipc::WriteFrame(
+      client.get(),
+      rmw_mdds_cpp::ipc::Frame{
+        rmw_mdds_cpp::ipc::MessageKind::kDeliverSample, 0u,
+        rmw_mdds_cpp::ipc::EncodeSampleMessage(sample)},
+      &error))
+  {
+    return;
+  }
+  if (!rmw_mdds_cpp::ipc::WriteFrame(
+      client.get(),
+      rmw_mdds_cpp::ipc::Frame{
+        rmw_mdds_cpp::ipc::MessageKind::kAck, frame.request_id, {}},
+      &error))
+  {
+    return;
+  }
+
+  if (rmw_mdds_cpp::ipc::ReadFrame(client.get(), &frame, &error) !=
+    rmw_mdds_cpp::ipc::ReadFrameStatus::kOk)
+  {
+    primary_closed->store(true);
+  }
+}
+
+void ServeServiceRegistrationAndCapturePublishes(
+  int listener_fd,
+  std::vector<uint64_t> * sample_sequences)
+{
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd service =
+    rmw_mdds_cpp::ipc::AcceptUnixSocket(listener_fd, &error);
+  if (!service) {
+    return;
+  }
+
+  rmw_mdds_cpp::ipc::Frame frame;
+  if (rmw_mdds_cpp::ipc::ReadFrame(service.get(), &frame, &error) !=
+    rmw_mdds_cpp::ipc::ReadFrameStatus::kOk)
+  {
+    return;
+  }
+  if (frame.kind != rmw_mdds_cpp::ipc::MessageKind::kRegisterService) {
+    return;
+  }
+  if (!rmw_mdds_cpp::ipc::WriteFrame(
+      service.get(),
+      rmw_mdds_cpp::ipc::Frame{
+        rmw_mdds_cpp::ipc::MessageKind::kAck, frame.request_id, {}},
+      &error))
+  {
+    return;
+  }
+
+  while (sample_sequences != nullptr && sample_sequences->size() < 2u) {
+    if (rmw_mdds_cpp::ipc::ReadFrame(service.get(), &frame, &error) !=
+      rmw_mdds_cpp::ipc::ReadFrameStatus::kOk)
+    {
+      return;
+    }
+    if (frame.kind != rmw_mdds_cpp::ipc::MessageKind::kPublishSample) {
+      continue;
+    }
+    rmw_mdds_cpp::ipc::SampleMessage sample;
+    if (!rmw_mdds_cpp::ipc::DecodeSampleMessage(
+        frame.payload.data(), frame.payload.size(), &sample, &error))
+    {
+      return;
+    }
+    sample_sequences->push_back(sample.sequence_number);
+  }
+}
+
+void ServeServiceRegistrationAndInjectDuplicateRequests(
+  int listener_fd,
+  const std::vector<uint8_t> & wire_payload,
+  std::atomic<bool> * registration_seen)
+{
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd service =
+    rmw_mdds_cpp::ipc::AcceptUnixSocket(listener_fd, &error);
+  if (!service) {
+    return;
+  }
+
+  rmw_mdds_cpp::ipc::Frame frame;
+  if (rmw_mdds_cpp::ipc::ReadFrame(service.get(), &frame, &error) !=
+    rmw_mdds_cpp::ipc::ReadFrameStatus::kOk)
+  {
+    return;
+  }
+  if (frame.kind != rmw_mdds_cpp::ipc::MessageKind::kRegisterService) {
+    return;
+  }
+  registration_seen->store(true);
+  if (!rmw_mdds_cpp::ipc::WriteFrame(
+      service.get(),
+      rmw_mdds_cpp::ipc::Frame{
+        rmw_mdds_cpp::ipc::MessageKind::kAck, frame.request_id, {}},
+      &error))
+  {
+    return;
+  }
+
+  rmw_mdds_cpp::ipc::SampleMessage sample;
+  sample.entity_id = 0u;
+  sample.sequence_number = 1u;
+  sample.mdds_payload = false;
+  sample.payload = wire_payload;
+  const auto delivery = rmw_mdds_cpp::ipc::Frame{
+    rmw_mdds_cpp::ipc::MessageKind::kDeliverSample, 0u,
+    rmw_mdds_cpp::ipc::EncodeSampleMessage(sample)};
+  (void)rmw_mdds_cpp::ipc::WriteFrame(service.get(), delivery, &error);
+  (void)rmw_mdds_cpp::ipc::WriteFrame(service.get(), delivery, &error);
+  if (rmw_mdds_cpp::ipc::ReadFrame(service.get(), &frame, &error) !=
+    rmw_mdds_cpp::ipc::ReadFrameStatus::kOk)
+  {
+    return;
+  }
+}
 }  // namespace
+
+TEST(RmwMddsService, DestroyClientDoesNotWaitForUnregisterAck)
+{
+  EnvVarGuard broker_guard("RMW_MDDS_BROKER");
+  EnvVarGuard socket_guard("RMW_MDDS_BROKER_SOCKET");
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd listener =
+    rmw_mdds_cpp::ipc::ListenUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(listener) << error;
+
+  std::atomic<bool> registration_seen{false};
+  std::atomic<bool> primary_closed{false};
+  std::thread fake_broker(
+    [&listener, &registration_seen, &primary_closed]() {
+      ServeRegistrationAckAndWaitForPrimaryClose(
+        listener.get(), &registration_seen, &primary_closed);
+    });
+
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER", "1", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_SOCKET", socket_path.path().c_str(), 1));
+  ASSERT_EQ(
+    0,
+    setenv("RMW_MDDS_BRIDGE_LIBRARY", "/no/such/libmdds_bridge_shared.z.so", 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_destroy_client_cleanup_test");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
+  rmw_node_t * node =
+    rmw_create_node(&context, "mdds_destroy_client_cleanup", "/mdds");
+  ASSERT_NE(nullptr, node);
+
+  const rosidl_service_type_support_t * type_support =
+    ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
+      rosidl_typesupport_cpp, example_interfaces, srv, AddTwoInts)();
+  rmw_client_t * client = rmw_create_client(
+    node, type_support, "/mdds_destroy_client_cleanup",
+    &rmw_qos_profile_services_default);
+  ASSERT_NE(nullptr, client) << rmw_get_error_string().str;
+  ASSERT_TRUE(registration_seen.load());
+
+  const auto started = std::chrono::steady_clock::now();
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_client(node, client));
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now() - started);
+
+  listener.reset();
+  if (fake_broker.joinable()) {
+    fake_broker.join();
+  }
+  EXPECT_TRUE(primary_closed.load());
+  EXPECT_LT(elapsed, std::chrono::milliseconds(500));
+
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+}
+
+TEST(RmwMddsService, CreateClientToleratesDeliveryBeforeRegistrationAck)
+{
+  EnvVarGuard broker_guard("RMW_MDDS_BROKER");
+  EnvVarGuard socket_guard("RMW_MDDS_BROKER_SOCKET");
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd listener =
+    rmw_mdds_cpp::ipc::ListenUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(listener) << error;
+
+  std::atomic<bool> registration_seen{false};
+  std::atomic<bool> primary_closed{false};
+  std::thread fake_broker(
+    [&listener, &registration_seen, &primary_closed]() {
+      ServeDeliveryBeforeRegistrationAck(
+        listener.get(), &registration_seen, &primary_closed);
+    });
+
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER", "1", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_SOCKET", socket_path.path().c_str(), 1));
+  ASSERT_EQ(
+    0,
+    setenv("RMW_MDDS_BRIDGE_LIBRARY", "/no/such/libmdds_bridge_shared.z.so", 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_create_client_interleaved_delivery_test");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
+  rmw_node_t * node =
+    rmw_create_node(&context, "mdds_create_client_interleaved_delivery", "/mdds");
+  ASSERT_NE(nullptr, node);
+
+  const rosidl_service_type_support_t * type_support =
+    ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
+      rosidl_typesupport_cpp, example_interfaces, srv, AddTwoInts)();
+  rmw_client_t * client = rmw_create_client(
+    node, type_support, "/mdds_create_client_interleaved_delivery",
+    &rmw_qos_profile_services_default);
+  const std::string create_error =
+    client == nullptr ? rmw_get_error_string().str : "";
+  rmw_reset_error();
+
+  if (client != nullptr) {
+    EXPECT_EQ(RMW_RET_OK, rmw_destroy_client(node, client));
+  }
+  listener.reset();
+  if (fake_broker.joinable()) {
+    fake_broker.join();
+  }
+
+  EXPECT_TRUE(registration_seen.load());
+  EXPECT_TRUE(primary_closed.load());
+  EXPECT_NE(nullptr, client) << create_error;
+
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+}
 
 TEST(RmwMddsService, ServiceServerIsAvailableUsesUpstreamBadArgumentReturnCodes)
 {
@@ -239,6 +657,202 @@ TEST(RmwMddsService, CreateServiceAndClientRejectInvalidQosProfiles)
     rmw_reset_error();
   }
 
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+}
+
+TEST(RmwMddsService, ClientGidDoesNotExposeProcessLocalPointer)
+{
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_client_gid_identity_test");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
+  rmw_node_t * node = rmw_create_node(&context, "mdds_client_gid_identity_node", "/mdds");
+  ASSERT_NE(nullptr, node);
+
+  const rosidl_service_type_support_t * type_support =
+    ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
+    rosidl_typesupport_cpp, example_interfaces, srv, AddTwoInts)();
+  rmw_client_t * client = rmw_create_client(
+    node, type_support, "/mdds_client_gid_identity", &rmw_qos_profile_services_default);
+  ASSERT_NE(nullptr, client) << rmw_get_error_string().str;
+
+  rmw_gid_t gid{};
+  ASSERT_EQ(RMW_RET_OK, rmw_get_gid_for_client(client, &gid));
+  uint64_t gid_entity = 0u;
+  std::memcpy(&gid_entity, gid.data, std::min(sizeof(gid_entity), sizeof(gid.data)));
+  const uint64_t raw_client_pointer =
+    static_cast<uint64_t>(reinterpret_cast<uintptr_t>(client->data));
+  EXPECT_NE(raw_client_pointer, gid_entity)
+    << "service client writer_guid must be process-unique, not only a "
+       "process-local ClientData pointer";
+
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_client(node, client));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+}
+
+TEST(RmwMddsService, BrokerServiceResponsesUseUniquePublicationSequences)
+{
+  EnvVarGuard broker_guard("RMW_MDDS_BROKER");
+  EnvVarGuard socket_guard("RMW_MDDS_BROKER_SOCKET");
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd listener =
+    rmw_mdds_cpp::ipc::ListenUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(listener) << error;
+
+  std::vector<uint64_t> sample_sequences;
+  std::thread fake_broker(
+    [&listener, &sample_sequences]() {
+      ServeServiceRegistrationAndCapturePublishes(
+        listener.get(), &sample_sequences);
+    });
+
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER", "1", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_SOCKET", socket_path.path().c_str(), 1));
+  ASSERT_EQ(
+    0,
+    setenv("RMW_MDDS_BRIDGE_LIBRARY", "/no/such/libmdds_bridge_shared.z.so", 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_service_response_sequence_test");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
+  rmw_node_t * node =
+    rmw_create_node(&context, "mdds_service_response_sequence_node", "/mdds");
+  ASSERT_NE(nullptr, node);
+
+  const rosidl_service_type_support_t * type_support =
+    ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
+    rosidl_typesupport_cpp, example_interfaces, srv, AddTwoInts)();
+  rmw_service_t * service = rmw_create_service(
+    node, type_support, "/mdds_service_response_sequence",
+    &rmw_qos_profile_services_default);
+  ASSERT_NE(nullptr, service) << rmw_get_error_string().str;
+
+  rmw_request_id_t first_request{};
+  first_request.sequence_number = 1;
+  first_request.writer_guid[0] = 1u;
+  AddTwoIntsResponse first_response{42};
+  ASSERT_EQ(RMW_RET_OK, rmw_send_response(service, &first_request, &first_response));
+
+  rmw_request_id_t second_request{};
+  second_request.sequence_number = 1;
+  second_request.writer_guid[0] = 2u;
+  AddTwoIntsResponse second_response{43};
+  ASSERT_EQ(RMW_RET_OK, rmw_send_response(service, &second_request, &second_response));
+
+  listener.reset();
+  if (fake_broker.joinable()) {
+    fake_broker.join();
+  }
+  ASSERT_EQ(2u, sample_sequences.size());
+  EXPECT_NE(sample_sequences[0], sample_sequences[1])
+    << "broker sample sequence must be unique for each response published by "
+       "one service endpoint, even when different clients reuse request "
+       "sequence number 1";
+
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_service(node, service));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+}
+
+TEST(RmwMddsService, BrokerServiceDropsDuplicateRequestDeliveries)
+{
+  EnvVarGuard broker_guard("RMW_MDDS_BROKER");
+  EnvVarGuard socket_guard("RMW_MDDS_BROKER_SOCKET");
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd listener =
+    rmw_mdds_cpp::ipc::ListenUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(listener) << error;
+
+  uint8_t writer_guid[RMW_GID_STORAGE_SIZE] = {};
+  writer_guid[0] = 42u;
+  const std::vector<uint8_t> wire_payload =
+    MakeServiceWirePayload(writer_guid, 7, MakeAddTwoIntsRequestPayload(4, 5));
+  std::atomic<bool> registration_seen{false};
+  std::thread fake_broker(
+    [&listener, &wire_payload, &registration_seen]() {
+      ServeServiceRegistrationAndInjectDuplicateRequests(
+        listener.get(), wire_payload, &registration_seen);
+    });
+
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER", "1", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_SOCKET", socket_path.path().c_str(), 1));
+  ASSERT_EQ(
+    0,
+    setenv("RMW_MDDS_BRIDGE_LIBRARY", "/no/such/libmdds_bridge_shared.z.so", 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_service_request_dedupe_test");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
+  rmw_node_t * node =
+    rmw_create_node(&context, "mdds_service_request_dedupe_node", "/mdds");
+  ASSERT_NE(nullptr, node);
+
+  const rosidl_service_type_support_t * type_support =
+    ROSIDL_TYPESUPPORT_INTERFACE__SERVICE_SYMBOL_NAME(
+    rosidl_typesupport_cpp, example_interfaces, srv, AddTwoInts)();
+  rmw_service_t * service = rmw_create_service(
+    node, type_support, "/mdds_service_request_dedupe",
+    &rmw_qos_profile_services_default);
+  ASSERT_NE(nullptr, service) << rmw_get_error_string().str;
+  ASSERT_TRUE(registration_seen.load());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  AddTwoIntsRequest first_request{0, 0};
+  rmw_service_info_t first_header{};
+  bool first_taken = false;
+  ASSERT_EQ(
+    RMW_RET_OK,
+    rmw_take_request(service, &first_header, &first_request, &first_taken));
+  ASSERT_TRUE(first_taken);
+  EXPECT_EQ(7, first_header.request_id.sequence_number);
+  EXPECT_EQ(4, first_request.a);
+  EXPECT_EQ(5, first_request.b);
+
+  AddTwoIntsRequest duplicate_request{0, 0};
+  rmw_service_info_t duplicate_header{};
+  bool duplicate_taken = true;
+  ASSERT_EQ(
+    RMW_RET_OK,
+    rmw_take_request(
+      service, &duplicate_header, &duplicate_request, &duplicate_taken));
+  EXPECT_FALSE(duplicate_taken)
+    << "duplicate broker deliveries with the same request writer_guid and "
+       "sequence must not reach the service callback twice";
+
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_service(node, service));
+  listener.reset();
+  if (fake_broker.joinable()) {
+    fake_broker.join();
+  }
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
   EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
   EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));

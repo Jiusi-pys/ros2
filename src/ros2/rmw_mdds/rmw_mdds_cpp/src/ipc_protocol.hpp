@@ -30,7 +30,9 @@ namespace ipc
 
 constexpr size_t kFrameHeaderSize = 20u;
 constexpr size_t kFramePayloadSizeOffset = 16u;
-constexpr size_t kMaxFramePayloadSize = 16u * 1024u * 1024u;
+constexpr size_t kMaxSampleUserPayloadSize = 16u * 1024u * 1024u;
+constexpr size_t kSampleMessageHeaderSize = 8u + 8u + 1u + 4u;
+constexpr size_t kMaxFramePayloadSize = kMaxSampleUserPayloadSize + kSampleMessageHeaderSize;
 
 enum class MessageKind : uint16_t
 {
@@ -94,6 +96,13 @@ struct SampleMessage
   std::vector<uint8_t> payload;
 };
 
+struct GraphUpdateMessage
+{
+  uint64_t broker_id = 0u;
+  uint64_t epoch = 0u;
+  std::vector<EndpointDescriptor> endpoints;
+};
+
 std::vector<uint8_t> EncodeFrame(const Frame & frame);
 DecodeStatus DecodeFrame(const uint8_t * data, size_t size, Frame * frame, std::string * error);
 
@@ -105,6 +114,14 @@ std::vector<uint8_t> EncodeEndpointList(const std::vector<EndpointDescriptor> & 
 bool DecodeEndpointList(
   const uint8_t * data, size_t size, std::vector<EndpointDescriptor> * endpoints,
   std::string * error);
+
+std::vector<uint8_t> EncodeGraphUpdate(
+  uint64_t broker_id, uint64_t epoch, const std::vector<EndpointDescriptor> & endpoints);
+bool DecodeGraphUpdate(
+  const uint8_t * data, size_t size, GraphUpdateMessage * update, std::string * error);
+
+std::vector<uint8_t> EncodeEntityId(uint64_t entity_id);
+bool DecodeEntityId(const uint8_t * data, size_t size, uint64_t * entity_id, std::string * error);
 
 std::vector<uint8_t> EncodeSampleMessage(const SampleMessage & sample);
 bool DecodeSampleMessage(

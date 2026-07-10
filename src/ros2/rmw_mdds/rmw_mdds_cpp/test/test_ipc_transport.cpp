@@ -123,6 +123,37 @@ TEST(RmwMddsIpcTransport, UnixSocketListenerAcceptsClientAndTransfersFrames)
   EXPECT_EQ(sample.payload, decoded_sample.payload);
 }
 
+TEST(RmwMddsIpcTransport, ListenerDoesNotReplaceLiveSocket)
+{
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::UniqueFd first =
+    rmw_mdds_cpp::ipc::ListenUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(first) << error;
+
+  rmw_mdds_cpp::ipc::UniqueFd first_client =
+    rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(first_client) << error;
+  rmw_mdds_cpp::ipc::UniqueFd first_server =
+    rmw_mdds_cpp::ipc::AcceptUnixSocket(first.get(), &error);
+  ASSERT_TRUE(first_server) << error;
+
+  error.clear();
+  rmw_mdds_cpp::ipc::UniqueFd second =
+    rmw_mdds_cpp::ipc::ListenUnixSocket(socket_path.path(), &error);
+  ASSERT_FALSE(second) << "a second listener must not steal a live broker socket";
+  ASSERT_NE(std::string::npos, error.find("active listener")) << error;
+
+  rmw_mdds_cpp::ipc::UniqueFd next_client =
+    rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(next_client) << error;
+  rmw_mdds_cpp::ipc::UniqueFd next_server =
+    rmw_mdds_cpp::ipc::AcceptUnixSocket(first.get(), &error);
+  ASSERT_TRUE(next_server) << error;
+}
+
 TEST(RmwMddsIpcTransport, ReadFrameReportsClosedPeerAndMalformedFrame)
 {
   int fds[2] = {-1, -1};

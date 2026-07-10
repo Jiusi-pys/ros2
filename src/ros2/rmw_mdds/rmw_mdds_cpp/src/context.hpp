@@ -15,6 +15,7 @@
 #ifndef RMW_MDDS_CPP_SRC__CONTEXT_HPP_
 #define RMW_MDDS_CPP_SRC__CONTEXT_HPP_
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -97,6 +98,12 @@ struct ServiceResponseSample
   std::vector<uint8_t> payload;
 };
 
+struct ServiceRequestIdentity
+{
+  int64_t sequence_number = 0;
+  std::array<uint8_t, RMW_GID_STORAGE_SIZE> writer_guid{};
+};
+
 enum class ServiceMessageMembersKind
 {
   None,
@@ -128,6 +135,8 @@ struct ServiceData
   const void * request_callback_user_data = nullptr;
   std::mutex mutex;
   std::deque<ServiceRequestSample> requests;
+  std::deque<ServiceRequestIdentity> recent_request_identities;
+  uint64_t next_response_sequence_number = 1u;
   void * bridge_request_subscription = nullptr;
   void * bridge_response_publisher = nullptr;
   void * broker_client = nullptr;
@@ -145,6 +154,7 @@ struct ClientData
   size_t response_size;
   ServiceMessageTypeInfo request_type;
   ServiceMessageTypeInfo response_type;
+  uint64_t entity_id = 0u;
   int64_t next_sequence_id;
   rmw_qos_profile_t actual_qos;
   rmw_event_callback_t response_callback = nullptr;

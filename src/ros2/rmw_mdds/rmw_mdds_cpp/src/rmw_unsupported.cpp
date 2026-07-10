@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 #include "bridge_backend.hpp"
 #include "broker.hpp"
@@ -79,6 +81,7 @@ namespace {
 std::mutex g_service_graph_mutex;
 std::vector<rmw_mdds_cpp::ServiceData *> g_services;
 std::vector<rmw_mdds_cpp::ClientData *> g_clients;
+std::atomic<uint64_t> g_next_client_entity_nonce{1u};
 
 struct ServiceTypeInfo {
   std::string type_name;
@@ -901,13 +904,45 @@ bool HasMatchingService(const rmw_mdds_cpp::ClientData *client) {
                      });
 }
 
+uint64_t MixClientEntityId(uint64_t value) {
+  value += 0x9e3779b97f4a7c15ull;
+  value = (value ^ (value >> 30u)) * 0xbf58476d1ce4e5b9ull;
+  value = (value ^ (value >> 27u)) * 0x94d049bb133111ebull;
+  value ^= value >> 31u;
+  return value == 0u ? 1u : value;
+}
+
+uint64_t ProcessPointerClientEntityId(const void *client) {
+  uint64_t value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(client));
+  value ^= static_cast<uint64_t>(getpid()) << 32u;
+  return MixClientEntityId(value);
+}
+
+uint64_t AllocateClientEntityId(const void *client) {
+  uint64_t value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(client));
+  value ^= static_cast<uint64_t>(getpid()) << 32u;
+  value ^= static_cast<uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  value ^= g_next_client_entity_nonce.fetch_add(1u, std::memory_order_relaxed) *
+           0x9e3779b97f4a7c15ull;
+  return MixClientEntityId(value);
+}
+
+uint64_t ClientEntityId(const rmw_mdds_cpp::ClientData *client) {
+  if (client == nullptr) {
+    return 0u;
+  }
+  return client->entity_id != 0u ? client->entity_id
+                                 : ProcessPointerClientEntityId(client);
+}
+
 void FillClientGuid(const rmw_mdds_cpp::ClientData *client,
                     uint8_t guid[RMW_GID_STORAGE_SIZE]) {
   std::memset(guid, 0, RMW_GID_STORAGE_SIZE);
-  const uintptr_t address = reinterpret_cast<uintptr_t>(client);
-  std::memcpy(
-      guid, &address,
-      std::min(sizeof(address), static_cast<size_t>(RMW_GID_STORAGE_SIZE)));
+  const uint64_t entity_id = ClientEntityId(client);
+  std::memcpy(guid, &entity_id,
+              std::min(sizeof(entity_id),
+                       static_cast<size_t>(RMW_GID_STORAGE_SIZE)));
 }
 
 bool ClientMatchesGuid(const rmw_mdds_cpp::ClientData *client,
@@ -1778,6 +1813,29 @@ void EnqueueServiceRequest(rmw_mdds_cpp::ServiceData *service,
   EventCallbackInvocation callback;
   {
     std::lock_guard<std::mutex> lock(service->mutex);
+    constexpr size_t kRecentServiceRequestIdentityLimit = 4096u;
+    const auto duplicate = std::find_if(
+        service->recent_request_identities.begin(),
+        service->recent_request_identities.end(),
+        [&sample](const rmw_mdds_cpp::ServiceRequestIdentity &identity) {
+          return identity.sequence_number ==
+                     sample.info.request_id.sequence_number &&
+                 std::memcmp(identity.writer_guid.data(),
+                             sample.info.request_id.writer_guid,
+                             RMW_GID_STORAGE_SIZE) == 0;
+        });
+    if (duplicate != service->recent_request_identities.end()) {
+      return;
+    }
+    rmw_mdds_cpp::ServiceRequestIdentity identity;
+    identity.sequence_number = sample.info.request_id.sequence_number;
+    std::memcpy(identity.writer_guid.data(), sample.info.request_id.writer_guid,
+                RMW_GID_STORAGE_SIZE);
+    service->recent_request_identities.push_back(identity);
+    while (service->recent_request_identities.size() >
+           kRecentServiceRequestIdentityLimit) {
+      service->recent_request_identities.pop_front();
+    }
     sample.info.received_timestamp =
         ReceivedTimestampFor(sample.info.source_timestamp);
     service->requests.push_back(std::move(sample));
@@ -1785,6 +1843,15 @@ void EnqueueServiceRequest(rmw_mdds_cpp::ServiceData *service,
                                        service->request_callback_user_data, 1};
   }
   InvokeEventCallback(callback);
+}
+
+uint64_t ReserveServiceResponseSequenceNumber(
+    rmw_mdds_cpp::ServiceData *service) {
+  if (service == nullptr) {
+    return 0u;
+  }
+  std::lock_guard<std::mutex> lock(service->mutex);
+  return service->next_response_sequence_number++;
 }
 
 void EnqueueClientResponse(rmw_mdds_cpp::ClientData *client,
@@ -3094,6 +3161,7 @@ rmw_client_t *rmw_create_client(
   data->response_type = type_info.response_type;
   data->request_size = type_info.request_type.size;
   data->response_size = type_info.response_type.size;
+  data->entity_id = AllocateClientEntityId(data);
   data->next_sequence_id = 1;
   data->actual_qos =
       ResolveActualQosProfile(*qos_profile, rmw_qos_profile_services_default);
@@ -3493,8 +3561,7 @@ rmw_ret_t rmw_send_response(const rmw_service_t *service,
     RMW_SET_ERROR_MSG("send response argument is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  const auto *data =
-      static_cast<const rmw_mdds_cpp::ServiceData *>(service->data);
+  auto *data = static_cast<rmw_mdds_cpp::ServiceData *>(service->data);
   if (data == nullptr || data->response_size == 0) {
     RMW_SET_ERROR_MSG("service response type support is invalid");
     return RMW_RET_ERROR;
@@ -3517,9 +3584,11 @@ rmw_ret_t rmw_send_response(const rmw_service_t *service,
       return RMW_RET_ERROR;
     }
     std::string error;
+    const uint64_t publication_sequence_number =
+        ReserveServiceResponseSequenceNumber(data);
     if (!rmw_mdds_cpp::BrokerClientPublish(
-            data->broker_client, wire_payload,
-            static_cast<uint64_t>(request_header->sequence_number), &error)) {
+            data->broker_client, wire_payload, publication_sequence_number,
+            &error)) {
       RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
           "failed to publish broker service response: %s", error.c_str());
       return RMW_RET_ERROR;
@@ -3783,6 +3852,22 @@ rmw_get_topic_names_and_types(const rmw_node_t *node,
                               rcutils_allocator_t *allocator, bool no_demangle,
                               rmw_names_and_types_t *topic_names_and_types) {
   (void)no_demangle;
+  rmw_ret_t ret = CheckNode(node);
+  if (ret != RMW_RET_OK) {
+    return ret;
+  }
+  if (allocator == nullptr || topic_names_and_types == nullptr) {
+    RMW_SET_ERROR_MSG("names and types argument is null");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!rcutils_allocator_is_valid(allocator)) {
+    RMW_SET_ERROR_MSG("names and types allocator is invalid");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  ret = rmw_names_and_types_check_zero(topic_names_and_types);
+  if (ret != RMW_RET_OK) {
+    return RMW_RET_INVALID_ARGUMENT;
+  }
   return InitNamesAndTypes(
       node, allocator, topic_names_and_types,
       rmw_mdds_cpp::BrokerModeEnabled()
@@ -3793,6 +3878,22 @@ rmw_get_topic_names_and_types(const rmw_node_t *node,
 rmw_ret_t rmw_get_service_names_and_types(
     const rmw_node_t *node, rcutils_allocator_t *allocator,
     rmw_names_and_types_t *service_names_and_types) {
+  rmw_ret_t ret = CheckNode(node);
+  if (ret != RMW_RET_OK) {
+    return ret;
+  }
+  if (allocator == nullptr || service_names_and_types == nullptr) {
+    RMW_SET_ERROR_MSG("names and types argument is null");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!rcutils_allocator_is_valid(allocator)) {
+    RMW_SET_ERROR_MSG("names and types allocator is invalid");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  ret = rmw_names_and_types_check_zero(service_names_and_types);
+  if (ret != RMW_RET_OK) {
+    return RMW_RET_INVALID_ARGUMENT;
+  }
   return InitNamesAndTypes(
       node, allocator, service_names_and_types,
       rmw_mdds_cpp::BrokerModeEnabled()
@@ -3965,9 +4066,17 @@ rmw_ret_t rmw_service_server_is_available(const rmw_node_t *node,
   }
   const auto *client_data =
       static_cast<const rmw_mdds_cpp::ClientData *>(client->data);
-  *is_available = HasMatchingService(client_data) ||
-                  (rmw_mdds_cpp::BrokerModeEnabled() &&
-                   rmw_mdds_cpp::BrokerGraphHasMatchingService(client_data));
+  const bool local_available = HasMatchingService(client_data);
+  if (!rmw_mdds_cpp::BrokerModeEnabled()) {
+    *is_available = local_available;
+    return RMW_RET_OK;
+  }
+  const bool broker_available =
+      rmw_mdds_cpp::BrokerGraphHasMatchingService(client_data);
+  const bool local_only_fallback =
+      client_data != nullptr && client_data->broker_client == nullptr &&
+      local_available;
+  *is_available = broker_available || local_only_fallback;
   return RMW_RET_OK;
 }
 
@@ -3990,13 +4099,29 @@ rmw_ret_t rmw_get_publishers_info_by_topic(
     const char *topic_name, bool no_mangle,
     rmw_topic_endpoint_info_array_t *publishers_info) {
   (void)no_mangle;
+  rmw_ret_t ret = CheckNode(node);
+  if (ret != RMW_RET_OK) {
+    return ret;
+  }
   if (topic_name == nullptr) {
     RMW_SET_ERROR_MSG("topic name is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  rmw_ret_t ret = ValidateFullyQualifiedName(topic_name, "topic name");
+  ret = ValidateFullyQualifiedName(topic_name, "topic name");
   if (ret != RMW_RET_OK) {
     return ret;
+  }
+  if (allocator == nullptr || publishers_info == nullptr) {
+    RMW_SET_ERROR_MSG("topic endpoint info argument is null");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!rcutils_allocator_is_valid(allocator)) {
+    RMW_SET_ERROR_MSG("topic endpoint info allocator is invalid");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  ret = rmw_topic_endpoint_info_array_check_zero(publishers_info);
+  if (ret != RMW_RET_OK) {
+    return RMW_RET_INVALID_ARGUMENT;
   }
   return InitTopicEndpointInfoArray(
       node, allocator,
@@ -4012,13 +4137,29 @@ rmw_ret_t rmw_get_subscriptions_info_by_topic(
     const char *topic_name, bool no_mangle,
     rmw_topic_endpoint_info_array_t *subscriptions_info) {
   (void)no_mangle;
+  rmw_ret_t ret = CheckNode(node);
+  if (ret != RMW_RET_OK) {
+    return ret;
+  }
   if (topic_name == nullptr) {
     RMW_SET_ERROR_MSG("topic name is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  rmw_ret_t ret = ValidateFullyQualifiedName(topic_name, "topic name");
+  ret = ValidateFullyQualifiedName(topic_name, "topic name");
   if (ret != RMW_RET_OK) {
     return ret;
+  }
+  if (allocator == nullptr || subscriptions_info == nullptr) {
+    RMW_SET_ERROR_MSG("topic endpoint info argument is null");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (!rcutils_allocator_is_valid(allocator)) {
+    RMW_SET_ERROR_MSG("topic endpoint info allocator is invalid");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  ret = rmw_topic_endpoint_info_array_check_zero(subscriptions_info);
+  if (ret != RMW_RET_OK) {
+    return RMW_RET_INVALID_ARGUMENT;
   }
   return InitTopicEndpointInfoArray(
       node, allocator,

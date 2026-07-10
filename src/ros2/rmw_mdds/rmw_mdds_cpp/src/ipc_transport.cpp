@@ -15,6 +15,7 @@
 #include "ipc_transport.hpp"
 
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -31,6 +32,8 @@ namespace ipc
 {
 namespace
 {
+constexpr int kUnixSocketListenBacklog = 128;
+
 void SetError(std::string * error, const std::string & message)
 {
   if (error != nullptr) {
@@ -63,6 +66,32 @@ bool FillSockaddr(const std::string & path, sockaddr_un * addr, socklen_t * leng
   std::memcpy(addr->sun_path, path.c_str(), path.size() + 1u);
   *length = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + path.size() + 1u);
   return true;
+}
+
+bool ConnectExistingSocket(const sockaddr_un & addr, socklen_t length, bool * connected, std::string * error)
+{
+  if (connected == nullptr) {
+    SetError(error, "connected output is null");
+    return false;
+  }
+  *connected = false;
+
+  UniqueFd probe(socket(AF_UNIX, SOCK_STREAM, 0));
+  if (!probe) {
+    SetError(error, ErrnoMessage("socket probe failed"));
+    return false;
+  }
+
+  for (;;) {
+    if (connect(probe.get(), reinterpret_cast<const sockaddr *>(&addr), length) == 0) {
+      *connected = true;
+      return true;
+    }
+    if (errno == EINTR) {
+      continue;
+    }
+    return true;
+  }
 }
 
 bool ReadPayloadSize(const uint8_t * header, uint32_t * payload_size)
@@ -187,15 +216,37 @@ UniqueFd ListenUnixSocket(const std::string & path, std::string * error)
     return UniqueFd();
   }
 
-  if (unlink(path.c_str()) != 0 && errno != ENOENT) {
-    SetError(error, ErrnoMessage("unlink stale socket failed"));
-    return UniqueFd();
-  }
   if (bind(fd.get(), reinterpret_cast<const sockaddr *>(&addr), length) != 0) {
-    SetError(error, ErrnoMessage("bind failed"));
-    return UniqueFd();
+    const int bind_errno = errno;
+    if (bind_errno != EADDRINUSE) {
+      SetError(error, std::string("bind failed: ") + std::strerror(bind_errno));
+      return UniqueFd();
+    }
+
+    bool active_listener = false;
+    if (!ConnectExistingSocket(addr, length, &active_listener, error)) {
+      return UniqueFd();
+    }
+    if (active_listener) {
+      SetError(error, "socket path already has an active listener");
+      return UniqueFd();
+    }
+
+    struct stat st;
+    if (lstat(path.c_str(), &st) == 0 && !S_ISSOCK(st.st_mode)) {
+      SetError(error, "socket path already exists and is not a socket");
+      return UniqueFd();
+    }
+    if (unlink(path.c_str()) != 0 && errno != ENOENT) {
+      SetError(error, ErrnoMessage("unlink stale socket failed"));
+      return UniqueFd();
+    }
+    if (bind(fd.get(), reinterpret_cast<const sockaddr *>(&addr), length) != 0) {
+      SetError(error, ErrnoMessage("bind retry failed"));
+      return UniqueFd();
+    }
   }
-  if (listen(fd.get(), 16) != 0) {
+  if (listen(fd.get(), kUnixSocketListenBacklog) != 0) {
     SetError(error, ErrnoMessage("listen failed"));
     return UniqueFd();
   }

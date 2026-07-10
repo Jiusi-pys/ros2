@@ -14,11 +14,16 @@
 
 #include "ipc_client.hpp"
 
+#include <dlfcn.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -44,13 +49,15 @@ namespace rmw_mdds_cpp {
 namespace {
 constexpr uint64_t kRegisterRequestId = 1u;
 constexpr std::chrono::milliseconds kGraphCacheWarmupTimeout{6500};
-constexpr std::chrono::milliseconds kGraphCacheSettleWindow{3500};
+constexpr std::chrono::milliseconds kGraphCacheSettleWindow{100};
 constexpr std::chrono::seconds kGraphCacheFreshWindow{5};
 constexpr const char *kRemoteNodeSyncTopic = "_mdds_remote_node";
 std::mutex g_graph_mutex;
 std::vector<ipc::EndpointDescriptor> g_graph_endpoints;
 std::chrono::steady_clock::time_point g_graph_cache_last_update;
 std::chrono::steady_clock::time_point g_graph_cache_last_refresh;
+uint64_t g_graph_cache_broker_id = 0u;
+uint64_t g_graph_cache_epoch = 0u;
 std::mutex g_auto_broker_mutex;
 std::unique_ptr<ipc::IpcBroker> g_auto_broker;
 // Process-wide count of live rmw contexts, guarded by g_auto_broker_mutex. The
@@ -162,7 +169,8 @@ MakeSubscriptionEndpoint(SubscriptionData *subscription) {
 
 ipc::EndpointDescriptor MakeClientEndpoint(ClientData *client) {
   ipc::EndpointDescriptor endpoint;
-  endpoint.entity_id = EntityIdFromPointer(client);
+  endpoint.entity_id =
+      client->entity_id != 0u ? client->entity_id : EntityIdFromPointer(client);
   endpoint.local_context_id = LocalContextId(client->context);
   endpoint.domain_id = DomainIdFromContext(client->context);
   endpoint.kind = ipc::EndpointKind::kClient;
@@ -217,29 +225,16 @@ bool RegistrationKindForEndpoint(ipc::EndpointKind endpoint_kind,
   return false;
 }
 
-void UpdateGraphCache(std::vector<ipc::EndpointDescriptor> endpoints,
-                      bool from_explicit_refresh = false) {
-  const size_t endpoint_count = endpoints.size();
-  const bool has_non_synthetic_endpoint = std::any_of(
-      endpoints.begin(), endpoints.end(), [](const ipc::EndpointDescriptor &endpoint) {
-        return endpoint.topic_name != kRemoteNodeSyncTopic;
-      });
-  std::lock_guard<std::mutex> lock(g_graph_mutex);
-  g_graph_endpoints = std::move(endpoints);
-  g_graph_cache_last_update = std::chrono::steady_clock::now();
-  if (from_explicit_refresh) {
-    g_graph_cache_last_refresh = g_graph_cache_last_update;
-  }
-  if (GraphDebugEnabled()) {
-    std::fprintf(stderr,
-                 "[rmw_mdds_graph] client cache update endpoints=%zu "
-                 "has_non_synthetic=%d\n",
-                 endpoint_count, has_non_synthetic_endpoint ? 1 : 0);
-  }
-}
-
 void ClearGraphCache() {
   std::lock_guard<std::mutex> lock(g_graph_mutex);
+  if (GraphDebugEnabled()) {
+    std::fprintf(stderr,
+                 "[rmw_mdds_graph] client cache clear endpoints=%zu "
+                 "broker_id=%llu epoch=%llu\n",
+                 g_graph_endpoints.size(),
+                 static_cast<unsigned long long>(g_graph_cache_broker_id),
+                 static_cast<unsigned long long>(g_graph_cache_epoch));
+  }
   g_graph_endpoints.clear();
   g_graph_cache_last_update = std::chrono::steady_clock::time_point{};
   g_graph_cache_last_refresh = std::chrono::steady_clock::time_point{};
@@ -252,10 +247,7 @@ bool GraphCacheFresh() {
           kGraphCacheFreshWindow) {
     return false;
   }
-  return std::any_of(g_graph_endpoints.begin(), g_graph_endpoints.end(),
-                     [](const ipc::EndpointDescriptor &endpoint) {
-                       return endpoint.topic_name != kRemoteNodeSyncTopic;
-                     });
+  return true;
 }
 
 bool GraphEndpointsContainNonSyntheticEndpoint(
@@ -266,10 +258,63 @@ bool GraphEndpointsContainNonSyntheticEndpoint(
                      });
 }
 
+bool UpdateGraphCache(std::vector<ipc::EndpointDescriptor> endpoints,
+                      uint64_t broker_id, uint64_t epoch,
+                      bool from_explicit_refresh = false) {
+  const size_t endpoint_count = endpoints.size();
+  const bool has_non_synthetic_endpoint =
+      GraphEndpointsContainNonSyntheticEndpoint(endpoints);
+  std::lock_guard<std::mutex> lock(g_graph_mutex);
+  const auto now = std::chrono::steady_clock::now();
+  if (epoch != 0u && g_graph_cache_broker_id == broker_id &&
+      g_graph_cache_epoch != 0u && epoch <= g_graph_cache_epoch) {
+    if (from_explicit_refresh) {
+      g_graph_cache_last_refresh = now;
+    }
+    if (GraphDebugEnabled()) {
+      std::fprintf(
+          stderr,
+          "[rmw_mdds_graph] client cache stale drop broker_id=%llu "
+          "epoch=%llu current_broker=%llu current_epoch=%llu endpoints=%zu\n",
+          static_cast<unsigned long long>(broker_id),
+          static_cast<unsigned long long>(epoch),
+          static_cast<unsigned long long>(g_graph_cache_broker_id),
+          static_cast<unsigned long long>(g_graph_cache_epoch), endpoint_count);
+    }
+    return from_explicit_refresh;
+  }
+  g_graph_endpoints = std::move(endpoints);
+  g_graph_cache_last_update = now;
+  if (from_explicit_refresh) {
+    g_graph_cache_last_refresh = g_graph_cache_last_update;
+  }
+  if (epoch != 0u) {
+    g_graph_cache_broker_id = broker_id;
+    g_graph_cache_epoch = epoch;
+  }
+  if (GraphDebugEnabled()) {
+    std::fprintf(
+        stderr,
+        "[rmw_mdds_graph] client cache update broker_id=%llu epoch=%llu "
+        "endpoints=%zu has_non_synthetic=%d\n",
+        static_cast<unsigned long long>(broker_id),
+        static_cast<unsigned long long>(epoch), endpoint_count,
+        has_non_synthetic_endpoint ? 1 : 0);
+  }
+  return true;
+}
+
+bool UpdateGraphCache(ipc::GraphUpdateMessage update,
+                      bool from_explicit_refresh = false) {
+  return UpdateGraphCache(std::move(update.endpoints), update.broker_id,
+                          update.epoch, from_explicit_refresh);
+}
+
 void RefreshGraphCacheFromBroker() {
   if (!BrokerModeEnabled() || GraphCacheFresh()) {
     if (GraphDebugEnabled()) {
-      std::fprintf(stderr, "[rmw_mdds_graph] client refresh skip broker_or_fresh\n");
+      std::fprintf(stderr,
+                   "[rmw_mdds_graph] client refresh skip broker_or_fresh\n");
     }
     return;
   }
@@ -278,7 +323,9 @@ void RefreshGraphCacheFromBroker() {
   std::string error;
   if (!ConnectBrokerSocketWithAutoStart(BrokerSocketPath(), &fd, &error)) {
     if (GraphDebugEnabled()) {
-      std::fprintf(stderr, "[rmw_mdds_graph] client refresh connect fail error=%s\n", error.c_str());
+      std::fprintf(stderr,
+                   "[rmw_mdds_graph] client refresh connect fail error=%s\n",
+                   error.c_str());
     }
     return;
   }
@@ -289,23 +336,25 @@ void RefreshGraphCacheFromBroker() {
   const auto deadline =
       std::chrono::steady_clock::now() + kGraphCacheWarmupTimeout;
   bool saw_non_synthetic_update = false;
+  bool saw_accepted_update = false;
   auto settle_deadline = deadline;
   while (std::chrono::steady_clock::now() < deadline) {
     const auto now = std::chrono::steady_clock::now();
-    const auto wait_deadline =
-        saw_non_synthetic_update ? std::min(deadline, settle_deadline) : deadline;
+    const auto wait_deadline = (saw_non_synthetic_update || saw_accepted_update)
+                                   ? std::min(deadline, settle_deadline)
+                                   : deadline;
     if (now >= wait_deadline) {
       if (GraphDebugEnabled()) {
-        std::fprintf(
-            stderr,
-            "[rmw_mdds_graph] client refresh settle complete saw_non_synthetic=%d\n",
-            saw_non_synthetic_update ? 1 : 0);
+        std::fprintf(stderr,
+                     "[rmw_mdds_graph] client refresh settle complete "
+                     "saw_non_synthetic=%d\n",
+                     saw_non_synthetic_update ? 1 : 0);
       }
       return;
     }
     const auto remaining =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            wait_deadline - now);
+        std::chrono::duration_cast<std::chrono::milliseconds>(wait_deadline -
+                                                              now);
     pollfd pfd;
     pfd.fd = fd.get();
     pfd.events = POLLIN;
@@ -318,7 +367,8 @@ void RefreshGraphCacheFromBroker() {
     if (ready <= 0 || (pfd.revents & POLLIN) == 0) {
       if (saw_non_synthetic_update) {
         if (GraphDebugEnabled()) {
-          std::fprintf(stderr, "[rmw_mdds_graph] client refresh poll settle timeout\n");
+          std::fprintf(stderr,
+                       "[rmw_mdds_graph] client refresh poll settle timeout\n");
         }
         return;
       }
@@ -328,42 +378,54 @@ void RefreshGraphCacheFromBroker() {
     ipc::Frame frame;
     if (ipc::ReadFrame(fd.get(), &frame, &error) != ipc::ReadFrameStatus::kOk) {
       if (GraphDebugEnabled()) {
-        std::fprintf(stderr, "[rmw_mdds_graph] client refresh read fail error=%s\n", error.c_str());
+        std::fprintf(stderr,
+                     "[rmw_mdds_graph] client refresh read fail error=%s\n",
+                     error.c_str());
       }
       return;
     }
     if (frame.kind != ipc::MessageKind::kGraphUpdate) {
       if (GraphDebugEnabled()) {
         std::fprintf(
-            stderr, "[rmw_mdds_graph] client refresh ignore frame kind=%u bytes=%zu\n",
+            stderr,
+            "[rmw_mdds_graph] client refresh ignore frame kind=%u bytes=%zu\n",
             static_cast<unsigned>(frame.kind), frame.payload.size());
       }
       continue;
     }
 
-    std::vector<ipc::EndpointDescriptor> endpoints;
+    ipc::GraphUpdateMessage update;
     std::string decode_error;
-    if (ipc::DecodeEndpointList(frame.payload.data(), frame.payload.size(),
-                                &endpoints, &decode_error)) {
+    if (ipc::DecodeGraphUpdate(frame.payload.data(), frame.payload.size(),
+                               &update, &decode_error)) {
       const bool has_non_synthetic_endpoint =
-          GraphEndpointsContainNonSyntheticEndpoint(endpoints);
+          GraphEndpointsContainNonSyntheticEndpoint(update.endpoints);
       if (GraphDebugEnabled()) {
         std::fprintf(
             stderr,
-            "[rmw_mdds_graph] client refresh graph frame endpoints=%zu "
-            "has_non_synthetic=%d bytes=%zu\n",
-            endpoints.size(), has_non_synthetic_endpoint ? 1 : 0,
+            "[rmw_mdds_graph] client refresh graph frame broker_id=%llu "
+            "epoch=%llu endpoints=%zu has_non_synthetic=%d bytes=%zu\n",
+            static_cast<unsigned long long>(update.broker_id),
+            static_cast<unsigned long long>(update.epoch),
+            update.endpoints.size(), has_non_synthetic_endpoint ? 1 : 0,
             frame.payload.size());
       }
-      UpdateGraphCache(std::move(endpoints), true);
-      if (has_non_synthetic_endpoint) {
+      const bool accepted = UpdateGraphCache(std::move(update), true);
+      if (accepted) {
+        saw_accepted_update = true;
+      }
+      if (accepted && has_non_synthetic_endpoint) {
         saw_non_synthetic_update = true;
+        settle_deadline =
+            std::chrono::steady_clock::now() + kGraphCacheSettleWindow;
+      } else if (accepted) {
         settle_deadline =
             std::chrono::steady_clock::now() + kGraphCacheSettleWindow;
       }
     } else if (GraphDebugEnabled()) {
       std::fprintf(
-          stderr, "[rmw_mdds_graph] client refresh decode fail bytes=%zu error=%s\n",
+          stderr,
+          "[rmw_mdds_graph] client refresh decode fail bytes=%zu error=%s\n",
           frame.payload.size(), decode_error.c_str());
     }
   }
@@ -372,7 +434,8 @@ void RefreshGraphCacheFromBroker() {
   }
 }
 
-std::vector<ipc::EndpointDescriptor> GetGraphCacheSnapshot(bool refresh = true) {
+std::vector<ipc::EndpointDescriptor>
+GetGraphCacheSnapshot(bool refresh = true) {
   if (refresh) {
     RefreshGraphCacheFromBroker();
   }
@@ -388,10 +451,11 @@ bool EndpointMatchesNameAndType(const ipc::EndpointDescriptor &endpoint,
           endpoint.type_name == type);
 }
 
-size_t CountGraphEndpoints(const rmw_context_t *context,
-                           ipc::EndpointKind kind, const std::string &name,
-                           const std::string &type = {}) {
-  const auto endpoints = GetGraphCacheSnapshot();
+size_t
+CountGraphEndpointsInList(const std::vector<ipc::EndpointDescriptor> &endpoints,
+                          const rmw_context_t *context, ipc::EndpointKind kind,
+                          const std::string &name,
+                          const std::string &type = {}) {
   const uint32_t domain_id = DomainIdFromContext(context);
   return static_cast<size_t>(std::count_if(
       endpoints.begin(), endpoints.end(),
@@ -400,6 +464,35 @@ size_t CountGraphEndpoints(const rmw_context_t *context,
                endpoint.kind == kind &&
                EndpointMatchesNameAndType(endpoint, name, type);
       }));
+}
+
+size_t CountGraphEndpoints(const rmw_context_t *context, ipc::EndpointKind kind,
+                           const std::string &name,
+                           const std::string &type = {}) {
+  const auto endpoints = GetGraphCacheSnapshot();
+  return CountGraphEndpointsInList(endpoints, context, kind, name, type);
+}
+
+size_t CountServiceAvailabilityEndpointsInList(
+    const std::vector<ipc::EndpointDescriptor> &endpoints,
+    const ClientData *client) {
+  if (client == nullptr || client->context == nullptr) {
+    return 0u;
+  }
+  const uint32_t domain_id = DomainIdFromContext(client->context);
+  return static_cast<size_t>(std::count_if(
+      endpoints.begin(), endpoints.end(), [domain_id, client](const auto &endpoint) {
+        return EndpointMatchesDomain(endpoint, domain_id) &&
+               endpoint.kind == ipc::EndpointKind::kService &&
+               endpoint.local_context_id != 0u &&
+               EndpointMatchesNameAndType(endpoint, client->service_name,
+                                          client->type_name);
+      }));
+}
+
+size_t CountCachedServiceAvailabilityEndpoints(const ClientData *client) {
+  const auto endpoints = GetGraphCacheSnapshot(false);
+  return CountServiceAvailabilityEndpointsInList(endpoints, client);
 }
 
 bool QosProfilesCompatible(const rmw_qos_profile_t &offered,
@@ -418,7 +511,8 @@ size_t CountCompatibleGraphPublishersForSubscription(
   return static_cast<size_t>(std::count_if(
       endpoints.begin(), endpoints.end(),
       [&subscription](const ipc::EndpointDescriptor &endpoint) {
-        return EndpointMatchesDomain(endpoint, DomainIdFromContext(subscription.context)) &&
+        return EndpointMatchesDomain(
+                   endpoint, DomainIdFromContext(subscription.context)) &&
                endpoint.kind == ipc::EndpointKind::kPublisher &&
                EndpointMatchesNameAndType(endpoint, subscription.topic_name,
                                           subscription.adapter.TypeName()) &&
@@ -432,7 +526,8 @@ size_t CountCompatibleGraphSubscriptionsForPublisher(
   return static_cast<size_t>(std::count_if(
       endpoints.begin(), endpoints.end(),
       [&publisher](const ipc::EndpointDescriptor &endpoint) {
-        return EndpointMatchesDomain(endpoint, DomainIdFromContext(publisher.context)) &&
+        return EndpointMatchesDomain(endpoint,
+                                     DomainIdFromContext(publisher.context)) &&
                endpoint.kind == ipc::EndpointKind::kSubscription &&
                EndpointMatchesNameAndType(endpoint, publisher.topic_name,
                                           publisher.adapter.TypeName()) &&
@@ -496,11 +591,9 @@ bool EndpointBelongsToNode(const ipc::EndpointDescriptor &endpoint,
          endpoint.node_namespace == node_namespace;
 }
 
-std::vector<NameAndTypes>
-CollectGraphNamesAndTypesForKind(ipc::EndpointKind kind,
-                                 const rmw_context_t *context,
-                                 const char *node_name = nullptr,
-                                 const char *node_namespace = nullptr) {
+std::vector<NameAndTypes> CollectGraphNamesAndTypesForKind(
+    ipc::EndpointKind kind, const rmw_context_t *context,
+    const char *node_name = nullptr, const char *node_namespace = nullptr) {
   std::vector<NameAndTypes> names_and_types;
   const auto endpoints = GetGraphCacheSnapshot();
   const uint32_t domain_id = DomainIdFromContext(context);
@@ -609,12 +702,270 @@ bool TryConnectBrokerSocket(const std::string &socket_path, ipc::UniqueFd *fd,
   return false;
 }
 
+std::string AutoBrokerStartLockPath(const std::string &socket_path) {
+  return socket_path + ".autostart.lockdir";
+}
+
+class ScopedPathLock {
+public:
+  ScopedPathLock() = default;
+  explicit ScopedPathLock(std::string path) : path_(std::move(path)) {}
+  ~ScopedPathLock() { Reset(); }
+
+  ScopedPathLock(const ScopedPathLock &) = delete;
+  ScopedPathLock &operator=(const ScopedPathLock &) = delete;
+
+  ScopedPathLock(ScopedPathLock &&other) noexcept
+      : path_(std::move(other.path_)) {
+    other.path_.clear();
+  }
+
+  ScopedPathLock &operator=(ScopedPathLock &&other) noexcept {
+    if (this != &other) {
+      Reset();
+      path_ = std::move(other.path_);
+      other.path_.clear();
+    }
+    return *this;
+  }
+
+  explicit operator bool() const { return !path_.empty(); }
+
+private:
+  void Reset() {
+    if (!path_.empty()) {
+      rmdir(path_.c_str());
+      path_.clear();
+    }
+  }
+
+  std::string path_;
+};
+
+ScopedPathLock AcquireAutoBrokerStartLock(const std::string &socket_path,
+                                          std::string *error) {
+  const std::string lock_path = AutoBrokerStartLockPath(socket_path);
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  for (;;) {
+    if (mkdir(lock_path.c_str(), 0755) == 0) {
+      return ScopedPathLock(lock_path);
+    }
+    const int saved_errno = errno;
+    if (saved_errno == EINTR) {
+      continue;
+    }
+    if (saved_errno == EEXIST) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        if (rmdir(lock_path.c_str()) == 0) {
+          deadline =
+              std::chrono::steady_clock::now() + std::chrono::seconds(10);
+          continue;
+        }
+        SetError(error, "timed out waiting for broker autostart lock");
+        return ScopedPathLock();
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+    SetError(error, std::string("failed to acquire broker autostart lock: ") +
+                        std::strerror(saved_errno));
+    return ScopedPathLock();
+  }
+}
+
+bool WaitForBrokerSocketReady(const std::string &socket_path,
+                              std::chrono::milliseconds timeout,
+                              std::string *error) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    ipc::UniqueFd ignored_fd;
+    if (TryConnectBrokerSocket(socket_path, &ignored_fd, error)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+[[maybe_unused]] std::string DirectoryName(const std::string &path) {
+  const size_t slash = path.find_last_of('/');
+  if (slash == std::string::npos) {
+    return ".";
+  }
+  if (slash == 0u) {
+    return "/";
+  }
+  return path.substr(0, slash);
+}
+
+bool IsExecutableFile(const std::string &path) {
+  return !path.empty() && access(path.c_str(), X_OK) == 0;
+}
+
+std::string ResolveExternalBrokerExecutable() {
+  const char *configured = std::getenv("RMW_MDDS_BROKER_EXECUTABLE");
+  if (configured != nullptr && configured[0] != '\0') {
+    return IsExecutableFile(configured) ? configured : std::string();
+  }
+
+#ifdef __OHOS__
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<void *>(&ResolveExternalBrokerExecutable),
+             &info) == 0 ||
+      info.dli_fname == nullptr || info.dli_fname[0] == '\0') {
+    return std::string();
+  }
+  const std::string library_dir = DirectoryName(info.dli_fname);
+  const std::string installed_broker =
+      library_dir + "/rmw_mdds_cpp/rmw_mdds_broker";
+  if (IsExecutableFile(installed_broker)) {
+    return installed_broker;
+  }
+  const std::string build_tree_broker = library_dir + "/rmw_mdds_broker";
+  if (IsExecutableFile(build_tree_broker)) {
+    return build_tree_broker;
+  }
+#endif
+  return std::string();
+}
+
+void RedirectBrokerChildStdio() {
+  const char *log_path = std::getenv("RMW_MDDS_BROKER_LOG");
+  const int out_fd =
+      (log_path != nullptr && log_path[0] != '\0')
+          ? open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0644)
+          : open("/dev/null", O_WRONLY);
+  if (out_fd >= 0) {
+    dup2(out_fd, STDOUT_FILENO);
+    dup2(out_fd, STDERR_FILENO);
+    if (out_fd > STDERR_FILENO) {
+      close(out_fd);
+    }
+  }
+  const int in_fd = open("/dev/null", O_RDONLY);
+  if (in_fd >= 0) {
+    dup2(in_fd, STDIN_FILENO);
+    if (in_fd > STDERR_FILENO) {
+      close(in_fd);
+    }
+  }
+}
+
+void WriteExternalBrokerPid(pid_t pid) {
+  const char *pid_path = std::getenv("RMW_MDDS_BROKER_PID_FILE");
+  if (pid_path == nullptr || pid_path[0] == '\0') {
+    return;
+  }
+  FILE *file = std::fopen(pid_path, "w");
+  if (file == nullptr) {
+    return;
+  }
+  std::fprintf(file, "%lld\n", static_cast<long long>(pid));
+  std::fclose(file);
+}
+
+pid_t StartExternalBrokerProcess(const std::string &broker_path,
+                                 const std::string &socket_path,
+                                 std::string *error) {
+  if (broker_path.empty()) {
+    SetError(error, "external broker executable is not configured or executable");
+    return -1;
+  }
+
+  const pid_t pid = fork();
+  if (pid < 0) {
+    SetError(error, "failed to fork external broker process");
+    return -1;
+  }
+  if (pid == 0) {
+    setsid();
+    RedirectBrokerChildStdio();
+    execl(broker_path.c_str(), broker_path.c_str(), "--socket",
+          socket_path.c_str(), static_cast<char *>(nullptr));
+    _exit(127);
+  }
+  WriteExternalBrokerPid(pid);
+  return pid;
+}
+
+std::string BrokerExitStatusMessage(int status) {
+  if (WIFEXITED(status)) {
+    return "external broker exited before socket became ready: exit=" +
+           std::to_string(WEXITSTATUS(status));
+  }
+  if (WIFSIGNALED(status)) {
+    return "external broker exited before socket became ready: signal=" +
+           std::to_string(WTERMSIG(status));
+  }
+  return "external broker exited before socket became ready";
+}
+
+bool WaitForExternalBrokerReady(const std::string &socket_path, pid_t pid,
+                                std::chrono::milliseconds timeout,
+                                std::string *error) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    ipc::UniqueFd ignored_fd;
+    if (TryConnectBrokerSocket(socket_path, &ignored_fd, error)) {
+      return true;
+    }
+    int status = 0;
+    const pid_t result = waitpid(pid, &status, WNOHANG);
+    if (result == pid) {
+      SetError(error, BrokerExitStatusMessage(status));
+      return false;
+    }
+    if (result < 0 && errno != ECHILD) {
+      SetError(error, std::string("failed to wait for external broker: ") +
+                          std::strerror(errno));
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  SetError(error, "timed out waiting for external broker socket");
+  return false;
+}
+
 bool EnsureAutoBrokerStarted(const std::string &socket_path,
                              std::string *error) {
   {
     std::lock_guard<std::mutex> lock(g_auto_broker_mutex);
     if (g_auto_broker != nullptr && g_auto_broker->IsRunning()) {
       return true;
+    }
+  }
+
+  ScopedPathLock autostart_lock =
+      AcquireAutoBrokerStartLock(socket_path, error);
+  if (!autostart_lock) {
+    return false;
+  }
+
+  ipc::UniqueFd existing_fd;
+  if (TryConnectBrokerSocket(socket_path, &existing_fd, nullptr)) {
+    return true;
+  }
+  if (access(socket_path.c_str(), F_OK) == 0 &&
+      WaitForBrokerSocketReady(socket_path, std::chrono::seconds(2), nullptr)) {
+    return true;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(g_auto_broker_mutex);
+    if (g_auto_broker != nullptr && g_auto_broker->IsRunning()) {
+      return true;
+    }
+    const std::string broker_path = ResolveExternalBrokerExecutable();
+    if (!broker_path.empty()) {
+      std::string external_error;
+      const pid_t external_pid =
+          StartExternalBrokerProcess(broker_path, socket_path, &external_error);
+      if (external_pid <= 0) {
+        SetError(error, external_error);
+        return false;
+      }
+      return WaitForExternalBrokerReady(socket_path, external_pid,
+                                        std::chrono::seconds(15), error);
     }
 
     auto broker = std::make_unique<ipc::IpcBroker>();
@@ -688,12 +1039,16 @@ public:
         return false;
       }
       if (ack.kind == ipc::MessageKind::kGraphUpdate) {
-        std::vector<ipc::EndpointDescriptor> endpoints;
+        ipc::GraphUpdateMessage update;
         std::string decode_error;
-        if (ipc::DecodeEndpointList(ack.payload.data(), ack.payload.size(),
-                                    &endpoints, &decode_error)) {
-          UpdateGraphCache(std::move(endpoints));
+        if (ipc::DecodeGraphUpdate(ack.payload.data(), ack.payload.size(),
+                                   &update, &decode_error)) {
+          UpdateGraphCache(std::move(update));
         }
+        continue;
+      }
+      if (ack.kind == ipc::MessageKind::kDeliverSample) {
+        pending_frames_.push_back(std::move(ack));
         continue;
       }
       break;
@@ -730,6 +1085,15 @@ public:
   }
 
   void Stop() {
+    bool clear_graph_after_reader_stops = false;
+    if (entity_id_ != 0u) {
+      if (GraphDebugEnabled()) {
+        std::fprintf(stderr, "[rmw_mdds_graph] client stop entity=%llu\n",
+                     static_cast<unsigned long long>(entity_id_));
+      }
+      entity_id_ = 0u;
+      clear_graph_after_reader_stops = true;
+    }
     running_.store(false);
     {
       std::lock_guard<std::mutex> lock(write_mutex_);
@@ -740,6 +1104,9 @@ public:
     }
     if (reader_thread_.joinable()) {
       reader_thread_.join();
+    }
+    if (clear_graph_after_reader_stops) {
+      ClearGraphCache();
     }
   }
 
@@ -763,7 +1130,51 @@ public:
   }
 
 private:
+  void HandleIncomingFrame(ipc::Frame frame) {
+    std::string error;
+    if (frame.kind == ipc::MessageKind::kGraphUpdate) {
+      ipc::GraphUpdateMessage update;
+      if (ipc::DecodeGraphUpdate(frame.payload.data(), frame.payload.size(),
+                                 &update, &error)) {
+        UpdateGraphCache(std::move(update));
+      }
+      return;
+    }
+    if (frame.kind != ipc::MessageKind::kDeliverSample) {
+      return;
+    }
+    ipc::SampleMessage sample;
+    if (!ipc::DecodeSampleMessage(frame.payload.data(), frame.payload.size(),
+                                  &sample, &error)) {
+      return;
+    }
+
+    if (subscription_ != nullptr) {
+      QueuedSample queued_sample;
+      queued_sample.payload = std::move(sample.payload);
+      queued_sample.info = rmw_get_zero_initialized_message_info();
+      queued_sample.info.publisher_gid.implementation_identifier =
+          rmw_mdds_cpp_identifier;
+      queued_sample.info.source_timestamp = NowNanoseconds();
+      queued_sample.info.publication_sequence_number = sample.sequence_number;
+      queued_sample.info.from_intra_process = false;
+      queued_sample.from_bridge = sample.mdds_payload;
+      EnqueueSample(subscription_, queued_sample);
+      return;
+    }
+    if (delivery_callback_ != nullptr) {
+      delivery_callback_(sample.payload, delivery_user_data_);
+    }
+  }
+
   void ReaderLoop() {
+    for (auto &frame : pending_frames_) {
+      if (!running_.load()) {
+        break;
+      }
+      HandleIncomingFrame(std::move(frame));
+    }
+    pending_frames_.clear();
     while (running_.load()) {
       ipc::Frame frame;
       std::string error;
@@ -772,39 +1183,7 @@ private:
       if (status != ipc::ReadFrameStatus::kOk) {
         break;
       }
-      if (frame.kind == ipc::MessageKind::kGraphUpdate) {
-        std::vector<ipc::EndpointDescriptor> endpoints;
-        if (ipc::DecodeEndpointList(frame.payload.data(), frame.payload.size(),
-                                    &endpoints, &error)) {
-          UpdateGraphCache(std::move(endpoints));
-        }
-        continue;
-      }
-      if (frame.kind != ipc::MessageKind::kDeliverSample) {
-        continue;
-      }
-      ipc::SampleMessage sample;
-      if (!ipc::DecodeSampleMessage(frame.payload.data(), frame.payload.size(),
-                                    &sample, &error)) {
-        continue;
-      }
-
-      if (subscription_ != nullptr) {
-        QueuedSample queued_sample;
-        queued_sample.payload = std::move(sample.payload);
-        queued_sample.info = rmw_get_zero_initialized_message_info();
-        queued_sample.info.publisher_gid.implementation_identifier =
-            rmw_mdds_cpp_identifier;
-        queued_sample.info.source_timestamp = NowNanoseconds();
-        queued_sample.info.publication_sequence_number = sample.sequence_number;
-        queued_sample.info.from_intra_process = false;
-        queued_sample.from_bridge = sample.mdds_payload;
-        EnqueueSample(subscription_, queued_sample);
-        continue;
-      }
-      if (delivery_callback_ != nullptr) {
-        delivery_callback_(sample.payload, delivery_user_data_);
-      }
+      HandleIncomingFrame(std::move(frame));
     }
   }
 
@@ -814,6 +1193,7 @@ private:
   std::atomic<bool> running_{false};
   uint64_t entity_id_ = 0u;
   uint64_t next_request_id_ = 2u;
+  std::vector<ipc::Frame> pending_frames_;
   SubscriptionData *subscription_ = nullptr;
   BrokerDeliveryCallback delivery_callback_ = nullptr;
   void *delivery_user_data_ = nullptr;
@@ -895,11 +1275,10 @@ std::string BrokerSocketPath() {
 }
 
 bool BrokerGraphHasMatchingService(const ClientData *client) {
-  if (client == nullptr) {
+  if (client == nullptr || client->context == nullptr) {
     return false;
   }
-  return CountGraphEndpoints(client->context, ipc::EndpointKind::kService,
-                             client->service_name, client->type_name) != 0u;
+  return CountCachedServiceAvailabilityEndpoints(client) != 0u;
 }
 
 size_t CountBrokerGraphPublishersByTopic(const rmw_context_t *context,
@@ -907,7 +1286,8 @@ size_t CountBrokerGraphPublishersByTopic(const rmw_context_t *context,
   if (topic_name == nullptr) {
     return 0u;
   }
-  return CountGraphEndpoints(context, ipc::EndpointKind::kPublisher, topic_name);
+  return CountGraphEndpoints(context, ipc::EndpointKind::kPublisher,
+                             topic_name);
 }
 
 size_t CountBrokerGraphSubscriptionsByTopic(const rmw_context_t *context,
@@ -915,7 +1295,8 @@ size_t CountBrokerGraphSubscriptionsByTopic(const rmw_context_t *context,
   if (topic_name == nullptr) {
     return 0u;
   }
-  return CountGraphEndpoints(context, ipc::EndpointKind::kSubscription, topic_name);
+  return CountGraphEndpoints(context, ipc::EndpointKind::kSubscription,
+                             topic_name);
 }
 
 size_t CountBrokerGraphPublishersForSubscription(
@@ -923,7 +1304,7 @@ size_t CountBrokerGraphPublishersForSubscription(
   if (subscription == nullptr) {
     return 0u;
   }
-  return CountCompatibleGraphPublishersForSubscription(GetGraphCacheSnapshot(false),
+  return CountCompatibleGraphPublishersForSubscription(GetGraphCacheSnapshot(),
                                                        *subscription);
 }
 
@@ -932,7 +1313,7 @@ CountBrokerGraphSubscriptionsForPublisher(const PublisherData *publisher) {
   if (publisher == nullptr) {
     return 0u;
   }
-  return CountCompatibleGraphSubscriptionsForPublisher(GetGraphCacheSnapshot(false),
+  return CountCompatibleGraphSubscriptionsForPublisher(GetGraphCacheSnapshot(),
                                                        *publisher);
 }
 
@@ -1000,17 +1381,19 @@ size_t CountBrokerGraphServicesByName(const rmw_context_t *context,
   if (service_name == nullptr) {
     return 0u;
   }
-  return CountGraphEndpoints(context, ipc::EndpointKind::kService, service_name);
+  return CountGraphEndpoints(context, ipc::EndpointKind::kService,
+                             service_name);
 }
 
-std::vector<NameAndTypes> GetBrokerGraphTopicNamesAndTypes(const rmw_context_t *context) {
+std::vector<NameAndTypes>
+GetBrokerGraphTopicNamesAndTypes(const rmw_context_t *context) {
   std::vector<NameAndTypes> names_and_types;
   const auto endpoints = GetGraphCacheSnapshot();
   const uint32_t domain_id = DomainIdFromContext(context);
   for (const auto &endpoint : endpoints) {
     if (EndpointMatchesDomain(endpoint, domain_id) &&
         (endpoint.kind == ipc::EndpointKind::kPublisher ||
-        endpoint.kind == ipc::EndpointKind::kSubscription)) {
+         endpoint.kind == ipc::EndpointKind::kSubscription)) {
       AddGraphNameAndType(&names_and_types, endpoint.topic_name,
                           endpoint.type_name);
     }
@@ -1034,7 +1417,8 @@ GetBrokerGraphSubscriptionNamesAndTypesByNode(const rmw_context_t *context,
                                           context, node_name, node_namespace);
 }
 
-std::vector<NameAndTypes> GetBrokerGraphServiceNamesAndTypes(const rmw_context_t *context) {
+std::vector<NameAndTypes>
+GetBrokerGraphServiceNamesAndTypes(const rmw_context_t *context) {
   return CollectGraphNamesAndTypesForKind(ipc::EndpointKind::kService, context);
 }
 
@@ -1042,8 +1426,8 @@ std::vector<NameAndTypes>
 GetBrokerGraphServiceNamesAndTypesByNode(const rmw_context_t *context,
                                          const char *node_name,
                                          const char *node_namespace) {
-  return CollectGraphNamesAndTypesForKind(ipc::EndpointKind::kService,
-                                          context, node_name, node_namespace);
+  return CollectGraphNamesAndTypesForKind(ipc::EndpointKind::kService, context,
+                                          node_name, node_namespace);
 }
 
 std::vector<NameAndTypes>
@@ -1069,16 +1453,17 @@ std::vector<NodeGraphInfo> GetBrokerGraphNodes(const rmw_context_t *context) {
 std::vector<TopicEndpointInfo>
 GetBrokerGraphPublisherEndpointInfosByTopic(const rmw_context_t *context,
                                             const char *topic_name) {
-  return CollectGraphEndpointInfosByTopic(
-      ipc::EndpointKind::kPublisher, topic_name, context, RMW_ENDPOINT_PUBLISHER, 0);
+  return CollectGraphEndpointInfosByTopic(ipc::EndpointKind::kPublisher,
+                                          topic_name, context,
+                                          RMW_ENDPOINT_PUBLISHER, 0);
 }
 
 std::vector<TopicEndpointInfo>
 GetBrokerGraphSubscriptionEndpointInfosByTopic(const rmw_context_t *context,
                                                const char *topic_name) {
   return CollectGraphEndpointInfosByTopic(ipc::EndpointKind::kSubscription,
-                                          topic_name, context, RMW_ENDPOINT_SUBSCRIPTION,
-                                          0x5a);
+                                          topic_name, context,
+                                          RMW_ENDPOINT_SUBSCRIPTION, 0x5a);
 }
 
 void *CreatePublisherBrokerClient(PublisherData *publisher,

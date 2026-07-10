@@ -13,12 +13,16 @@
 // limitations under the License.
 
 #include <signal.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cerrno>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -80,6 +84,7 @@ public:
     unlink(ServiceReadyPath().c_str());
     unlink(ClientReadyPath().c_str());
     unlink(ClientResultPath().c_str());
+    unlink(BrokerPidPath().c_str());
     rmdir(path_.c_str());
   }
 
@@ -97,8 +102,34 @@ public:
 
   std::string ClientResultPath() const { return path_ + "/client.result"; }
 
+  std::string BrokerPidPath() const { return path_ + "/broker.pid"; }
+
 private:
   std::string path_;
+};
+
+class EnvVarGuard {
+public:
+  explicit EnvVarGuard(const char *name) : name_(name) {
+    const char *value = std::getenv(name);
+    if (value != nullptr) {
+      had_value_ = true;
+      value_ = value;
+    }
+  }
+
+  ~EnvVarGuard() {
+    if (had_value_) {
+      setenv(name_.c_str(), value_.c_str(), 1);
+    } else {
+      unsetenv(name_.c_str());
+    }
+  }
+
+private:
+  std::string name_;
+  bool had_value_ = false;
+  std::string value_;
 };
 
 void SetBrokerEnvironment(const std::string &socket_path) {
@@ -183,6 +214,22 @@ int WaitForExit(pid_t pid, std::chrono::milliseconds timeout) {
   return -1;
 }
 
+bool TerminateNonChildProcess(pid_t pid, std::chrono::milliseconds timeout) {
+  if (pid <= 0) {
+    return false;
+  }
+  kill(pid, SIGTERM);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (kill(pid, 0) != 0 && errno == ESRCH) {
+      return true;
+    }
+    std::this_thread::sleep_for(10ms);
+  }
+  kill(pid, SIGKILL);
+  return kill(pid, 0) != 0 && errno == ESRCH;
+}
+
 bool ExitedWithZero(int status) {
   return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
@@ -221,12 +268,12 @@ bool RawBrokerGraphContainsPublisher(const std::string &socket_path,
     if (frame.kind != rmw_mdds_cpp::ipc::MessageKind::kGraphUpdate) {
       continue;
     }
-    std::vector<rmw_mdds_cpp::ipc::EndpointDescriptor> endpoints;
-    if (!rmw_mdds_cpp::ipc::DecodeEndpointList(
-            frame.payload.data(), frame.payload.size(), &endpoints, &error)) {
+    rmw_mdds_cpp::ipc::GraphUpdateMessage update;
+    if (!rmw_mdds_cpp::ipc::DecodeGraphUpdate(
+            frame.payload.data(), frame.payload.size(), &update, &error)) {
       return false;
     }
-    for (const auto &endpoint : endpoints) {
+    for (const auto &endpoint : update.endpoints) {
       if (endpoint.kind == rmw_mdds_cpp::ipc::EndpointKind::kPublisher &&
           endpoint.topic_name == topic && endpoint.type_name == type) {
         return true;
@@ -256,13 +303,14 @@ MakeGraphEndpoint(uint64_t entity_id, rmw_mdds_cpp::ipc::EndpointKind kind,
 
 bool WriteGraphUpdateFrame(
     int fd,
-    const std::vector<rmw_mdds_cpp::ipc::EndpointDescriptor> &endpoints) {
+    const std::vector<rmw_mdds_cpp::ipc::EndpointDescriptor> &endpoints,
+    uint64_t epoch = 1u) {
   std::string error;
   return rmw_mdds_cpp::ipc::WriteFrame(
       fd,
       rmw_mdds_cpp::ipc::Frame{
           rmw_mdds_cpp::ipc::MessageKind::kGraphUpdate, 0u,
-          rmw_mdds_cpp::ipc::EncodeEndpointList(endpoints)},
+          rmw_mdds_cpp::ipc::EncodeGraphUpdate(1u, epoch, endpoints)},
       &error);
 }
 
@@ -275,6 +323,65 @@ bool WaitForFile(const std::string &path, std::chrono::milliseconds timeout) {
     std::this_thread::sleep_for(10ms);
   }
   return false;
+}
+
+std::string ReadFile(const std::string &path) {
+  std::ifstream input(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(input),
+                     std::istreambuf_iterator<char>());
+}
+
+bool FileContains(const std::string &path, const std::string &needle) {
+  return ReadFile(path).find(needle) != std::string::npos;
+}
+
+bool IsDecimalString(const char *value) {
+  if (value == nullptr || value[0] == '\0') {
+    return false;
+  }
+  for (const char *cursor = value; *cursor != '\0'; ++cursor) {
+    if (!std::isdigit(static_cast<unsigned char>(*cursor))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::vector<pid_t> BrokerPidsForSocket(const std::string &socket_path) {
+  std::vector<pid_t> pids;
+  DIR *proc = opendir("/proc");
+  if (proc == nullptr) {
+    return pids;
+  }
+  while (dirent *entry = readdir(proc)) {
+    if (!IsDecimalString(entry->d_name)) {
+      continue;
+    }
+    const pid_t pid = static_cast<pid_t>(std::stol(entry->d_name));
+    const std::string cmdline_path =
+        std::string("/proc/") + entry->d_name + "/cmdline";
+    std::string cmdline = ReadFile(cmdline_path);
+    std::replace(cmdline.begin(), cmdline.end(), '\0', ' ');
+    if (cmdline.find("rmw_mdds_broker") != std::string::npos &&
+        cmdline.find(socket_path) != std::string::npos) {
+      pids.push_back(pid);
+    }
+  }
+  closedir(proc);
+  return pids;
+}
+
+void TerminateBrokerProcessesForSocket(const std::string &socket_path) {
+  for (pid_t pid : BrokerPidsForSocket(socket_path)) {
+    TerminateNonChildProcess(pid, 2s);
+  }
+}
+
+pid_t ReadPidFile(const std::string &path) {
+  std::ifstream input(path);
+  long long value = -1;
+  input >> value;
+  return static_cast<pid_t>(value);
 }
 
 bool NamesAndTypesContains(const rmw_names_and_types_t &names_and_types,
@@ -578,6 +685,71 @@ int RunDefaultPublisher(const std::string &socket_path,
   IgnoreRmwRet(rmw_context_fini(&context));
   IgnoreRmwRet(rmw_init_options_fini(&options));
   return ret;
+}
+
+int RunDefaultAutostartOwner(const std::string &socket_path,
+                             const std::string &ready_path,
+                             const std::string &topic) {
+  SetDefaultBrokerEnvironment(socket_path);
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  if (rmw_init_options_init(&options, allocator) != RMW_RET_OK) {
+    return 2;
+  }
+  SetEnclave(&options, "/rmw_mdds_default_autostart_owner");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  if (rmw_init(&options, &context) != RMW_RET_OK) {
+    IgnoreRmwRet(rmw_init_options_fini(&options));
+    return 3;
+  }
+  rmw_node_t *node =
+      rmw_create_node(&context, "mdds_default_autostart_owner", "/mdds");
+  if (node == nullptr) {
+    IgnoreRmwRet(rmw_shutdown(&context));
+    IgnoreRmwRet(rmw_context_fini(&context));
+    IgnoreRmwRet(rmw_init_options_fini(&options));
+    return 4;
+  }
+
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::String>();
+  rmw_publisher_options_t publisher_options =
+      rmw_get_default_publisher_options();
+  rmw_publisher_t *publisher =
+      rmw_create_publisher(node, type_support, topic.c_str(),
+                           &rmw_qos_profile_default, &publisher_options);
+  if (publisher == nullptr) {
+    IgnoreRmwRet(rmw_destroy_node(node));
+    IgnoreRmwRet(rmw_shutdown(&context));
+    IgnoreRmwRet(rmw_context_fini(&context));
+    IgnoreRmwRet(rmw_init_options_fini(&options));
+    return 5;
+  }
+
+  {
+    std::ofstream ready(ready_path);
+    ready << "ready\n";
+  }
+
+  IgnoreRmwRet(rmw_destroy_publisher(node, publisher));
+  IgnoreRmwRet(rmw_destroy_node(node));
+  IgnoreRmwRet(rmw_shutdown(&context));
+  IgnoreRmwRet(rmw_context_fini(&context));
+  IgnoreRmwRet(rmw_init_options_fini(&options));
+  return 0;
+}
+
+int RunDefaultAutostartOwnerAfterStart(const std::string &socket_path,
+                                       const std::string &ready_path,
+                                       const std::string &topic,
+                                       const std::string &start_path) {
+  if (!WaitForFile(start_path, 5s)) {
+    return 70;
+  }
+  return RunDefaultAutostartOwner(socket_path, ready_path, topic);
 }
 
 int RunSubscriber(const std::string &socket_path, const std::string &ready_path,
@@ -2228,6 +2400,146 @@ TEST(RmwMddsBrokerProcess,
   EXPECT_EQ(payload, received);
 }
 
+TEST(RmwMddsBrokerProcess, AutoStartedBrokerOutlivesStarterRmwProcess) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+  const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string topic = "/mdds_default_autostart_owner";
+
+  EnvVarGuard executable_guard("RMW_MDDS_BROKER_EXECUTABLE");
+  EnvVarGuard pid_guard("RMW_MDDS_BROKER_PID_FILE");
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_EXECUTABLE", broker.c_str(), 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_PID_FILE",
+                      temp_dir.BrokerPidPath().c_str(), 1));
+
+  const pid_t owner_pid =
+      SpawnProcess(self, {"--default-autostart-owner", temp_dir.SocketPath(),
+                          temp_dir.ReadyPath(), topic});
+  ASSERT_GT(owner_pid, 0);
+  ASSERT_TRUE(ExitedWithZero(WaitForExit(owner_pid, 4s)));
+  ASSERT_TRUE(WaitForFile(temp_dir.ReadyPath(), 2s));
+  ASSERT_TRUE(WaitForFile(temp_dir.BrokerPidPath(), 2s))
+      << "auto-start must use an external broker process, not an embedded "
+         "broker tied to the starter RMW process";
+
+  const pid_t broker_pid = ReadPidFile(temp_dir.BrokerPidPath());
+  ASSERT_GT(broker_pid, 0);
+  EXPECT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s))
+      << "auto-started broker socket must remain after the starter RMW process "
+         "has exited";
+
+  EXPECT_TRUE(TerminateNonChildProcess(broker_pid, 2s));
+}
+
+TEST(RmwMddsBrokerProcess, ConcurrentAutoStartSerializesExternalBrokerStart) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+  const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string topic = "/mdds_default_autostart_concurrent";
+  const std::string start_path = temp_dir.path() + "/start";
+  const std::string log_path = temp_dir.path() + "/broker.log";
+
+  EnvVarGuard executable_guard("RMW_MDDS_BROKER_EXECUTABLE");
+  EnvVarGuard pid_guard("RMW_MDDS_BROKER_PID_FILE");
+  EnvVarGuard log_guard("RMW_MDDS_BROKER_LOG");
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_EXECUTABLE", broker.c_str(), 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_PID_FILE",
+                      temp_dir.BrokerPidPath().c_str(), 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BROKER_LOG", log_path.c_str(), 1));
+
+  constexpr int kOwnerCount = 32;
+  std::vector<pid_t> owner_pids;
+  std::vector<std::string> ready_paths;
+  owner_pids.reserve(kOwnerCount);
+  ready_paths.reserve(kOwnerCount);
+  for (int i = 0; i < kOwnerCount; ++i) {
+    ready_paths.push_back(temp_dir.path() + "/owner_" + std::to_string(i) +
+                          ".ready");
+    const pid_t owner_pid = SpawnProcess(
+        self, {"--default-autostart-owner-after-start", temp_dir.SocketPath(),
+               ready_paths.back(), topic + "_" + std::to_string(i),
+               start_path});
+    ASSERT_GT(owner_pid, 0);
+    owner_pids.push_back(owner_pid);
+  }
+
+  {
+    std::ofstream start(start_path);
+    start << "start\n";
+  }
+
+  std::vector<int> owner_statuses;
+  owner_statuses.reserve(owner_pids.size());
+  for (pid_t owner_pid : owner_pids) {
+    owner_statuses.push_back(WaitForExit(owner_pid, 8s));
+  }
+  const bool socket_ready = WaitForBrokerSocket(temp_dir.SocketPath(), 2s);
+  const std::vector<pid_t> broker_pids =
+      BrokerPidsForSocket(temp_dir.SocketPath());
+  TerminateBrokerProcessesForSocket(temp_dir.SocketPath());
+
+  for (int status : owner_statuses) {
+    EXPECT_TRUE(ExitedWithZero(status)) << "owner exit status=" << status;
+  }
+  for (const std::string &ready_path : ready_paths) {
+    EXPECT_TRUE(FileExists(ready_path)) << "missing ready file " << ready_path;
+  }
+  EXPECT_TRUE(socket_ready);
+  EXPECT_LE(broker_pids.size(), 1u);
+  EXPECT_FALSE(FileContains(log_path, "active listener")) << ReadFile(log_path);
+  EXPECT_FALSE(FileContains(log_path, "Address in use")) << ReadFile(log_path);
+}
+
+TEST(RmwMddsBrokerProcess, ConcurrentDirectBrokerStartsLeaveSingleListener) {
+  const std::string self = CurrentExecutablePath(nullptr);
+  ASSERT_FALSE(self.empty());
+  const std::string broker = DirectoryName(self) + "/rmw_mdds_broker";
+  ASSERT_EQ(0, access(broker.c_str(), X_OK))
+      << "missing broker executable: " << broker;
+
+  TempDirectory temp_dir;
+  ASSERT_FALSE(temp_dir.path().empty());
+  const std::string start_path = temp_dir.path() + "/start";
+  const std::string command =
+      "while [ ! -f '" + start_path + "' ]; do sleep 0.01; done; exec '" +
+      broker + "' --socket '" + temp_dir.SocketPath() + "'";
+
+  constexpr int kBrokerCount = 32;
+  std::vector<pid_t> pids;
+  pids.reserve(kBrokerCount);
+  for (int i = 0; i < kBrokerCount; ++i) {
+    const pid_t pid = SpawnProcess("/bin/sh", {"-c", command});
+    ASSERT_GT(pid, 0);
+    pids.push_back(pid);
+  }
+
+  {
+    std::ofstream start(start_path);
+    start << "start\n";
+  }
+
+  EXPECT_TRUE(WaitForBrokerSocket(temp_dir.SocketPath(), 2s));
+  std::this_thread::sleep_for(300ms);
+  const std::vector<pid_t> broker_pids =
+      BrokerPidsForSocket(temp_dir.SocketPath());
+  TerminateBrokerProcessesForSocket(temp_dir.SocketPath());
+  for (pid_t pid : pids) {
+    (void)WaitForExit(pid, 2s);
+  }
+
+  EXPECT_LE(broker_pids.size(), 1u);
+}
+
 TEST(RmwMddsBrokerProcess, RoutesServiceCallsBetweenSeparateRmwProcesses) {
   const std::string self = CurrentExecutablePath(nullptr);
   ASSERT_FALSE(self.empty());
@@ -2460,11 +2772,12 @@ TEST(RmwMddsBrokerProcess, OneShotGraphRefreshWaitsForSettledSnapshot) {
       {MakeGraphEndpoint(1u, rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
                          "mdds_local_only_graph_pub",
                          "/mdds_broker_local_only_graph_string", type)}));
-  std::this_thread::sleep_for(100ms);
+  std::this_thread::sleep_for(10ms);
   ASSERT_TRUE(WriteGraphUpdateFrame(
       client.get(),
       {MakeGraphEndpoint(2u, rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
-                         "mdds_broker_settled_graph_pub", topic, type)}));
+                         "mdds_broker_settled_graph_pub", topic, type)},
+      2u));
 
   EXPECT_TRUE(ExitedWithZero(WaitForExit(observer_pid, 4s)));
 
@@ -2658,6 +2971,20 @@ int main(int argc, char **argv) {
       return 64;
     }
     return RunDefaultPublisher(argv[2], argv[3], argv[4]);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "--default-autostart-owner") == 0) {
+    if (argc != 5) {
+      return 64;
+    }
+    return RunDefaultAutostartOwner(argv[2], argv[3], argv[4]);
+  }
+  if (argc >= 2 &&
+      std::strcmp(argv[1], "--default-autostart-owner-after-start") == 0) {
+    if (argc != 6) {
+      return 64;
+    }
+    return RunDefaultAutostartOwnerAfterStart(argv[2], argv[3], argv[4],
+                                             argv[5]);
   }
   if (argc >= 2 && std::strcmp(argv[1], "--subscriber") == 0) {
     if (argc != 7) {

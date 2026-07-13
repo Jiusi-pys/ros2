@@ -717,7 +717,36 @@ as the exact 4MiB service blocker.
 - [x] 5.2 Inventory tracked status, keep intended work scoped, and remove or intentionally retain generated/scratch artifacts.
 - [x] 5.3 Validate all active OpenSpec changes with `openspec validate --strict`.
 - [x] 5.4 Decide whether accepted unsupported rows still satisfy the user's "perfect/all ROS 2 middleware features" objective.
-- [ ] 5.5 Mark the persistent goal complete only if every required row is proven or explicitly accepted out of scope and no required delivery work remains.
+- [x] 5.5 Mark the persistent goal complete only if every required row is proven or explicitly accepted out of scope and no required delivery work remains.
+
+2026-07-13 EDT / 2026-07-14 CST final Plan-A acceptance: current production RMW `f8f74a1b...`, broker
+`4437466b...`, bridge `12d87b68...`, and SoftBus client `e1771298...` match on both RK3588A boards. A valid-domain
+two-board sequential service soak passes 36,000/36,000 in 7349.758/7362.085 seconds with zero timeout/error and
+zero residual. The earlier domain-241 diagnostic is outside the accepted 0..232 range, is marked `REJECTED`, and
+is excluded from evidence; the runner now fails before launch for invalid domains or identical board arguments.
+
+The same hashes pass a time-driven four-client exact-wire 16 MiB service soak: all clients run at least 7208
+seconds, aggregate sent/ok/valid and server requests are 1,789/1,789, all four DONE acknowledgements and five
+worker return codes are valid, invalid/duplicate/send-error/timeout/error counters are zero, and both boards have
+zero worker/broker/socket residual. A short smoke first exposed an acceptance-parser false failure because
+`valid` matched `invalid`; an exact-key parser and RED contract made the rerun 21/21 PASS before the formal gate.
+
+Both boards now hard-gate 16/16 upstream programs, 129 assertions, and exactly six capability-conditional skips.
+The three subscription-loan skips pass 3/3 in direct mode; publisher/subscription allocation and serialized-size
+behavior pass 5/5 in the AArch64 capability supplement, all with zero skip. Fresh host package CTest is 24/24,
+the rmw_mdds upstream subset is 16/16, and the complete delivery umbrella reaches its final PASS marker. Full
+functional `test_rmw_implementation` is 64/64; the only controlled lint difference is Uncrustify 0.83.0_f on two
+unmodified upstream baseline files, so no 70/70 lint claim is made.
+
+The user-approved boundary accepts the absolute 1 KiB technical gate (3.089 ms p95 and 1774.141 msg/s versus
+limits of 50 ms and 100 msg/s) while retaining the faster Fast DDS result as an optimization backlog and making
+no equivalence claim. OHOS LeakSanitizer is unavailable, so host leak detection and board invalid-access ASAN
+remain separate and no target leak-clean claim is made. Signed governance/permissions plus authenticated and
+encrypted protected transport is the approved security scope. The six skips are accepted only with the positive
+supplements above. The selected endpoint remains committed local handoff; verified tooling commit is
+`3b08223d043a74c6ed0d2606e1763556746ac78f`. With every matrix row proven or explicitly accepted at this boundary,
+Task 5.5 and the approved production profile are complete. Lower NOT-COMPLETE paragraphs are retained as dated
+historical checkpoints and do not supersede this decision.
 
 2026-07-13 immediate-HEARTBEAT scheme-A refresh: the approved bounded-window design is implemented across MDDS,
 the optional bridge ABI, and `rmw_mdds_cpp`. Production artifacts are RMW `f8f74a1b...`, broker `4437466b...`,

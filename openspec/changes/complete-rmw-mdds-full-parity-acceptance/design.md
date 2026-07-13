@@ -214,7 +214,9 @@ The required RED/GREEN evidence is:
 8. Re-run host delivery contracts, upstream RMW tests, and affected board lanes.
 9. Decide the delivery endpoint: local-only handoff, OpenSpec archive, push, PR, or Gerrit submission.
 
-Rollback is to keep the two completed scoped changes and leave this final parity change open as the record that universal completion is still unproven.
+Rollback of the final acceptance decision would reopen task 5.5 while retaining the completed scoped changes and
+their exact-artifact evidence. It must identify which proven row or explicitly accepted boundary is no longer
+valid rather than reverting historical records wholesale.
 
 ## Open Questions
 
@@ -224,3 +226,16 @@ Rollback is to keep the two completed scoped changes and leave this final parity
   plus DSoftBus/MDDS, with no push, PR, Gerrit submission, or OpenSpec archive requested.
 - Answered on 2026-07-10: the user approved remote-only MDDS publishers for broker-owned bridge transport,
   with direct/non-broker local loopback preserved and payload-based broker echo suppression removed.
+- Answered on 2026-07-13: the user approved Plan A as the final production profile. The absolute 1 KiB gate is
+  p95 at most 50 ms and throughput at least 100 msg/s. The current 3.089 ms / 1774.141 msg/s result passes;
+  Fast DDS's 0.399 ms / 2482.394 msg/s result remains a disclosed optimization backlog, not a requirement for
+  performance-equivalence wording.
+- Answered on 2026-07-13: OHOS LeakSanitizer unavailability is an accepted external platform boundary. Host
+  leak-detection evidence and board invalid-access ASAN evidence remain required separately, and the target must
+  never be described as LeakSanitizer-clean.
+- Answered on 2026-07-13: the six upstream capability-conditional skips are acceptable only with their positive
+  supplements. Direct subscription loans must pass 3/3 without a broker, and publisher/subscription allocation
+  plus serialized-size behavior must pass 5/5 in the AArch64 capability bundle on each board.
+- Answered on 2026-07-13: required security parity is signed governance/permissions validation, identity binding,
+  authenticated and encrypted protected-transport activation, authorized delivery, and unauthorized denial.
+  Additional hypothetical security combinations remain future scoped work and do not broaden the accepted claim.

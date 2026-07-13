@@ -1,5 +1,52 @@
 # RK3588A Test Results
 
+## Approved Final Acceptance Profile (2026-07-13 host / 2026-07-14 board time)
+
+This section supersedes every lower current-completion statement while retaining those sections as historical
+checkpoints. The user approved Plan A: the required `rmw_mdds_cpp`/MDDS production profile is **COMPLETE** and
+OpenSpec task 5.5 is closed. This conclusion is bounded by the explicit dispositions below; it is not a claim of
+Fast DDS performance equivalence or of target-side LeakSanitizer coverage.
+
+Both RK3588A boards ran the same production artifacts:
+
+```text
+librmw_mdds_cpp.so=f8f74a1b61d61c73e25e6ed9a64cb1a898880a22d52f2ada3b1d2ef7da948c90
+rmw_mdds_broker=4437466b602db4c2f895b75b5d6e1697fbc72e17445d3f1d6040d6525600a009
+libmdds_bridge_shared.z.so=12d87b68ac5e1b46b3e2eb37cb8a4892e6a321bcfb26ded91afab6c4d017ef05
+libsoftbus_client.z.so=e1771298eeb820dac59f762ca586a96e2c538e70350bc1d021f4b3d3b76aff9d
+```
+
+- A valid-domain two-board sequential service soak completed 36,000/36,000 client/server calls in
+  7349.758/7362.085 seconds with zero timeout/error and zero residual process. An earlier diagnostic run used
+  domain 241, which is outside the accepted ROS range 0..232; it was stopped, marked `REJECTED`, and is not
+  acceptance evidence. The runner now rejects invalid domains and same-device cross-board input before launch.
+- A current-hash, four-client, exact-wire 16 MiB service soak completed 1,789/1,789 validated requests. Every
+  client ran at least 7208 seconds, received its DONE acknowledgement, and exited 0. The server recorded
+  `valid=1789 invalid=0 duplicates=0 send_errors=0 done_clients=4`; both boards had zero worker, broker, and
+  socket residual. A short-run parser false failure was traced to `valid` matching `invalid`; an exact-key parser,
+  RED contract, and 21/21 smoke rerun preceded the formal soak.
+- Both boards pass 16/16 upstream programs, 129 assertions, and exactly six capability-conditional skips. The
+  three broker-mode subscription-loan conditions pass 3/3 in the required direct-loan mode, while publisher and
+  subscription allocation plus serialized-size behavior pass 5/5 in the AArch64 capability supplement. No
+  skipped capability is counted as proven without its positive run.
+- Fresh host verification passes package CTest 24/24, the rmw_mdds upstream subset 16/16, all security,
+  zero-copy, artifact, and action-bag contracts, and the complete CLI delivery umbrella. The broader functional
+  `test_rmw_implementation` run passes 64/64. System XML lint passes; cppcheck follows its upstream slow-version
+  skip policy. Uncrustify 0.83.0_f differs only in two unmodified upstream baseline macro files, so the aggregate
+  lint invocation is not reported as 70/70 and those unrelated files were not reformatted.
+- The accepted performance gate is the absolute 1 KiB production threshold: p95 at most 50 ms and throughput at
+  least 100 msg/s. Current rmw_mdds measures 3.089 ms and 1774.141 msg/s, so this gate passes. Fast DDS remains
+  faster at 0.399 ms and 2482.394 msg/s, and the relative gap stays an optimization backlog rather than a parity
+  claim.
+- OHOS reports `AddressSanitizer: detect_leaks is not supported on this platform`. Board ASAN therefore proves
+  invalid-access behavior only; host `detect_leaks` evidence remains separate, and this result does not claim
+  target leak cleanliness. The approved security boundary is signed governance/permissions validation plus
+  authenticated and encrypted protected-transport activation, authorized delivery, and unauthorized denial.
+
+The verified tooling handoff is ROS commit `3b08223d043a74c6ed0d2606e1763556746ac78f`. Board identifiers and lab
+addresses remain intentionally absent from tracked evidence; host `hdc` status 139 is non-authoritative when the
+board summary, hashes, return codes, and residual checks are complete.
+
 ## RELIABLE Backpressure Immediate-HEARTBEAT Refresh (2026-07-13 host time)
 
 This section supersedes the current-artifact wording below. Scheme A is implemented and validated, but the

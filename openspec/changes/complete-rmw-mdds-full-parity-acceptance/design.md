@@ -103,6 +103,74 @@ Alternatives rejected:
   a wider ABI and all local/remote receive paths. It remains a possible future bridge-routing enhancement, not the
   narrow fix for a broker that already owns an authoritative local IPC path.
 
+### Decision: Broker Subscription Loans Use A Broker-Owned Shared Pool
+
+The broker IPC stream cannot carry a true subscription loan by embedding payload bytes in a
+`std::vector<uint8_t>` frame, and an MDDS bridge loan handle is a process-private pointer that cannot be passed to
+an RMW client. Broker-mode subscription loan support therefore uses a broker-owned, file-backed shared pool:
+
+- A subscription advertises a pool request only for a fixed-size raw-layout message shape with no content filter.
+  CDR, dynamic, sequence, string, and filtered shapes remain explicitly unsupported until their own RED gates and
+  representation design exist.
+- The broker creates the pool with owner-only permissions, returns a validated pool descriptor in the registration
+  ACK, and retains exclusive write ownership. The client maps the payload area read-only.
+- For an eligible sample, the broker writes one pool slot, then sends only a loan id, slot index, length, sequence,
+  and payload-format marker. Socket ordering publishes the completed slot before the descriptor is observed.
+- `rmw_take_loaned_message[_with_info]` returns the mapped slot address directly. It does not deserialize into
+  separate ROS-owned storage and does not allocate a heap-backed substitute.
+- `rmw_return_loaned_message_from_subscription` sends an authenticated-by-connection return for that exact loan id.
+  The broker alone frees the slot. Duplicate, foreign, or cross-connection returns are rejected, and disconnect or
+  endpoint teardown reclaims every outstanding slot owned by that connection.
+- Ordinary `rmw_take` may read/decode a pool-backed sample into caller-owned storage, but it must return the broker
+  loan immediately after the copy-compatible take completes.
+
+The first implementation slice proves this lifecycle with a fixed-size scalar message in broker mode. It does not
+convert the already documented dynamic or cross-encoding shapes into zero-copy support and must not be used to
+remove those remaining parity blockers.
+
+### Decision: Dynamic Broker Subscription Loans Use A Client-Decoded Shared Arena
+
+Dynamic ROS messages cannot be constructed by the broker and passed to a client because their object graph
+contains process-local pointers. Expanding broker subscription loans to String, sequence, and nested shapes uses
+a version-2 shared-pool layout in which bytes cross the process boundary but C++ object construction does not:
+
+- The broker owns an owner-only file-backed pool. Every page-aligned slot contains a broker-written serialized
+  payload region and a separate client-writable typed-arena region. The client maps metadata and serialized bytes
+  read-only and maps only the typed-arena pages read/write. This protects against accidental writes by a
+  cooperating client; owner-only file permissions are not claimed as isolation from a same-uid hostile process.
+- A version-2 endpoint request and registration ACK negotiate the layout, slot count, serialized capacity, typed
+  arena capacity, generation, and feature flags. The fixed-scalar version-1 request and pool remain unchanged.
+  Unknown versions, unsupported flags, arithmetic overflow, overlapping regions, out-of-file ranges, and capacity
+  values above implementation limits fail closed before an endpoint becomes visible.
+- The dynamic default is two slots, a serialized region capped at the existing 16 MiB user-sample limit, and a
+  32 MiB typed arena per slot. These are bounded resource limits, not an unbounded-memory promise. A sample whose
+  serialized bytes or decoded object graph exceeds its negotiated capacity fails explicitly, returns the slot,
+  and never falls back to hidden heap-backed message storage. RELIABLE delivery uses the existing bounded pending
+  queue while all dynamic slots are held; BEST_EFFORT may drop according to its QoS contract.
+- The broker writes the serialized or MDDS payload and immutable slot metadata, then sends a descriptor-only loan
+  frame. The client validates generation, slot, format, length, and sequence before constructing the generated ROS
+  message in that slot's typed arena with `MddsLoanMemoryResource` and decoding exactly once. The message object
+  and every allocator-aware String, sequence, and nested allocation must remain within that arena.
+- A loaned take returns the typed object address in the named broker mapping. Ordinary and serialized takes use
+  the immutable payload region and return the broker loan immediately after copy/decode. They do not expose or
+  retain the typed arena.
+- Returning a dynamic loan first destroys the client-side generated message, resets local arena state, and then
+  returns the exact broker loan id. Duplicate, foreign, stale-generation, and cross-subscription returns fail
+  without touching another slot. Endpoint teardown destroys all locally constructed messages before unmapping;
+  connection loss lets the broker reclaim its slots, and mapping teardown reclaims arena-only dynamic storage
+  without requiring the broker to run process-private destructors.
+- Content filtering is evaluated before a matching sample becomes visible to the wait set. For a dynamic loan,
+  the client may decode into the arena to evaluate the filter, but a rejected or decode-failed sample must be
+  destroyed and returned immediately. A filter path that cannot satisfy this ownership rule remains fail-closed
+  and must not advertise loan capability.
+- A version-1 peer cannot request or accept the dynamic layout. A version-2 peer continues to use version 1 for
+  eligible fixed raw messages, so the already validated scalar path and on-wire behavior are preserved.
+
+This model is zero-copy for the typed subscription sample after the broker-to-client shared payload transfer: no
+socket payload frame or heap-backed typed substitute is permitted on the loaned-take path. It does not claim that
+network transport into the broker is zero-copy, and it does not pass any MDDS or C++ process-private pointer over
+IPC.
+
 The required RED/GREEN evidence is:
 
 1. A fake-bridge broker test registers the normal subscription first and the same-context ignore-local
@@ -126,7 +194,10 @@ The required RED/GREEN evidence is:
   [Mitigation] Separate local policy enforcement from transport cryptography and record external dependencies before implementation.
 
 - [Risk] General loaned-message zero-copy may need a new memory ownership model for bounded strings/sequences and dynamic types.
-  [Mitigation] Require failing shape-specific contracts before expanding support beyond fixed-size raw loans.
+  [Mitigation] Require failing shape-specific contracts before expanding support beyond fixed-size raw loans. The
+  host bridge publisher arena currently relies on a shared-library global allocation hook; ASAN/TSAN allocators
+  bypass that hook, so sanitizer-compatible dynamic allocation is an explicit design requirement rather than a
+  test waiver. Broker subscription loans remain fixed-scalar until a process-independent representation exists.
 
 - [Risk] Board evidence can be noisy because HDC may exit 139 after valid output.
   [Mitigation] Keep using explicit board markers and reject connection-failure banners instead of trusting host exit status alone.

@@ -66,6 +66,122 @@ exits 0 and emits `RESULT|rmw_mdds_full_parity_loaned_shapes|PASS`,
 `RESULT|rmw_mdds_sros2_policy_contracts|PASS`. Future loaned-message expansion beyond the covered host
 shapes should add another RED contract before production behavior changes.
 
+### 3A. Broker Subscription Shared Loans
+
+- [x] 3.5 Add a broker-mode RED test proving a fixed-size raw subscription receives a mapped broker-owned loan,
+  returns the exact loan id, and never substitutes heap-backed typed storage.
+- [x] 3.6 Add a versioned broker loan-pool descriptor plus deliver/return IPC messages with strict bounds,
+  ownership, duplicate-return, disconnect-reclaim, and stale-generation validation.
+- [x] 3.7 Implement broker-owned file-backed pool creation and read-only client mapping for fixed-size raw
+  subscriptions; keep CDR, dynamic, sequence, string, and filtered shapes explicitly unsupported.
+- [x] 3.8 Route ordinary and bridge-origin samples through the shared pool for eligible subscriptions, make
+  loaned take return the mapped address, and make ordinary take release the slot after its bounded-copy decode.
+- [x] 3.9 Run focused broker/protocol/RMW tests and a copy-path contract before broader host regression.
+
+Broker subscription-loan host evidence on 2026-07-11: the initial mapped-loan test failed because broker
+subscriptions advertised `can_loan_messages=false`; the capacity extension then failed because the 33rd
+RELIABLE sample was dropped while 32 pool slots were pinned. The implemented versioned owner-only pool,
+descriptor-only delivery, exact return validation, bounded RELIABLE pending queue, disconnect reclaim,
+ordinary/serialized take auto-return, and bridge-origin path turn both RED gates green. Package CTest passed
+24/24, the `rmw_mdds_cpp` upstream `test_rmw_implementation` subset passed 16/16,
+`ohos/test_rmw_mdds_zero_copy_contracts.sh` emitted `rmw_mdds_zero_copy_contracts_ok`, and the four affected
+ASAN programs passed 4/4. Focused TSAN runs passed the two broker-mode loan tests plus the IPC ownership test;
+the complete legacy `test_ipc_broker` TSAN binary still reports a pre-existing race in the fake bridge test
+counter at `test/fake_mdds_bridge.cpp`, so this evidence is scoped to the changed production path rather than a
+claim that the full historical test stub is race-free.
+
+Host test-stub and allocator follow-up on 2026-07-11: the fake bridge now protects registry, QoS, counters,
+loan queues, and payload state with one mutex, snapshots callbacks for invocation after unlock, and gives payload
+accessors stable thread-local copies. TSAN first reproduced the counter race and then a payload-read versus
+publisher-destruction race. The complete TSAN `test_ipc_broker` is now GREEN at 34/34, and the focused TSAN set
+covering pub/sub, broker, and loan arena is 3/3. `MddsLoanArena` now supplies matching nothrow scalar/array
+new/delete overloads; its ASAN RED (`operator new vs free`) is GREEN at 3/3. Five SROS2 negative tests also copy
+the temporary RMW error string before inspecting it, closing an ASAN stack-use-after-scope.
+
+`fastrtps__dynamic_data_deserialize()` also leaked the buffer allocated by its sized `SerializedPayload_t`
+constructor before replacing `payload->data` with the caller-owned buffer. It now creates a non-allocating payload
+view and sets length/max-size explicitly. Under ASAN with `detect_leaks=1`, full pub/sub passes 37/37 and bridge
+dynamic-take passes 10/10 with no 29/30-byte leak report.
+
+At that checkpoint, the normal package was 24/24, upstream `rmw_mdds_cpp` remained 16/16, and the complete host
+delivery umbrella passed. Full package ASAN and TSAN were each 23/24: both stopped only on the dynamic publisher-loan address-range
+assertion because sanitizer allocators bypass the shared-library global allocation hook. No leak, invalid-access,
+or race report is emitted for that failed test. Sanitizer-compatible dynamic publisher allocation remains under
+task 5.5; the dynamic-take leak is closed.
+
+### 3B. Dynamic Broker Subscription Shared Arenas
+
+- [x] 3.10 Add broker-mode RED tests for String, dynamic sequence, nested allocator-aware messages, and content
+  filtering. Prove both the returned object and all dynamic storage reside in the named broker mapping, rejected
+  samples are returned before wait-set visibility, and no heap/socket-payload substitute satisfies the test.
+- [x] 3.11 Add version-2 endpoint request, pool descriptor, and descriptor-only loan-frame contracts. Reject
+  unknown versions or flags, malformed/overlapping regions, arithmetic overflow, stale generations, out-of-range
+  payloads, and capacities above the documented limits while preserving the version-1 fixed-scalar encoding.
+- [x] 3.12 Implement the broker-owned page-aligned payload/typed-arena pool with a two-slot dynamic default,
+  16 MiB serialized cap, 32 MiB typed-arena cap, owner-only permissions, immutable client payload mapping, and
+  client-writeable arena mapping. Preserve bounded RELIABLE pending delivery and BEST_EFFORT QoS behavior.
+- [x] 3.13 Construct and decode generated ROS messages client-side with `MddsLoanMemoryResource`; require the
+  object graph to remain inside the mapped arena, destroy before exact-id return, and reclaim correctly on
+  ordinary take, serialized take, filtered rejection, decode failure, endpoint teardown, and disconnect.
+- [x] 3.14 Keep version-1 fixed raw loans behaviorally unchanged and fail closed for mixed-version dynamic peers.
+  Run focused protocol, pool, broker, RMW, zero-copy-contract, upstream subscription, normal, ASAN, and TSAN gates.
+- [x] 3.15 Cross-build and deploy exact artifacts to both RK3588A boards; prove dynamic String, sequence, nested,
+  filtered, duplicate/foreign return, slot-pressure, and cleanup lanes with board-side markers before updating the
+  parity matrix or task 5.5.
+
+Dynamic broker subscription-loan host evidence on 2026-07-12: the String, nested sequence, content-filter, and
+transient-local replay RED tests now pass and prove both generated objects and their dynamic storage reside in the
+named broker mapping. Version 2 uses separate page-aligned read-only payload and client-writeable typed-arena
+regions, preserves version-1 encoding, and rejects mixed fixed/dynamic requests, unknown versions/flags, stale
+generations, invalid bounds, and duplicate/foreign returns. Exact-return, ordinary/serialized auto-return,
+two-slot RELIABLE pressure, empty String, queue eviction, decode failure, teardown, disconnect, and cross-process
+String lanes are covered. Current-source verification passed normal package CTest 24/24, ASAN with leak detection
+24/24, TSAN 24/24, upstream `test_rmw_implementation` 16/16, strict OpenSpec validation, and
+`RESULT|rmw_mdds_zero_copy_contracts|PASS`.
+
+Dynamic broker subscription-loan board evidence on 2026-07-12: the AArch64 cross-build and artifact contract
+passed, and the full overlay was atomically deployed and SHA-verified on both RK3588A boards. The latest run used
+RMW sha `4eb87ee4...`, broker sha `d754adba...`, probe sha `58d4f756...`, runner sha `db694210...`, and corrected
+non-sanitized bridge sha `6e08033e...`. The bridge was built with `is_tsan=false`; each board emitted
+`broker start bridge_enabled=1`, and `/proc/<broker>/maps` contained `libmdds_bridge_shared.z.so`. Board A domain
+31 and board B domain 32 each passed all seven local lanes: String, sequence, nested, filter, duplicate/foreign
+return rejection, two-slot pressure, and teardown cleanup, with `BOARD_RC=0` and `pool_count=0`. Domains 33 and
+34 passed A-to-B and B-to-A remote delivery respectively; each direction matched a remote endpoint and passed
+String, sequence, and nested dynamic-storage checks, again ending with `BOARD_RC=0` and `pool_count=0`. The final
+harness marker was
+`RESULT|rmw_mdds_broker_dynamic_loan_board|PASS|self=2|remote_directions=2|remote_shapes=6`.
+
+Broker lifecycle follow-up on 2026-07-12: a strict post-conformance cross-board check exposed a separate
+DSoftBus process-lifecycle limit. The old board runner started and stopped one bridge-owning broker per upstream
+program. After repeated broker churn, topic delivery stopped at 0/40 and service/action discovery stopped before
+the server; restarting `softbus_server` restored all three lanes. A minimal reproduction then performed 14
+broker-only Init/TERM/Shutdown cycles per board with zero SIGKILL fallback and reproduced 0/5 delivery. Both new
+brokers still reported `bridge_enabled=1`, but their graph publisher/subscriber match counts remained zero. In the
+same failed SoftBus state, `mdds_verify` using a different package/socket matched and delivered 5/5, isolating the
+defect to rapid cross-process reuse of the fixed MDDS DSoftBus identity rather than IP connectivity or rmw decode.
+
+`IpcBroker::Stop()` now explicitly calls `BridgeBackend::Shutdown()` after endpoint teardown; its RED/GREEN fake
+bridge test proves one shutdown per configured broker stop, and full normal, ASAN, and TSAN package runs pass
+24/24. Board conformance now shares one production-style broker across all 16 programs instead of restarting the
+DSoftBus client 16 times; both boards pass 16/16 programs, 129 assertions, six classified conditional skips, and
+zero failures. Without a subsequent SoftBus restart, domain 93 String passed in both directions and domain 94
+passed topic 40/40, AddTwoInts, and Fibonacci action through one broker lifecycle. Rapid crash/restart reuse of the
+same fixed DSoftBus identity remains independently open and still blocks an unqualified production-ready claim.
+
+Process-scoped DSoftBus identity follow-up on 2026-07-12: the independent restart RED was traced to
+`SOFTBUS_TRANS_BIND_REQUEST_DENIED`, not a permanent SoftBus outage. DSoftBus protects a bind-request key after ten
+failures within 60 seconds for 600 seconds; the state expires automatically, while restarting `softbus_server` was
+only an earlier workaround. MDDS now preserves the fixed listener and peer names but gives each connection-manager
+initialization one outgoing local name `<base>.client.<pid>.<monotonic_ns>`. The focused mock test and the complete
+RK3588A DSoftBus backend suite pass 170/170. Historical production bridge `e2c6a99c...` completed 14/14 broker
+restarts per board with no kill fallback, followed immediately by successful delivery in both directions without
+a SoftBus restart or protection-window wait. A current-source refresh then rebuilt backend test `6030f35d...` and
+production bridge `c3b614b2...`; both boards again passed 171/171 and 14/14, with every broker mapping the exact
+bridge and no kill fallback. Without restarting SoftBus, domains 124 and 125 passed the complete topic 40/40,
+AddTwoInts, and Fibonacci matrix in both board directions. A final compatibility rerun used domains 126/127 and
+also proved a longest-valid 63-byte configured socket name still works. This closes the rapid fixed-identity
+restart blocker without narrowing the prior configuration contract.
+
 ## 4. Runtime And Delivery Evidence
 
 - [x] 4.1 Run `ohos/test_rmw_mdds_delivery_contracts.sh` and confirm markers cover all affected host surfaces.
@@ -73,6 +189,35 @@ shapes should add another RED contract before production behavior changes.
 - [x] 4.3 Deploy the refreshed runtime delta to both RK3588/KaihongOS boards.
 - [x] 4.4 Run affected native MDDS, cross-RMW gateway, zero-copy, and protected-security board lanes with explicit PASS markers that prove current bridge activation.
 - [x] 4.5 Decide and execute the delivery endpoint: local handoff only, OpenSpec archive, push, PR, or Gerrit submission.
+- [x] 4.6 Rebuild/deploy the broker-loan artifacts and prove the affected fixed-size broker subscription lane on
+  both RK3588A boards with exact hashes and board-side PASS markers.
+
+Broker subscription-loan board evidence on 2026-07-12: the OHOS cross-build and artifact contract passed,
+then both boards received `librmw_mdds_cpp.so` sha
+`7f4184b08a8d89fad00787d693d341d5fd590cb22b01a1a6ef568682c1616823` and broker sha
+`e9e1f2f092fd943d1364e41dea25f308a0382c532b8daebb64e234a751582f4a`. With
+`RMW_IMPLEMENTATION=rmw_mdds_cpp`, broker mode enabled, domain 197, isolated broker sockets, and the current
+MDDS bridge, A-to-B and B-to-A `std_msgs/msg/Int32` runs each delivered 40/40 samples. On each board while it
+was the subscriber, the broker-owned pool was mode `0600`, `/proc/<subscriber>/maps` showed the client mapping
+as `r--s`, and the pool count returned to zero after subscriber exit. Each board retains
+`/data/local/tmp/rmw_mdds_loan_test_197/result.txt` with an explicit
+`RESULT|board_broker_subscription_loan|PASS` marker and the exact hashes; test processes were stopped after
+artifact readback.
+
+Allocator follow-up board evidence on 2026-07-11: the refreshed OHOS RMW
+`e2b9cbe14950e6bc04a6df025fe8bc918ab174dee51d892daa65a9d77d3f5c25` was deployed to both boards while broker
+`e9e1f2f0...` and production bridge `58169fc3...` remained unchanged. Direct production-bridge execution passed
+the three upstream subscription-loan cases 3/3 on each board. A broker-mode String sample then crossed in each
+direction on independent domains with `RMW_IMPLEMENTATION=rmw_mdds_cpp`. Board result files contain
+`RC=0 PASS=3 FAIL=0`, and the final process/default-socket audit is clean. This is an affected regression for the
+nothrow allocator delta; at that checkpoint it did not relabel the earlier fixed-scalar broker-pool 40/40 evidence
+as current-hash evidence or close complex broker subscription loans.
+
+Dynamic-typesupport board evidence on 2026-07-11: both boards received
+`librosidl_dynamic_typesupport_fastrtps.so` sha
+`0a2f76d43bbe237747e87401c42b83357ba14d22f416eeda2a335f9e825a34cc`. The board package's five
+`RmwMddsPubSub.Dynamic*` tests pass 5/5 on each board, including String payload round-trip dynamic take. Result
+files retain `RC=0 PASS=5 FAIL=0` plus the exact typesupport hash; the final process/socket audit remains clean.
 
 Fresh host delivery evidence on 2026-07-03: after the security, broker network-flow, dynamic-loaned-message,
 and host CLI harness robustness changes, `ohos/test_rmw_mdds_delivery_contracts.sh` emits
@@ -569,10 +714,91 @@ as the exact 4MiB service blocker.
 ## 5. Final Completion Decision
 
 - [x] 5.1 Update the parity matrix with all final command evidence and board markers.
-- [x] 5.2 Verify tracked status is clean and generated/scratch artifacts are ignored or intentionally tracked.
+- [x] 5.2 Inventory tracked status, keep intended work scoped, and remove or intentionally retain generated/scratch artifacts.
 - [x] 5.3 Validate all active OpenSpec changes with `openspec validate --strict`.
 - [x] 5.4 Decide whether accepted unsupported rows still satisfy the user's "perfect/all ROS 2 middleware features" objective.
 - [ ] 5.5 Mark the persistent goal complete only if every required row is proven or explicitly accepted out of scope and no required delivery work remains.
+
+2026-07-12 checkpoint: the approved dynamic shared-arena scope is complete. RMW `4eb87ee4...`, broker
+`d754adba...`, and historical production bridge `e2c6a99c...` pass both-board conformance (`16/16` programs,
+129 assertions, six classified conditional skips), 14 local dynamic cases plus six remote shape directions, and
+topic 40/40, AddTwoInts, and Fibonacci action regressions. The fixed-identity restart blocker is closed by 14/14
+restart cycles per board followed by immediate bidirectional delivery. Current-source full-stack ASAN and TSAN
+each pass 16/16 programs per board with zero test/broker finding; TSAN clean and deliberate-race controls prove
+the detector returns 0 and fail-closed 66 respectively. The exact production artifacts also pass the two-board
+50-process service hard gate for 10/10 rounds, with all created/sent/server-taken/answered counts at 50 and zero
+timeout/error in every round. The same production line now also passes P0 smoke 11/11 per board; the 9/9 complex
+message/QoS matrix; strict transient late join and liveliness; signed protected SROS2 with authenticated/encrypted
+activation, authorized 60-message delivery, and unauthorized denial; native action-bag for three consecutive
+runs; rosbag2 88/88 record/play; exact 16 MiB topic and service repeat3; node/topic/service churn 1000/1000; action
+churn 100/100; and full-stack 128 B--4 MiB performance with 631/631 delivery. The 1 KiB result is p95 1.874 ms and
+345.987 msg/s, while the Fast DDS comparison is 0.395 ms and 2520.369 msg/s. The current two-hour service soak also
+passes 36,000/36,000 client/server calls at a 0.2-second pace with zero timeout/error and elapsed
+7355.501/7367.729 seconds. Task 5.5 remains unchecked until the complete P2/P3 evidence matrix is audited and
+because the measured small-message performance gap has not been explicitly accepted for production.
+
+Current-source affected refresh: production bridge `c3b614b2...` and backend test `6030f35d...` pass 171/171 on
+both boards, 14/14 mapped broker restart cycles per board with no kill fallback, and bidirectional M2M 3/3 on
+domains 126/127 without a SoftBus restart. The broader conformance, stress, SROS2, bag, 16 MiB, sanitizer,
+performance, churn, and soak rows above remain tied to `e2c6a99c...`; they were not all repeated on `c3b614b2...`.
+Task 5.5 therefore remains unchecked.
+
+2026-07-11 full-stack RMW performance follow-up:
+
+- A two-board rclpy RELIABLE probe reproduced the old rmw_mdds loss boundary at roughly 60 small messages while
+  the identical Fast DDS baseline completed all 631 requests. Server receive counts matched the missing request
+  counts, proving an ingress/admission defect rather than client output parsing or acknowledgement correlation.
+- Package REDs proved that generic RELIABLE topic bridge publishers bypassed the service-only MDDS unacked-sample
+  backpressure and that a fixed default could exceed a shallow KEEP_LAST depth. The broker now applies a separate
+  topic limit (default 32) capped by nonzero KEEP_LAST depth, preserves the service default of 1, and leaves
+  BEST_EFFORT unblocked. Focused semantics pass 4/4, the complete broker suite passes 33/33, package CTest passes
+  23/23, and the full-stack contract plus seven probe unit tests pass.
+- Both boards were deployed with RMW `6bba62f7...`, broker `77a037c6...`, and unchanged production bridge
+  `58169fc3...`. Valid domain pairs 223/224, 225/226, and 227/228 each passed all five sizes from 128B through
+  4MiB under both `rmw_mdds_cpp` and `rmw_fastrtps_cpp`. Every server observed 631/631 requests with zero invalid,
+  missing-ack, or publish-error count.
+- The three rmw_mdds 1KiB results were p95 2.391/1.921/1.881 ms and throughput
+  342.936/357.201/352.198 msg/s, all inside the approved 50 ms maximum and 100 msg/s minimum. Attempts using
+  Fast DDS domains 234/236 are excluded as invalid input; the runner now rejects any domain outside 0..232 before
+  HDC.
+- This closed the valid full-stack RMW performance blocker only. At that checkpoint Task 5.5 stayed unchecked
+  because broader security combinations, then-unclosed broker-loan breadth, explicit remaining skip disposition, and remaining
+  long-stability/P2/P3 gates are not all closed.
+
+2026-07-11 connection-recovery and large-message update: both RK3588A boards were hash-verified with RMW
+`0397797e...`, broker `810a97f5...`, bridge `c59c351a...`, protected probe `6aa06d13...`, and overlay SoftBus
+client `e1771298...`. RK3588A RED/GREEN regressions now cover initial-BINDING recovery-window backpressure,
+full-window retry drain, single-sender flush gating, and active-flush LRU protection; the final backend suite passed
+158/158 with `BOARD_RC=0`. The final bridge passed exact-wire 16MiB concurrent4x10 on three independent domains
+at aggregate client/server 120/120, sequential long60 at 60/60, and topic/service request/service response
+exact-cap/`+1` cases at 6/6. At this checkpoint Task 5.5 remained open because the 2h concurrent large-message
+soak, ACK tail latency, full-stack sanitizer, TSAN, valid RMW performance, broader security, action-bag CLI,
+explicit upstream skips, and the remaining P2/P3 production gates were not closed.
+The same final bridge subsequently passed the affected Task 6.3 board lanes: native M2M 3/3; gateway pub/sub
+8/8 plus service, action, parameters, and lifecycle; and protected SROS2 signed-policy, authenticated/encrypted
+activation, authorized 60-message delivery, and unauthorized publish denial. This closes Task 6.3 but does not
+change the Task 5.5 completion decision.
+
+2026-07-11 2h large-message and ACK-tail update: the same final bridge passed a time-driven two-board soak with
+four concurrent clients and 16MiB-class near-cap service request/response payloads. The 7200-second load window
+completed client/server 1,791/1,791, four valid DONE acknowledgements, all client/server return codes 0, and zero
+timeout/error/invalid/duplicate/send-error counts. A separate 900-second graph-debug sample passed 121/121 and
+paired client request waits/resumes 120/120 plus server response waits/resumes 118/118 with no duplicate or
+unmatched keys. Aggregate wait min/p50/p95/p99/max was 25/1,356/23,542/37,294/46,042 ms; four 30-second
+diagnostic timeout records subsequently resumed and no wait reached 60 seconds. This closes the missing 2h
+concurrent large-message evidence and the old ACK-stuck symptom, but not the measured production tail-latency
+risk. Task 5.5 stays unchecked because sanitizer, TSAN, valid full-stack RMW performance, broader security,
+action-bag CLI, explicit upstream skips, and other remaining P2/P3 production gates are still incomplete.
+
+2026-07-11 ACK scheduling experiment: a board RED test proved ACKNACK remained behind queued DATA in the per-peer
+lane. A strict ACKNACK/HEARTBEAT/GAP priority implementation passed focused tests, ring/send/peer full suites, and
+the 158/158 backend suite, but failed the real 900-second comparison: 70/70 completed against a minimum of 100 and
+the retained `c59c351a...` baseline's 121/121. Aggregate p50/mean wait regressed from 1.356/5.763s to
+8.551/10.457s even though max decreased from 46.042s to 37.181s. The experiment was reverted; both boards were
+restored to `c59c351a...`, and the restored backend passed 158/158. This is not an accepted implementation. Source
+tracing places the remaining head-of-line boundary after the lane in the shared TCP_DIRECT byte stream. Any
+separate control-channel or feedback-pacing follow-up needs its own RED gate and approved design. Task 5.5 remains
+unchecked.
 
 Final audit correction on 2026-07-06: the previous retained 50-way service stress artifacts were historical PASS
 evidence, but the then-latest deployed overlay did not pass the default 50 independent-process hard gate. That
@@ -823,3 +1049,232 @@ Task 5.5 remains open. The earlier transient-local and current-hash 50-way gaps 
 but current-artifact repeated/concurrent/long-soak 16MiB service behavior, oversized/error propagation, the
 `execl()` policy decision, upstream allocator/serialized-size/loaned-subscription skips, full-stack sanitizer,
 valid RMW performance, broader security, action-bag CLI, and remaining P2/P3 stability gates are incomplete.
+
+Latest exact-artifact Plan A and rosbag runtime-link refresh on 2026-07-10: the controlled broker launch path now
+uses `posix_spawn()` with file actions and `POSIX_SPAWN_SETSID`, removing `fork()`, `setsid()`, and `execl()` from
+the multithreaded client path. The security contract was captured RED before the change and passed afterward;
+package CTest passed 23/23, the full host delivery umbrella passed, and the OHOS build/artifact contracts passed.
+Both boards were hash-verified with `0397797e...` RMW, `810a97f5...` broker, `75053fcc...` bridge, and `6aa06d13...`
+protected probe. Current-artifact service stress then passed 10/10 50-process rounds with exact 50 create/send/
+server/response counts and zero timeout/error/process-timeout. The 50-client single-process and one-client/
+50-request models also passed.
+
+The refreshed 16MiB bridge passed exact-wire 4MiB single 1/1 and repeat 10/10, then exact-wire 16MiB single 1/1
+and three independent repeat10 domains for 30/30. Native M2M passed 3/3, strict transient-local replay passed
+`retained=1 expected=1`, and signed protected SROS2 passed signed policy, authenticated/encrypted activation,
+authorized delivery of 58 messages, and unauthorized denial. The stale 4MiB `bridge_publish rc=-2` result is
+retained as artifact-mismatch root-cause evidence and no longer represents the current bridge.
+
+The same current-artifact pass found and closed a rosbag packaging defect. Old OHOS rosbag2 C++ libraries and all
+eight `rosbag2_py` extensions directly linked Fast DDS RMW, so no-preload `ros2 bag record` terminated with signal
+11. A RED artifact contract captured those dependencies. Rebuilding against runtime-selectable
+`rmw_implementation`, deploying the C++ libraries plus Python 3.12 extensions, and rerunning without `LD_PRELOAD`
+passed with `recorded_files=2 recorded_messages=88 played_received=88`. Artifact and deployment contracts now
+preserve that boundary.
+
+Task 5.5 remains open. This refresh does not provide repeated 16MiB concurrent4x10, large-message soak,
+oversized/error propagation, complete upstream skipped capabilities, full-stack sanitizer, valid RMW performance,
+broader security, dedicated action-bag CLI, or all remaining P2/P3 evidence. The persistent goal must not be marked
+complete from this checkpoint.
+
+Plan A shutdown and benchmark-integrity refresh (2026-07-10 EDT / 2026-07-11 CST): both RK3588A boards were
+hash-verified with `libmdds_bridge_shared.z.so=454bb992...`, and the latency checks used
+`mdds_demo=2d9e1b7a...`. The focused in-flight callback shutdown regression passed 1/1 and the full backend suite
+passed 168/168. Protected probe shutdown passed 10/10 on each board; the signed protected SROS2 run passed policy
+and authenticated/encrypted activation on both boards, delivered 60/60 authorized samples, denied unauthorized
+publish, and passed the tampered/missing/identity/enforce/permissive matrix without a board-side SIGSEGV.
+
+The previous latency runner was retained as RED evidence because incomplete RELIABLE delivery still returned
+PASS. Exact timestamp correlation and a RELIABLE-only completeness gate then passed seven sizes from 128B through
+4MiB at 10/10 each. Forced partial RELIABLE delivery returned rc=1, while forced partial BEST_EFFORT retained
+observational rc=0 behavior. Throughput semantics were not changed.
+
+Task 5.5 remains open. `MddsNodeManagerTest` still has two failing initialization fixtures that return `-7`
+before their expected rollback/filter points because active DSoftBus mode operations are not registered. This
+failure and the independent conformance, sanitizer, performance, and other P2/P3 gates prevent full-parity or
+production-readiness completion.
+
+Lane-worker ownership follow-up (2026-07-11): the historical NodeManager fixture failures above are superseded
+by exact binary `cc91ac68...` passing 30/30 on RK3588A; PubSub `864440aa...` also passes 198/198. The corrected
+4MiB benchmark then exposed a separate board-side SIGSEGV in `LaneWorkerMain`: data and control managers shared
+one global worker-context array/count, so control-first shutdown could free a context still used by a data worker.
+The deterministic RED test also showed capacity coupling (`control push=-7`, count 0 after the data manager used
+12 workers). Manager-local, lane-slot-indexed ownership made the control-first-stop regression green; final lane
+test `ad573e46...` passes 36/36 and backend `3d5d656e...` passes 168/168 with board rc 0.
+
+Both boards were updated to exact bridge `db5b9d93...` and demo `7054cec3...`. Seven RELIABLE sizes from 128B
+through 4MiB passed 10/10 each; forced partial RELIABLE produced 160/1000, completeness FAIL, rc 1; forced
+partial BEST_EFFORT produced 109/1000 and retained rc 0. Signed protected SROS2 passed signed policy and
+authenticated/encrypted activation on both boards, authorized 60/60, unauthorized denial, and the final success
+marker. Native final-bridge M2M also passed topic/service/action 3/3: topic 40/40, service sum 42, and Fibonacci
+`SUCCEEDED` with exact sequence `0,1,1,2,3,5`. No new demo faultlog was created.
+
+Task 5.5 remains open. This closes the lane-context UAF and affected benchmark/security regressions only; explicit
+upstream skips, full-stack ASAN, usable TSAN, full-stack RMW performance, broader security/action-bag, and other
+independent P2/P3 gates remain incomplete.
+
+Endpoint-capacity and broker-registration follow-up (2026-07-11): old RK3588A focused binaries reproduced hard
+limits at 64 publishers, 64 subscribers, and 128 remote endpoints. A host RED test reproduced a broker ACK and
+partial resource leak when one required service-client bridge direction failed. The implementation now provides
+512 publisher/subscriber and reliability slots, 1024 remote endpoint slots, and fail-closed broker registration
+with partial shared/non-shared bridge rollback.
+
+Current exact artifacts are `7c5e5e36...` RMW, `0679e219...` broker, and `9b6a5f2d...` bridge on both boards.
+Host `test_ipc_broker` passed 29/29, package CTest passed 23/23, and script contracts passed. Exact board tests
+passed PubSub 199/199 and EndpointDb 24/24. The formal 50-process small-service hard gate passed 10/10 rounds;
+all rounds had 50 created/sent/server/response markers, zero timeout/error/process-timeout, and elapsed time below
+15 seconds. The two supplemental 50-request models also passed, and both boards were clean afterward.
+
+Task 5.5 remains unchecked. A separate default-node 50-process probe that also created parameter and
+type-description services exceeded its outer cap with only 14 responses, so concurrent default-node graph and
+registration throughput is not certified. The remaining upstream skips, sanitizer/TSAN, valid full-stack RMW
+performance, broader security/action-bag, and other independent P2/P3 rows also remain open.
+
+Default-node graph-burst follow-up (2026-07-11): the risk above is superseded on exact artifacts
+`b2ebceda...` RMW, `5dbdd9d2...` broker, and `9b6a5f2d...` bridge. A 24-connection host RED preserved final graph
+convergence but counted 602 graph frames. The broker now coalesces endpoint/match/sync events through one 100 ms
+worker and retains the 1.5-second bridge heartbeat; the same test emits one complete graph broadcast.
+
+The worker initially exposed an ASAN-confirmed Stop race between endpoint and node/graph-sync unsubscription.
+Joining graph/accept/client threads before graph bridge teardown removed it. The complete 30-test
+`test_ipc_broker` gtest suite passed 10/10 ordinary repetitions and 20/20 ASAN repetitions; the ordinary package
+CTest passed 23/23, and script contracts passed. The ASAN evidence is scoped to `test_ipc_broker`, not all 23
+package CTest targets.
+
+On RK3588A, default parameter/type-description-enabled N=50 passed once at 50/50 in 9 seconds and then passed ten
+more rounds at client/server 50/50 in 9--10 seconds. The isolated minimal-node 50-process gate also passed 10/10
+fresh-domain rounds, both supplemental models passed 50/50, both boards were clean, and no new broker/Python
+faultlog appeared. Task 5.5 remains unchecked because the independent upstream-skip, full-stack sanitizer/TSAN,
+valid full-stack RMW performance, broader security/action-bag, and remaining P2/P3 rows are still open.
+
+Subscription-loan and upstream-conformance follow-up (2026-07-11): a package-local RED returned a stack/foreign
+message pointer through `rmw_return_loaned_message_from_subscription()` and aborted in `free()`. The same path
+terminated the pre-fix board test with signal 11. The implementation now removes and returns only a pointer found
+in that subscription's active bridge-loan registry; an unknown pointer returns `RMW_RET_ERROR` without invoking
+the message destructor. The new regression, focused ASAN run, full package CTest 23/23, and zero-copy contract pass.
+
+The upstream skip audit changed the acceptance classification without waiving behavior. Publisher/subscription
+allocation and serialized-size upstream tests skip when a supported implementation does not return
+`RMW_RET_UNSUPPORTED`; valid-input board tests passed allocation init/fini and three size cases at 4/4 on each
+board. Broker mode deliberately does not advertise subscription loans because its queue cannot provide a
+bridge-backed zero-copy buffer. With `RMW_MDDS_BROKER=0`, the three upstream loan cases passed 3/3 on both boards
+with the production DSoftBus bridge after removing test-only broker processes; the cross-built fake bridge also
+passed 3/3. These are capability-conditional skips, not evidence that the APIs are absent.
+
+A fresh full board run then exposed a separate matched-event defect. One board's callbacks observed two completed
+local registrations while `rmw_take_event()` reported one because the five-second graph-cache freshness window
+outlived the broker's pending 100 ms coalesced broadcast. Deterministic publisher and subscription host RED tests
+both returned 1 instead of 2. A successful broker registration ACK now marks graph-cache refresh as required, so
+the next graph/status query reads an authoritative snapshot while the burst worker remains coalesced.
+
+The exact deployed artifacts are RMW `e5e6459e...`, broker `5dbdd9d2...`, and bridge `9b6a5f2d...` on both
+RK3588A boards. Host broker-mode tests passed 10/10, upstream event passed 4/4, and package CTest passed 23/23.
+Both boards passed upstream event 4/4 and all 16 `test_rmw_implementation` programs with independent fresh broker
+sockets. In broker mode, `test_subscription` was 28 PASS / 3 capability SKIP / 0 FAIL; direct mode supplied the
+3/3 PASS evidence. The two previously failing ignore-local cases pass on both boards.
+
+The affected throughput gates were also rerun. A default parameter/type-description-enabled N=50 run reached
+all create/wait/send/server/response markers at 50/50 in 6.326 seconds with complete destroy/shutdown markers and
+zero timeout/error. The two-board formal N=50 gate reached 50/50 in 15.974 seconds with zero client or process
+timeout/error. No relevant process remained; the last test socket was removed. A preliminary production-bridge
+loan run while two test brokers were still alive produced SIGBUS/SIGSEGV and is retained as invalid non-isolated
+evidence; clean single-broker/direct execution passed on both boards and multi-broker coexistence is not certified.
+
+Task 5.5 remains unchecked. The audited conformance/skip cluster, foreign-loan crash, matched-event race, and
+affected N=50 regression are closed. The approved independent reliability control channel also closed the former
+shared-TCP-stream ACK-tail blocker: retained bridge `d8386ad3...` passed 265/265 with ACK p95/max
+9.380/15.844 seconds and zero waits at or above 30 seconds. Current bridge `9b6a5f2d...` retains that path and its
+current-worktree focused control 7/7, lifecycle 4/4, backend 168/168, and lane-manager 36/36 binaries passed on both
+RK3588A boards with `BOARD_RC=0`. The 900-second values remain tied to `d8386ad3...`; they are not a new
+full-stack performance run. At that checkpoint, full-stack ASAN/TSAN, valid full-stack RMW performance, broader
+security/action-bag, dynamic/broker subscription zero-copy breadth, explicit upstream skips, and remaining
+long-stability/P2/P3 rows were not complete.
+
+2026-07-11 full-stack ASAN follow-up: the accepted GN implementation adds the default-off
+`mdds_bridge_asan_use_process_runtime` mode for an instrumented bridge loaded by a host executable that owns one
+static ASAN runtime. The source-generated bridge `2982e8c8...` has no dynamic ASAN dependency, leaves 48 ASAN hooks
+for the host, and all hooks are exported by broker `aa73a715...`. Both RK3588A boards used the same instrumented RMW
+`78068556...` and test bundle `f42676f9...`; each passed all 16 arm64 OHOS `test_rmw_implementation` programs with
+zero functional failure, zero test/broker ASAN finding, a live broker, and `BOARD_RC=0` while bridge loading and
+cross-board graph sync were active. The default production build also passed and retained CFI cross-DSO with no
+ASAN dependency/symbol. This closes the exact-artifact full-stack ASAN invalid-access gate; LeakSanitizer remains
+unavailable on OHOS and is not claimed.
+
+2026-07-11 full-stack TSAN follow-up: both RK3588A boards were hash-verified with instrumented RMW `241d11b3...`,
+broker `55f94657...`, and MDDS/DSoftBus bridge `546c7aba...`. A test-only runtime compatibility object preserves
+TSan's report decision around the broken OHOS clang 15 finalization path: a clean minimal program exits 0, while a
+deliberate race emits `RMW_MDDS_TSAN_REPORT` and exits 66. The initial focused matrix produced 7/16 clean programs
+and nine reports. An unhooked diagnostic run identified a real close-versus-`recv()` race in `IpcClient::Stop()`;
+the implementation now shuts down the descriptor, joins the reader thread, and only then closes it.
+
+Two remaining rc=139 cases were fixture lifecycle violations in the upstream-derived QoS tests: they destroyed the
+node before destroying the client/service child. Disclosed workspace patch
+`0008-rmw-implementation-destroy-qos-test-entities.patch` adds scoped child destruction, so this is not represented
+as an unmodified upstream test suite. With that patch, the repository full-stack runner passed all 16 arm64 OHOS
+programs on each board with `functional_fail=0`, zero test/broker TSAN reports, a live broker, the expected bridge
+hash, and `BOARD_RC=0`. This closes the exact-artifact full-stack TSAN conformance/bridge race gate.
+
+A complete default rebuild restored `out/arm64/targets` to normal bridge `58169fc3...`; it has no ASAN/TSAN
+dependency or dynamic symbol and retains `__cfi_check`. This output remains distinct from the TSAN acceptance
+artifact.
+
+Task 5.5 remains unchecked. Valid full-stack RMW performance, broader security/action-bag, dynamic/broker
+subscription zero-copy breadth, explicit remaining skip disposition, and other P2/P3 stability evidence are still
+incomplete, so the persistent goal cannot be marked complete or production-ready.
+
+2026-07-11 lifecycle shutdown follow-up: the host delivery gate exposed intermittent `ros2 lifecycle get`
+`SIGABRT` results that its retry loop could hide. A post-start GDB capture proved the main Python thread had entered
+`_dl_fini` while two `get_type_description` service broker readers from separate rmw contexts were still updating
+the process graph. `IpcClient` instances are now registered by `rmw_context_t`, and `rmw_shutdown()` synchronously
+stops only the matching context's readers using `shutdown()`, join, then close. The deterministic package test was
+RED because `rmw_send_response()` still succeeded after shutdown; its GREEN form also proves that a second context
+remains operational until its own shutdown.
+
+The original Release reproducer passed 100/100 iterations with glibc tcache disabled and `MALLOC_PERTURB_` enabled.
+Package CTest passed 23/23, the accepted upstream-derived suite passed 16/16, and the full host delivery umbrella
+passed. The lifecycle runner now fails immediately on `rc>=128` and dumps the failed attempt instead of retrying to
+a false PASS. Production RMW `da23c6d7...`, broker `5dbdd9d2...`, and bridge `58169fc3...` passed 20/20 real
+cross-board lifecycle requests through `rmw_mdds_cpp` with `BOARD_RC=0`. The changed RMW was also rebuilt as TSAN
+artifact `6b04c69a...`; with broker `55f94657...` and bridge `546c7aba...`, both boards again passed all 16 programs
+with zero functional or TSAN failure, a live broker, and `BOARD_RC=0`.
+
+This closes the lifecycle shutdown heap-corruption and runner false-positive blocker. Task 5.5 remains unchecked;
+the independent performance, zero-copy breadth, broader security/action-bag, and remaining production evidence are
+still required before the broad goal can be marked complete.
+
+2026-07-11 native action-bag and graph-guard follow-up: a real cross-board `ros2 bag record --actions` run showed
+that the recorder's broker reader refreshed its remote endpoint cache while rosbag2 remained blocked in
+`wait_for_graph_change()`. The missing boundary was `UpdateGraphCache()` to the node graph guard conditions.
+`GraphUpdateTriggersNodeGraphGuardCondition` was RED before the change and GREEN after endpoint-content changes
+began triggering all live graph guards. Heartbeat epoch-only updates do not wake waiters, and guard trigger/consume
+state is atomic.
+
+Package CTest passed 23/23. The host native action record/info/play runner passed 10/10 consecutive runs through
+`rmw_mdds_cpp`. Production RMW `3927ec62...`, broker `5dbdd9d2...`, bridge `58169fc3...`, and probe `cbdd236e...`
+were hash-consistent on both RK3588A boards. Three consecutive cross-board runs on domain pairs 209/210, 211/212,
+and 213/214 each reported one action, send-goal request/response 2/2, cancel-goal 1/1, get-result 2/2, replay
+goals=2/cancel=1, and `BOARD_RC=0`.
+
+The script contract then found an obsolete explicit `librmw_implementation.so` preload in the new runner. After
+removing it, a runtime-selectable-only rerun on domains 215/216 produced the same exact record/play counts,
+identified `rmw_mdds_cpp`, and ended both board phases with `BOARD_RC=0`.
+
+A post-run audit found stale broker socket files despite zero live process. Cleanup now removes runtime sockets and
+PID files from both boards. The cleanup-fixed domains 217/218 rerun passed with the same action counts; afterwards
+both boards reported process=0, socket=0, PID file=0, and `BOARD_RC=0`.
+
+The affected RMW was rebuilt as fail-closed TSAN artifact `e7656568...`. With broker `55f94657...` and bridge
+`546c7aba...`, both boards passed all 16 arm64 OHOS programs with zero functional failure, zero current test/broker
+TSAN report, a live broker, and `BOARD_RC=0`. The normal production deployment remained
+`3927ec62.../5dbdd9d2.../58169fc3...` after the temporary TSAN gate. Clean temporary worktrees also applied the
+complete `rcl`, `rclcpp`, and `rosbag2` patch artifacts, and the action-bag contract verifies their workspace patch
+routing.
+
+The final host delivery umbrella passed after the no-preload correction: security, SROS2 policy, zero-copy,
+artifact, and action-bag contracts; package CTest 23/23; the accepted upstream-derived suite 16/16;
+type-description; and all CLI lanes.
+
+This closes the dedicated native action-bag CLI blocker and the affected graph wake-up/TSAN regression. Task 5.5
+remains unchecked because valid full-stack RMW performance, broader security combinations, dynamic/broker
+subscription zero-copy breadth, explicit remaining skip disposition, and remaining long-stability/P2/P3 evidence
+are still incomplete.

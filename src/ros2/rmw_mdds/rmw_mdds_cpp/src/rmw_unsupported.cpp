@@ -21,6 +21,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <string>
@@ -352,7 +353,7 @@ bool BorrowPublisherBridgeLoan(rmw_mdds_cpp::PublisherData *data,
   loan->message_in_loan = false;
   loan->raw_message_in_loan = false;
   loan->storage_owned_by_rmw = false;
-  loan->arena.Reset(bridge_data, kDefaultBridgeLoanedPayloadCapacity);
+  loan->memory_resource.reset();
   return true;
 }
 
@@ -383,7 +384,7 @@ bool BorrowPublisherBrokerLoan(rmw_mdds_cpp::PublisherData *data,
   loan->message_in_loan = false;
   loan->raw_message_in_loan = false;
   loan->storage_owned_by_rmw = true;
-  loan->arena.Reset(storage, loan_capacity);
+  loan->memory_resource.reset();
   return true;
 }
 
@@ -397,21 +398,6 @@ bool StorePublisherLoanRecord(
   return data->bridge_publisher_loans.emplace(ros_message, loan).second;
 }
 
-bool ArmPublisherLoanArena(rmw_mdds_cpp::PublisherData *data, void *ros_message,
-                           size_t allocation_count, size_t alignment) {
-  if (data == nullptr || ros_message == nullptr) {
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(data->mutex);
-  auto it = data->bridge_publisher_loans.find(ros_message);
-  if (it == data->bridge_publisher_loans.end()) {
-    return false;
-  }
-  rmw_mdds_cpp::ArmLoanArenaForNextAllocation(&it->second.arena,
-                                              allocation_count, alignment);
-  return true;
-}
-
 bool TakePublisherLoanRecord(rmw_mdds_cpp::PublisherData *data,
                              void *ros_message,
                              rmw_mdds_cpp::BridgePublisherLoanRecord *loan) {
@@ -423,7 +409,6 @@ bool TakePublisherLoanRecord(rmw_mdds_cpp::PublisherData *data,
   if (it == data->bridge_publisher_loans.end()) {
     return false;
   }
-  rmw_mdds_cpp::DisarmLoanArenaAllocation(&it->second.arena);
   *loan = it->second;
   data->bridge_publisher_loans.erase(it);
   return true;
@@ -2137,29 +2122,41 @@ rmw_borrow_loaned_message(const rmw_publisher_t *publisher,
       const size_t reserved_size = supports_dynamic_string_loan
                                        ? kCdrStringDataOffset
                                        : kDynamicPayloadHeadroom;
-      void *reserved_header =
-          bridge_loan.arena.Allocate(reserved_size, alignof(char));
-      void *message = reserved_header == nullptr
-                          ? nullptr
-                          : data->adapter.ConstructMessageInPlaceAtEnd(
-                                bridge_loan.data, bridge_loan.capacity);
+      void *message_storage = data->adapter.MessageStorageAtEnd(
+          bridge_loan.data, bridge_loan.capacity);
+      const auto *loan_begin = static_cast<const uint8_t *>(bridge_loan.data);
+      const auto *message_begin = static_cast<const uint8_t *>(message_storage);
+      const size_t arena_capacity = message_storage == nullptr
+                                        ? 0u
+                                        : static_cast<size_t>(message_begin -
+                                                              loan_begin);
+      try {
+        if (arena_capacity != 0u) {
+          bridge_loan.memory_resource =
+              std::make_shared<rmw_mdds_cpp::MddsLoanMemoryResource>(
+                  bridge_loan.data, arena_capacity);
+        }
+      } catch (const std::bad_alloc &) {
+        bridge_loan.memory_resource.reset();
+      }
+      void *reserved_header = bridge_loan.memory_resource == nullptr
+                                  ? nullptr
+                                  : bridge_loan.memory_resource->Allocate(
+                                        reserved_size, alignof(char));
+      void *message = nullptr;
+      if (reserved_header != nullptr) {
+        rosidl_runtime_cpp::ScopedMessageMemoryResource scope(
+            bridge_loan.memory_resource->Resource());
+        message = data->adapter.ConstructMessageInPlace(
+            message_storage, bridge_loan.capacity - arena_capacity);
+      }
       if (message != nullptr) {
         bridge_loan.message_in_loan = true;
         bridge_loan.raw_message_in_loan = false;
-        const bool stored =
-            StorePublisherLoanRecord(data, message, bridge_loan);
-        const size_t allocation_count = supports_dynamic_string_loan ? 1u : 8u;
-        const size_t allocation_alignment = supports_dynamic_string_loan
-                                                ? alignof(char)
-                                                : alignof(std::max_align_t);
-        if (stored && ArmPublisherLoanArena(data, message, allocation_count,
-                                            allocation_alignment)) {
+        const bool stored = StorePublisherLoanRecord(data, message, bridge_loan);
+        if (stored) {
           *ros_message = message;
           return RMW_RET_OK;
-        }
-        if (stored) {
-          rmw_mdds_cpp::BridgePublisherLoanRecord unused_loan;
-          (void)TakePublisherLoanRecord(data, message, &unused_loan);
         }
         data->adapter.DestroyMessageInPlace(message);
       }
@@ -2683,6 +2680,14 @@ rmw_ret_t rmw_subscription_set_content_filter(
     subscription->is_cft_enabled = options != nullptr &&
                                    options->filter_expression != nullptr &&
                                    options->filter_expression[0] != '\0';
+    if (data != nullptr && data->broker_client != nullptr) {
+      const bool dynamic_loan = data->broker_dynamic_loan_requested &&
+        rmw_mdds_cpp::BrokerClientSupportsDynamicLoanedMessages(data->broker_client);
+      const bool raw_loan = !subscription->is_cft_enabled &&
+        data->broker_raw_loan_requested &&
+        rmw_mdds_cpp::BrokerClientSupportsLoanedMessages(data->broker_client);
+      subscription->can_loan_messages = dynamic_loan || raw_loan;
+    }
   }
   return ret;
 }
@@ -2703,6 +2708,48 @@ rmw_ret_t TryTakeBridgeLoanedMessageCopy(rmw_mdds_cpp::SubscriptionData *data,
                                          void *message, bool *taken,
                                          rmw_message_info_t *message_info,
                                          bool *attempted);
+
+rmw_ret_t TryTakeBrokerLoanedMessageCopy(
+    rmw_mdds_cpp::SubscriptionData *data, void *message, bool *taken,
+    rmw_message_info_t *message_info) {
+  *taken = false;
+  if (data == nullptr || message == nullptr || data->broker_client == nullptr) {
+    return RMW_RET_OK;
+  }
+  rmw_mdds_cpp::BrokerLoanedSample sample;
+  while (rmw_mdds_cpp::TakeBrokerLoanedSample(data, &sample)) {
+    if (IsSampleExpiredByLifespan(data->actual_qos, sample.info)) {
+      rmw_mdds_cpp::DestroyBrokerLoanedSampleMessage(data, &sample);
+      std::string ignored_error;
+      (void)rmw_mdds_cpp::BrokerClientReturnLoan(
+          data->broker_client, sample.loan_id, &ignored_error);
+      continue;
+    }
+    const bool decoded =
+        sample.from_bridge
+            ? data->adapter.DecodeMdds(sample.data, sample.len, message)
+            : data->adapter.Decode(sample.data, sample.len, message);
+    rmw_mdds_cpp::DestroyBrokerLoanedSampleMessage(data, &sample);
+    std::string error;
+    const bool returned = rmw_mdds_cpp::BrokerClientReturnLoan(
+        data->broker_client, sample.loan_id, &error);
+    if (!decoded) {
+      RMW_SET_ERROR_MSG("failed to decode broker loaned sequence sample");
+      return RMW_RET_ERROR;
+    }
+    if (!returned) {
+      RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
+          "failed to return broker loaned sequence sample: %s", error.c_str());
+      return RMW_RET_ERROR;
+    }
+    if (message_info != nullptr) {
+      *message_info = sample.info;
+    }
+    *taken = true;
+    return RMW_RET_OK;
+  }
+  return RMW_RET_OK;
+}
 
 rmw_ret_t rmw_take_sequence(const rmw_subscription_t *subscription,
                             size_t count,
@@ -2747,6 +2794,17 @@ rmw_ret_t rmw_take_sequence(const rmw_subscription_t *subscription,
   auto *data =
       static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
   for (size_t i = 0; i < count; ++i) {
+    bool broker_taken = false;
+    ret = TryTakeBrokerLoanedMessageCopy(
+        data, message_sequence->data[i], &broker_taken,
+        &message_info_sequence->data[i]);
+    if (ret != RMW_RET_OK) {
+      return ret;
+    }
+    if (broker_taken) {
+      ++(*taken);
+      continue;
+    }
     rmw_mdds_cpp::QueuedSample sample;
     if (TakeNextLiveQueuedSample(data, &sample)) {
       const bool decoded =
@@ -2974,6 +3032,97 @@ rmw_ret_t TryTakeBridgeLoanedMessage(rmw_mdds_cpp::SubscriptionData *data,
   return RMW_RET_OK;
 }
 
+rmw_ret_t TryTakeBrokerLoanedMessage(rmw_mdds_cpp::SubscriptionData *data,
+                                     void **message, bool *taken,
+                                     rmw_message_info_t *message_info) {
+  if (data == nullptr || message == nullptr || taken == nullptr ||
+      data->broker_client == nullptr) {
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  *message = nullptr;
+  *taken = false;
+  const size_t message_size = data->adapter.MessageSize();
+  const bool supports_raw =
+      data->adapter.SupportsBrokerRawLoanedMessage() && message_size != 0u;
+  const bool supports_dynamic =
+      data->adapter.SupportsDynamicLoanedMessage() &&
+      rmw_mdds_cpp::BrokerClientSupportsDynamicLoanedMessages(data->broker_client);
+  if (!supports_raw && !supports_dynamic) {
+    RMW_SET_ERROR_MSG(
+        "broker loaned take requires a fixed raw layout or allocator-aware dynamic arena");
+    return RMW_RET_UNSUPPORTED;
+  }
+  if (!supports_dynamic &&
+      (data->content_filter_enabled || data->numeric_filter_enabled)) {
+    RMW_SET_ERROR_MSG(
+        "broker loaned take with a content filter is not supported");
+    return RMW_RET_UNSUPPORTED;
+  }
+
+  rmw_mdds_cpp::BrokerLoanedSample broker_sample;
+  while (rmw_mdds_cpp::TakeBrokerLoanedSample(data, &broker_sample)) {
+    if (IsSampleExpiredByLifespan(data->actual_qos, broker_sample.info)) {
+      rmw_mdds_cpp::DestroyBrokerLoanedSampleMessage(data, &broker_sample);
+      std::string ignored_error;
+      (void)rmw_mdds_cpp::BrokerClientReturnLoan(
+          data->broker_client, broker_sample.loan_id, &ignored_error);
+      continue;
+    }
+    void *loaned_message = nullptr;
+    if (broker_sample.dynamic) {
+      std::string construct_error;
+      if (!rmw_mdds_cpp::ConstructBrokerLoanedMessage(
+          data, &broker_sample, &construct_error)) {
+        std::string ignored_error;
+        (void)rmw_mdds_cpp::BrokerClientReturnLoan(
+            data->broker_client, broker_sample.loan_id, &ignored_error);
+        RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
+            "failed to construct broker dynamic loaned message: %s",
+            construct_error.c_str());
+        return RMW_RET_ERROR;
+      }
+      loaned_message = broker_sample.typed_message;
+    } else if (broker_sample.data == nullptr || broker_sample.len < message_size) {
+      std::string ignored_error;
+      (void)rmw_mdds_cpp::BrokerClientReturnLoan(
+          data->broker_client, broker_sample.loan_id, &ignored_error);
+      RMW_SET_ERROR_MSG("broker loaned message is smaller than the ROS message type");
+      return RMW_RET_ERROR;
+    } else {
+      loaned_message = const_cast<uint8_t *>(broker_sample.data);
+    }
+
+    rmw_mdds_cpp::BrokerLoanedMessageRecord record;
+    record.data = loaned_message;
+    record.len = broker_sample.len;
+    record.loan_id = broker_sample.loan_id;
+    record.message_in_arena = broker_sample.dynamic;
+    record.memory_resource = broker_sample.memory_resource;
+    bool inserted = false;
+    {
+      std::lock_guard<std::mutex> lock(data->mutex);
+      inserted = data->broker_loaned_messages.emplace(loaned_message, record).second;
+    }
+    if (!inserted) {
+      rmw_mdds_cpp::DestroyBrokerLoanedSampleMessage(data, &broker_sample);
+      std::string ignored_error;
+      (void)rmw_mdds_cpp::BrokerClientReturnLoan(
+          data->broker_client, broker_sample.loan_id, &ignored_error);
+      RMW_SET_ERROR_MSG("broker loaned message address is already active");
+      return RMW_RET_ERROR;
+    }
+    if (message_info != nullptr) {
+      *message_info = broker_sample.info;
+    }
+    broker_sample.typed_message = nullptr;
+    broker_sample.memory_resource.reset();
+    *message = loaned_message;
+    *taken = true;
+    return RMW_RET_OK;
+  }
+  return RMW_RET_OK;
+}
+
 rmw_ret_t TryTakeQueuedLoanedMessage(rmw_mdds_cpp::SubscriptionData *data,
                                      void *message, bool *taken,
                                      rmw_message_info_t *message_info) {
@@ -3021,6 +3170,9 @@ static rmw_ret_t TakeLoanedCommon(const rmw_subscription_t *subscription,
       !subscription->can_loan_messages) {
     RMW_SET_ERROR_MSG("subscription does not support loaned messages");
     return RMW_RET_UNSUPPORTED;
+  }
+  if (data->broker_client != nullptr) {
+    return TryTakeBrokerLoanedMessage(data, loaned_message, taken, message_info);
   }
   bool attempted_bridge_loaned = false;
   void *message = nullptr;
@@ -3088,6 +3240,28 @@ rmw_ret_t rmw_return_loaned_message_from_subscription(
     RMW_SET_ERROR_MSG("loaned message is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
+  rmw_mdds_cpp::BrokerLoanedMessageRecord broker_record;
+  bool has_broker_loan = false;
+  {
+    std::lock_guard<std::mutex> lock(data->mutex);
+    const auto it = data->broker_loaned_messages.find(loaned_message);
+    if (it != data->broker_loaned_messages.end()) {
+      broker_record = it->second;
+      data->broker_loaned_messages.erase(it);
+      has_broker_loan = true;
+    }
+  }
+  if (has_broker_loan) {
+    rmw_mdds_cpp::DestroyBrokerLoanedMessageRecord(data, &broker_record);
+    std::string error;
+    if (!rmw_mdds_cpp::BrokerClientReturnLoan(
+        data->broker_client, broker_record.loan_id, &error)) {
+      RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
+          "failed to return broker loaned message: %s", error.c_str());
+      return RMW_RET_ERROR;
+    }
+    return RMW_RET_OK;
+  }
   rmw_mdds_cpp::BridgeLoanedMessageRecord bridge_record;
   bool has_bridge_loan = false;
   {
@@ -3098,6 +3272,10 @@ rmw_ret_t rmw_return_loaned_message_from_subscription(
       data->bridge_loaned_messages.erase(it);
       has_bridge_loan = true;
     }
+  }
+  if (!has_bridge_loan) {
+    RMW_SET_ERROR_MSG("loaned message was not taken from this subscription");
+    return RMW_RET_ERROR;
   }
 
   rmw_ret_t bridge_ret = RMW_RET_OK;

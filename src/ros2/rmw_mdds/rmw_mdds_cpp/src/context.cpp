@@ -651,6 +651,20 @@ void UnregisterNode(NodeData * node)
   g_nodes.erase(std::remove(g_nodes.begin(), g_nodes.end(), node), g_nodes.end());
 }
 
+void TriggerGraphGuardConditions()
+{
+  std::lock_guard<std::mutex> lock(g_node_graph_mutex);
+  for (const auto * node : g_nodes) {
+    if (node == nullptr || node->graph_guard_condition == nullptr) {
+      continue;
+    }
+    auto * guard_data = static_cast<GuardConditionData *>(node->graph_guard_condition->data);
+    if (guard_data != nullptr) {
+      guard_data->triggered.store(true, std::memory_order_release);
+    }
+  }
+}
+
 std::vector<NodeGraphInfo> GetRegisteredNodes()
 {
   std::vector<NodeGraphInfo> nodes;

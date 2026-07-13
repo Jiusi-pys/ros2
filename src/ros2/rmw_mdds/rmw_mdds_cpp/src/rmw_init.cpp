@@ -482,6 +482,7 @@ rmw_ret_t rmw_shutdown(rmw_context_t * context)
     return ret;
   }
   rmw_mdds_cpp::StopRtpsUserDataReceiver(context);
+  rmw_mdds_cpp::StopBrokerClientsForContext(context);
   context->impl->is_shutdown = true;
   return RMW_RET_OK;
 }

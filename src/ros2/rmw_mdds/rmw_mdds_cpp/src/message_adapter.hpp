@@ -26,49 +26,58 @@
 #include "rosidl_typesupport_introspection_cpp/message_introspection.hpp"
 #include "string_adapter.hpp"
 
-namespace rmw_mdds_cpp {
+namespace rmw_mdds_cpp
+{
 
 class MessageAdapter {
 public:
   bool Init(const rosidl_message_type_support_t *type_support);
   bool IsValid() const;
-  const std::string &TypeName() const;
-  const rosidl_type_hash_t &TypeHash() const;
-  const std::string &WireTypeName() const;
-  const std::string &MddsTypeName() const;
+  const std::string & TypeName() const;
+  const rosidl_type_hash_t & TypeHash() const;
+  const std::string & WireTypeName() const;
+  const std::string & MddsTypeName() const;
   bool Encode(const void *ros_message, std::vector<uint8_t> *payload) const;
   bool Decode(const uint8_t *data, size_t len, void *ros_message) const;
   bool EncodeMdds(const void *ros_message, std::vector<uint8_t> *payload) const;
   bool EncodedMddsSize(const void *ros_message, size_t *payload_size) const;
-  bool EncodeMddsIntoBuffer(const void *ros_message, void *buffer,
-                            size_t capacity, size_t *payload_size) const;
+  bool EncodeMddsIntoBuffer(
+    const void *ros_message, void *buffer,
+    size_t capacity, size_t *payload_size) const;
   bool DecodeMdds(const uint8_t *data, size_t len, void *ros_message) const;
-  bool SerializedToMddsPayload(const uint8_t *data, size_t len,
-                               std::vector<uint8_t> *payload) const;
-  bool MddsPayloadToSerialized(const uint8_t *data, size_t len,
-                               std::vector<uint8_t> *payload) const;
+  bool SerializedToMddsPayload(
+    const uint8_t *data, size_t len,
+    std::vector<uint8_t> *payload) const;
+  bool MddsPayloadToSerialized(
+    const uint8_t *data, size_t len,
+    std::vector<uint8_t> *payload) const;
 
   // Allocate/destroy a default-constructed message of the concrete type, used
   // by the loaned-message API (rmw_borrow_loaned_message /
   // take_loaned_message). The returned buffer is owned by the caller until
   // handed to DestroyMessage().
-  void *AllocateMessage() const;
+  void * AllocateMessage() const;
   void DestroyMessage(void *message) const;
   size_t MessageSize() const;
   bool SupportsRawLoanedMessage() const;
+  bool SupportsBrokerRawLoanedMessage() const;
   bool SupportsDynamicStringLoanedMessage() const;
   bool SupportsDynamicLoanedMessage() const;
-  bool DynamicStorageWithinLoan(const void *ros_message, const void *storage,
-                                size_t capacity) const;
-  void *ConstructMessageInPlace(void *storage, size_t capacity) const;
-  void *ConstructMessageInPlaceAtEnd(void *storage, size_t capacity) const;
+  bool DynamicStorageWithinLoan(
+    const void *ros_message, const void *storage,
+    size_t capacity) const;
+  void * ConstructMessageInPlace(void *storage, size_t capacity) const;
+  void * MessageStorageAtEnd(void *storage, size_t capacity) const;
+  void * ConstructMessageInPlaceAtEnd(void *storage, size_t capacity) const;
   void DestroyMessageInPlace(void *message) const;
-  bool EncodeLoanedStringMddsIntoBuffer(const void *ros_message, void *buffer,
-                                        size_t capacity,
-                                        size_t *payload_size) const;
-  bool PrepareLoanedDynamicMddsPayload(const void *ros_message, void *buffer,
-                                       size_t capacity,
-                                       size_t *payload_size) const;
+  bool EncodeLoanedStringMddsIntoBuffer(
+    const void *ros_message, void *buffer,
+    size_t capacity,
+    size_t *payload_size) const;
+  bool PrepareLoanedDynamicMddsPayload(
+    const void *ros_message, void *buffer,
+    size_t capacity,
+    size_t *payload_size) const;
 
   // Content-filter support for scalar fields (DDS-SQL `field OP value`).
   // Has*Field reports whether a scalar member exists at this field path (for
@@ -76,27 +85,31 @@ public:
   // reads such a member from a decoded message into `out`. These helpers
   // consult introspection members and return false for absent / array /
   // wrong-type fields.
-  bool HasNumericField(const std::string &field_name) const;
-  bool ReadNumericField(const void *ros_message, const std::string &field_name,
-                        double *out) const;
-  bool HasStringField(const std::string &field_name) const;
-  bool ReadStringField(const void *ros_message, const std::string &field_name,
-                       std::string *out) const;
+  bool HasNumericField(const std::string & field_name) const;
+  bool ReadNumericField(
+    const void *ros_message, const std::string & field_name,
+    double *out) const;
+  bool HasStringField(const std::string & field_name) const;
+  bool ReadStringField(
+    const void *ros_message, const std::string & field_name,
+    std::string *out) const;
 
 private:
-  enum class StorageKind {
+  enum class StorageKind
+  {
     None,
     Cdr,
     Legacy,
   };
 
-  enum class MessageMembersKind {
+  enum class MessageMembersKind
+  {
     None,
     C,
     Cpp,
   };
 
-  void *AllocateTemporaryMessage() const;
+  void * AllocateTemporaryMessage() const;
   void DestroyTemporaryMessage(void *message) const;
 
   std::string type_name_;
@@ -106,14 +119,14 @@ private:
   MessageMembersKind message_members_kind_ = MessageMembersKind::None;
   const message_type_support_callbacks_t *cdr_callbacks_ = nullptr;
   const rosidl_typesupport_introspection_c__MessageMembers *c_members_ =
-      nullptr;
+    nullptr;
   const rosidl_typesupport_introspection_cpp::MessageMembers *cpp_members_ =
-      nullptr;
+    nullptr;
   StringAdapter legacy_adapter_;
 };
 
 bool CdrMaxSerializedMessageSize(
-    const rosidl_message_type_support_t *type_support, size_t *size);
+  const rosidl_message_type_support_t *type_support, size_t *size);
 
 } // namespace rmw_mdds_cpp
 

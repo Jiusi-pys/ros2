@@ -16,6 +16,7 @@
 #define RMW_MDDS_CPP_SRC__CONTEXT_HPP_
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -77,7 +78,7 @@ struct NodeGraphInfo
 
 struct GuardConditionData
 {
-  bool triggered;
+  std::atomic<bool> triggered{false};
 };
 
 struct WaitSetData
@@ -182,6 +183,8 @@ rmw_ret_t CheckContextNotShutdown(rmw_context_t * context);
 void RegisterNode(NodeData * node);
 
 void UnregisterNode(NodeData * node);
+
+void TriggerGraphGuardConditions();
 
 std::vector<NodeGraphInfo> GetRegisteredNodes();
 

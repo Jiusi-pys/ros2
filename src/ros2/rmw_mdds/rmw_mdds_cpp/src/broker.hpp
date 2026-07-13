@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -49,13 +50,35 @@ struct BridgePublisherLoanRecord {
   bool message_in_loan = false;
   bool raw_message_in_loan = false;
   bool storage_owned_by_rmw = false;
-  MddsLoanArena arena;
+  std::shared_ptr<MddsLoanMemoryResource> memory_resource;
 };
 
 struct QueuedSample {
   std::vector<uint8_t> payload;
   rmw_message_info_t info;
   bool from_bridge = false;
+};
+
+struct BrokerLoanedSample {
+  const uint8_t *data = nullptr;
+  uint32_t len = 0u;
+  void *arena = nullptr;
+  uint32_t arena_capacity = 0u;
+  uint32_t slot_index = 0u;
+  void *typed_message = nullptr;
+  std::shared_ptr<MddsLoanMemoryResource> memory_resource;
+  uint64_t loan_id = 0u;
+  rmw_message_info_t info = rmw_get_zero_initialized_message_info();
+  bool from_bridge = false;
+  bool dynamic = false;
+};
+
+struct BrokerLoanedMessageRecord {
+  const void *data = nullptr;
+  uint32_t len = 0u;
+  uint64_t loan_id = 0u;
+  bool message_in_arena = false;
+  std::shared_ptr<MddsLoanMemoryResource> memory_resource;
 };
 
 struct PublisherData {
@@ -196,6 +219,8 @@ struct SubscriptionData {
       last_publication_seq_by_writer;
   std::mutex mutex;
   std::deque<QueuedSample> queue;
+  std::deque<BrokerLoanedSample> broker_loaned_queue;
+  std::map<void *, BrokerLoanedMessageRecord> broker_loaned_messages;
   std::map<void *, BridgeLoanedMessageRecord> bridge_loaned_messages;
   uint64_t next_reception_sequence_number = 1;
   bool content_filter_enabled = false;
@@ -218,6 +243,8 @@ struct SubscriptionData {
       numeric_filter_disjunctions;
   void *bridge_subscription = nullptr;
   void *broker_client = nullptr;
+  bool broker_raw_loan_requested = false;
+  bool broker_dynamic_loan_requested = false;
 };
 
 struct NameAndTypes {
@@ -246,9 +273,23 @@ void PublishToSubscriptions(PublisherData *publisher,
                             const std::vector<uint8_t> &payload,
                             uint64_t publication_sequence_number);
 void EnqueueSample(SubscriptionData *subscription, const QueuedSample &sample);
+void EnqueueBrokerLoanedSample(
+    SubscriptionData *subscription, const BrokerLoanedSample &sample);
+bool TakeBrokerLoanedSample(SubscriptionData *subscription,
+                            BrokerLoanedSample *sample);
 bool PayloadMatchesContentFilter(const SubscriptionData &subscription,
                                  const std::vector<uint8_t> &payload,
                                  bool payload_is_mdds = false);
+bool MessageMatchesContentFilter(
+    const SubscriptionData &subscription, const void *message);
+bool ConstructBrokerLoanedMessage(
+    SubscriptionData *subscription, BrokerLoanedSample *sample,
+    std::string *error);
+void DestroyBrokerLoanedSampleMessage(
+    SubscriptionData *subscription, BrokerLoanedSample *sample);
+void DestroyBrokerLoanedMessageRecord(
+    SubscriptionData *subscription, BrokerLoanedMessageRecord *record);
+void DiscardBrokerLoanedLocalState(SubscriptionData *subscription);
 size_t EnqueueRtpsUserDataForReader(const rtps::EntityId &reader_id,
                                     const rtps::GuidPrefix &writer_guid_prefix,
                                     const rtps::EntityId &writer_id,

@@ -34,7 +34,10 @@
 
 extern "C" {
 void FakeMddsBridgeReset(void);
+void FakeMddsBridgeFailNextPublisherCreate(void);
+void FakeMddsBridgeFailNextSubscriberCreate(void);
 int FakeMddsBridgeInitCount(void);
+int FakeMddsBridgeShutdownCount(void);
 int FakeMddsBridgeProtectedTransportActivateCount(void);
 int FakeMddsBridgeProtectedTransportAuthenticated(void);
 int FakeMddsBridgeProtectedTransportEncrypted(void);
@@ -229,7 +232,8 @@ bool FindGraphEndpoint(const rmw_mdds_cpp::ipc::Frame &frame,
 
 void RegisterEndpoint(int fd,
                       const rmw_mdds_cpp::ipc::EndpointDescriptor &endpoint,
-                      uint64_t request_id) {
+                      uint64_t request_id,
+                      rmw_mdds_cpp::ipc::Frame *registration_ack = nullptr) {
   rmw_mdds_cpp::ipc::MessageKind kind = rmw_mdds_cpp::ipc::MessageKind::kError;
   switch (endpoint.kind) {
   case rmw_mdds_cpp::ipc::EndpointKind::kPublisher:
@@ -267,7 +271,11 @@ void RegisterEndpoint(int fd,
   }
   EXPECT_EQ(rmw_mdds_cpp::ipc::MessageKind::kAck, ack.kind);
   EXPECT_EQ(request_id, ack.request_id);
-  EXPECT_TRUE(ack.payload.empty());
+  if (registration_ack != nullptr) {
+    *registration_ack = std::move(ack);
+  } else {
+    EXPECT_TRUE(ack.payload.empty());
+  }
 }
 
 bool HasReadableData(int fd) {
@@ -406,6 +414,25 @@ bool WaitForPayload(int fd, const std::vector<uint8_t> &expected_payload,
   return false;
 }
 } // namespace
+
+TEST(RmwMddsIpcBroker, StopShutsDownConfiguredBridgeRuntime) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  FakeMddsBridgeReset();
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+  ASSERT_EQ(1, FakeMddsBridgeInitCount());
+  ASSERT_EQ(0, FakeMddsBridgeShutdownCount());
+
+  broker.Stop();
+  EXPECT_EQ(1, FakeMddsBridgeShutdownCount());
+}
 
 TEST(RmwMddsIpcBroker, UsesConfiguredNodeSyncTopic) {
   EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
@@ -549,6 +576,118 @@ TEST(RmwMddsIpcBroker, RoutesPublishedSamplesToMatchingSubscriptions) {
       ExpectValidGraphUpdate(frame);
     }
   }
+}
+
+TEST(RmwMddsIpcBroker, ValidatesLoanReturnsPerConnectionAndReclaimsOnDisconnect) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE");
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE", "0", 1));
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  rmw_mdds_cpp::ipc::UniqueFd publisher =
+    rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(publisher) << error;
+  rmw_mdds_cpp::ipc::UniqueFd subscription =
+    rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(subscription) << error;
+  rmw_mdds_cpp::ipc::UniqueFd foreign_subscription =
+    rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(foreign_subscription) << error;
+
+  auto publisher_endpoint = MakeEndpoint(
+    100u, rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
+    "/broker/loan_int32", "std_msgs/msg/Int32");
+  auto subscription_endpoint = MakeEndpoint(
+    200u, rmw_mdds_cpp::ipc::EndpointKind::kSubscription,
+    "/broker/loan_int32", "std_msgs/msg/Int32");
+  subscription_endpoint.loaned_message_size = sizeof(int32_t);
+  subscription_endpoint.qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+  subscription_endpoint.qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
+  subscription_endpoint.qos.depth = 10u;
+  auto foreign_endpoint = MakeEndpoint(
+    300u, rmw_mdds_cpp::ipc::EndpointKind::kSubscription,
+    "/broker/other_loan_int32", "std_msgs/msg/Int32");
+  foreign_endpoint.loaned_message_size = sizeof(int32_t);
+
+  RegisterEndpoint(publisher.get(), publisher_endpoint, 1u);
+  rmw_mdds_cpp::ipc::Frame subscription_ack;
+  RegisterEndpoint(subscription.get(), subscription_endpoint, 2u, &subscription_ack);
+  rmw_mdds_cpp::ipc::Frame foreign_ack;
+  RegisterEndpoint(foreign_subscription.get(), foreign_endpoint, 3u, &foreign_ack);
+
+  rmw_mdds_cpp::ipc::LoanPoolDescriptor pool;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeLoanPoolDescriptor(
+    subscription_ack.payload.data(), subscription_ack.payload.size(), &pool, &error)) << error;
+  EXPECT_EQ(0, access(pool.path.c_str(), F_OK));
+  rmw_mdds_cpp::ipc::LoanPoolDescriptor foreign_pool;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeLoanPoolDescriptor(
+    foreign_ack.payload.data(), foreign_ack.payload.size(), &foreign_pool, &error)) << error;
+  EXPECT_NE(pool.path, foreign_pool.path);
+
+  auto publish_value = [&](int32_t value, uint64_t sequence, uint64_t request_id) {
+      rmw_mdds_cpp::ipc::SampleMessage sample;
+      sample.entity_id = publisher_endpoint.entity_id;
+      sample.sequence_number = sequence;
+      sample.payload.resize(sizeof(value));
+      std::memcpy(sample.payload.data(), &value, sizeof(value));
+      ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+        publisher.get(),
+        rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kPublishSample, request_id,
+          rmw_mdds_cpp::ipc::EncodeSampleMessage(sample)},
+        &error)) << error;
+    };
+
+  publish_value(71, 11u, 4u);
+  rmw_mdds_cpp::ipc::Frame delivery;
+  ReadNextNonGraphFrame(subscription.get(), &delivery, &error);
+  ASSERT_EQ(rmw_mdds_cpp::ipc::MessageKind::kDeliverLoanedSample, delivery.kind);
+  rmw_mdds_cpp::ipc::LoanedSampleMessage loaned;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeLoanedSampleMessage(
+    delivery.payload.data(), delivery.payload.size(), &loaned, &error)) << error;
+  EXPECT_EQ(pool.generation, loaned.pool_generation);
+
+  rmw_mdds_cpp::ipc::Frame foreign_return;
+  foreign_return.kind = rmw_mdds_cpp::ipc::MessageKind::kReturnLoanedSample;
+  foreign_return.request_id = 5u;
+  foreign_return.payload = rmw_mdds_cpp::ipc::EncodeLoanReturn(loaned.loan_id);
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+    foreign_subscription.get(), foreign_return, &error)) << error;
+  rmw_mdds_cpp::ipc::Frame response;
+  ReadNextNonGraphFrame(foreign_subscription.get(), &response, &error);
+  EXPECT_EQ(rmw_mdds_cpp::ipc::MessageKind::kError, response.kind);
+  EXPECT_EQ(5u, response.request_id);
+
+  rmw_mdds_cpp::ipc::Frame valid_return = foreign_return;
+  valid_return.request_id = 6u;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(subscription.get(), valid_return, &error)) << error;
+  ReadNextNonGraphFrame(subscription.get(), &response, &error);
+  EXPECT_EQ(rmw_mdds_cpp::ipc::MessageKind::kAck, response.kind);
+  EXPECT_EQ(6u, response.request_id);
+
+  valid_return.request_id = 7u;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(subscription.get(), valid_return, &error)) << error;
+  ReadNextNonGraphFrame(subscription.get(), &response, &error);
+  EXPECT_EQ(rmw_mdds_cpp::ipc::MessageKind::kError, response.kind);
+  EXPECT_EQ(7u, response.request_id);
+
+  publish_value(72, 12u, 8u);
+  ReadNextNonGraphFrame(subscription.get(), &delivery, &error);
+  ASSERT_EQ(rmw_mdds_cpp::ipc::MessageKind::kDeliverLoanedSample, delivery.kind);
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeLoanedSampleMessage(
+    delivery.payload.data(), delivery.payload.size(), &loaned, &error)) << error;
+  EXPECT_EQ(12u, loaned.sequence_number);
+
+  subscription.reset();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (access(pool.path.c_str(), F_OK) == 0 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_NE(0, access(pool.path.c_str(), F_OK));
 }
 
 TEST(RmwMddsIpcBroker, DoesNotRouteSamplesAcrossDomains) {
@@ -696,6 +835,98 @@ TEST(RmwMddsIpcBroker, SendsGraphSnapshotToPlainNewConnection) {
                                    rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
                                    "/broker/plain_graph", "std_msgs/msg/String",
                                    std::chrono::milliseconds(500)));
+}
+
+TEST(RmwMddsIpcBroker, CoalescesEndpointRegistrationGraphBroadcastBurst) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, unsetenv("RMW_MDDS_BRIDGE_LIBRARY"));
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  constexpr size_t client_count = 24u;
+  std::vector<rmw_mdds_cpp::ipc::UniqueFd> clients;
+  clients.reserve(client_count);
+  for (size_t i = 0; i < client_count; ++i) {
+    auto client =
+        rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+    ASSERT_TRUE(client) << error;
+    clients.push_back(std::move(client));
+  }
+
+  for (size_t i = 0; i < client_count; ++i) {
+    const std::string topic = "/broker/graph_burst_" + std::to_string(i);
+    const auto endpoint =
+        MakeEndpoint(10000u + i, rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
+                     topic.c_str(), "std_msgs/msg/String");
+    ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+        clients[i].get(),
+        rmw_mdds_cpp::ipc::Frame{
+            rmw_mdds_cpp::ipc::MessageKind::kRegisterPublisher, 20000u + i,
+            rmw_mdds_cpp::ipc::EncodeEndpointDescriptor(endpoint)},
+        &error))
+        << error;
+  }
+
+  size_t graph_update_count = 0u;
+  std::vector<bool> saw_complete_graph(client_count, false);
+  for (size_t i = 0; i < client_count; ++i) {
+    for (;;) {
+      rmw_mdds_cpp::ipc::Frame frame;
+      ASSERT_EQ(rmw_mdds_cpp::ipc::ReadFrameStatus::kOk,
+                rmw_mdds_cpp::ipc::ReadFrame(clients[i].get(), &frame, &error))
+          << error;
+      if (frame.kind == rmw_mdds_cpp::ipc::MessageKind::kGraphUpdate) {
+        ++graph_update_count;
+        rmw_mdds_cpp::ipc::GraphUpdateMessage update;
+        ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeGraphUpdate(
+            frame.payload.data(), frame.payload.size(), &update, &error))
+            << error;
+        saw_complete_graph[i] = update.endpoints.size() >= client_count;
+        continue;
+      }
+      ASSERT_EQ(rmw_mdds_cpp::ipc::MessageKind::kAck, frame.kind);
+      EXPECT_EQ(20000u + i, frame.request_id);
+      break;
+    }
+  }
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::find(saw_complete_graph.begin(), saw_complete_graph.end(),
+                   false) != saw_complete_graph.end() &&
+         std::chrono::steady_clock::now() < deadline) {
+    for (size_t i = 0; i < client_count; ++i) {
+      if (saw_complete_graph[i] || !HasReadableData(clients[i].get())) {
+        continue;
+      }
+      rmw_mdds_cpp::ipc::Frame frame;
+      ASSERT_EQ(rmw_mdds_cpp::ipc::ReadFrameStatus::kOk,
+                rmw_mdds_cpp::ipc::ReadFrame(clients[i].get(), &frame, &error))
+          << error;
+      if (frame.kind != rmw_mdds_cpp::ipc::MessageKind::kGraphUpdate) {
+        continue;
+      }
+      ++graph_update_count;
+      rmw_mdds_cpp::ipc::GraphUpdateMessage update;
+      ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeGraphUpdate(
+          frame.payload.data(), frame.payload.size(), &update, &error))
+          << error;
+      saw_complete_graph[i] = update.endpoints.size() >= client_count;
+    }
+  }
+
+  EXPECT_EQ(
+      std::count(saw_complete_graph.begin(), saw_complete_graph.end(), true),
+      client_count)
+      << "every connection must converge on the complete endpoint graph";
+  EXPECT_LE(graph_update_count, client_count * 4u)
+      << "registration bursts must not broadcast a full graph per endpoint";
 }
 
 TEST(RmwMddsIpcBroker, ReapsInactiveClientConnections) {
@@ -1322,6 +1553,118 @@ TEST(RmwMddsIpcBroker, SharesServiceResponseBridgeSubscriberAcrossClients) {
       << "shared response bridge subscriber must still route by writer_guid";
 }
 
+TEST(RmwMddsIpcBroker,
+     RejectsClientRegistrationWhenResponseBridgeCreationFails) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  FakeMddsBridgeReset();
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  const int publisher_count_before = FakeMddsBridgePublisherCount();
+  const int subscriber_count_before = FakeMddsBridgeSubscriberCount();
+  FakeMddsBridgeFailNextSubscriberCreate();
+
+  rmw_mdds_cpp::ipc::UniqueFd client =
+      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(client) << error;
+  auto endpoint =
+      MakeEndpoint(6650u, rmw_mdds_cpp::ipc::EndpointKind::kClient,
+                   "/broker_bridge_resource_limit", "std_srvs::srv::Trigger");
+
+  constexpr uint64_t request_id = 41u;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+      client.get(),
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kRegisterClient, request_id,
+          rmw_mdds_cpp::ipc::EncodeEndpointDescriptor(endpoint)},
+      &error))
+      << error;
+
+  rmw_mdds_cpp::ipc::Frame response;
+  for (;;) {
+    ASSERT_EQ(rmw_mdds_cpp::ipc::ReadFrameStatus::kOk,
+              rmw_mdds_cpp::ipc::ReadFrame(client.get(), &response, &error))
+        << error;
+    if (response.kind == rmw_mdds_cpp::ipc::MessageKind::kGraphUpdate) {
+      ExpectValidGraphUpdate(response);
+      continue;
+    }
+    break;
+  }
+
+  EXPECT_EQ(rmw_mdds_cpp::ipc::MessageKind::kError, response.kind);
+  EXPECT_EQ(request_id, response.request_id);
+  EXPECT_NE(std::string(response.payload.begin(), response.payload.end())
+                .find("bridge"),
+            std::string::npos);
+  EXPECT_EQ(publisher_count_before, FakeMddsBridgePublisherCount())
+      << "failed client registration must roll back its request publisher";
+  EXPECT_EQ(subscriber_count_before, FakeMddsBridgeSubscriberCount());
+}
+
+TEST(RmwMddsIpcBroker,
+     RejectsClientRegistrationWhenRequestBridgeCreationFails) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  FakeMddsBridgeReset();
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  const int publisher_count_before = FakeMddsBridgePublisherCount();
+  const int subscriber_count_before = FakeMddsBridgeSubscriberCount();
+  FakeMddsBridgeFailNextPublisherCreate();
+
+  rmw_mdds_cpp::ipc::UniqueFd client =
+      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(client) << error;
+  auto endpoint = MakeEndpoint(6651u, rmw_mdds_cpp::ipc::EndpointKind::kClient,
+                               "/broker_bridge_request_resource_limit",
+                               "std_srvs::srv::Trigger");
+
+  constexpr uint64_t request_id = 42u;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+      client.get(),
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kRegisterClient, request_id,
+          rmw_mdds_cpp::ipc::EncodeEndpointDescriptor(endpoint)},
+      &error))
+      << error;
+
+  rmw_mdds_cpp::ipc::Frame response;
+  for (;;) {
+    ASSERT_EQ(rmw_mdds_cpp::ipc::ReadFrameStatus::kOk,
+              rmw_mdds_cpp::ipc::ReadFrame(client.get(), &response, &error))
+        << error;
+    if (response.kind == rmw_mdds_cpp::ipc::MessageKind::kGraphUpdate) {
+      ExpectValidGraphUpdate(response);
+      continue;
+    }
+    break;
+  }
+
+  EXPECT_EQ(rmw_mdds_cpp::ipc::MessageKind::kError, response.kind);
+  EXPECT_EQ(request_id, response.request_id);
+  EXPECT_NE(std::string(response.payload.begin(), response.payload.end())
+                .find("bridge"),
+            std::string::npos);
+  EXPECT_EQ(publisher_count_before, FakeMddsBridgePublisherCount());
+  EXPECT_EQ(subscriber_count_before, FakeMddsBridgeSubscriberCount())
+      << "failed client registration must roll back its response subscriber";
+}
+
 TEST(RmwMddsIpcBroker, SharesServiceRequestBridgePublisherAcrossClients) {
   EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
   EnvVarGuard max_unacked_guard("RMW_MDDS_SERVICE_BRIDGE_MAX_UNACKED");
@@ -1624,6 +1967,189 @@ TEST(RmwMddsIpcBroker, ServiceBridgePublishWaitsForReliableAckBackpressure) {
       std::chrono::seconds(1)));
   EXPECT_EQ(response_payload.size(), FakeMddsBridgePublisherLastPayloadLen(
                                          response_topic, response_type));
+}
+
+TEST(RmwMddsIpcBroker, ReliableTopicBridgePublishWaitsForAckBackpressure) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  EnvVarGuard max_unacked_guard("RMW_MDDS_TOPIC_BRIDGE_MAX_UNACKED");
+  EnvVarGuard timeout_guard("RMW_MDDS_TOPIC_BRIDGE_BACKPRESSURE_TIMEOUT_MS");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_TOPIC_BRIDGE_MAX_UNACKED", "1", 1));
+  ASSERT_EQ(
+      0,
+      setenv("RMW_MDDS_TOPIC_BRIDGE_BACKPRESSURE_TIMEOUT_MS", "50", 1));
+  FakeMddsBridgeReset();
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+  ASSERT_EQ(1, FakeMddsBridgeInitCount());
+
+  rmw_mdds_cpp::ipc::UniqueFd publisher =
+      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(publisher) << error;
+  auto publisher_endpoint =
+      MakeEndpoint(7805u, rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
+                   "/rt/backpressure_topic", "std_msgs/msg/String");
+  publisher_endpoint.mdds_type_name = "std_msgs::msg::dds_::String_";
+  publisher_endpoint.qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+  publisher_endpoint.qos.depth = 1024u;
+  RegisterEndpoint(publisher.get(), publisher_endpoint, 1u);
+
+  const char *topic_name = "rt/backpressure_topic";
+  const char *type_name = "std_msgs::msg::dds_::String_";
+  ASSERT_EQ(1, FakeMddsBridgeHasPublisher(topic_name, type_name));
+  const int publish_count_before =
+      FakeMddsBridgePublisherPublishCount(topic_name, type_name);
+  FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 1u);
+
+  rmw_mdds_cpp::ipc::SampleMessage sample;
+  sample.entity_id = publisher_endpoint.entity_id;
+  sample.sequence_number = 1u;
+  sample.mdds_payload = true;
+  sample.payload = {'t', 'o', 'p', 'i', 'c'};
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+      publisher.get(),
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kPublishSample, 2u,
+          rmw_mdds_cpp::ipc::EncodeSampleMessage(sample)},
+      &error))
+      << error;
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  EXPECT_EQ(publish_count_before,
+            FakeMddsBridgePublisherPublishCount(topic_name, type_name))
+      << "reliable topic bridge publish must wait for MDDS acknowledgements";
+
+  FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 0u);
+  EXPECT_TRUE(WaitForFakePublisherPublishCountAtLeast(
+      topic_name, type_name, publish_count_before + 1,
+      std::chrono::seconds(1)));
+  EXPECT_EQ(sample.payload.size(),
+            FakeMddsBridgePublisherLastPayloadLen(topic_name, type_name));
+}
+
+TEST(RmwMddsIpcBroker, ReliableTopicBridgeBackpressureHonorsKeepLastDepth) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  EnvVarGuard max_unacked_guard("RMW_MDDS_TOPIC_BRIDGE_MAX_UNACKED");
+  EnvVarGuard timeout_guard("RMW_MDDS_TOPIC_BRIDGE_BACKPRESSURE_TIMEOUT_MS");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  unsetenv("RMW_MDDS_TOPIC_BRIDGE_MAX_UNACKED");
+  ASSERT_EQ(
+      0,
+      setenv("RMW_MDDS_TOPIC_BRIDGE_BACKPRESSURE_TIMEOUT_MS", "50", 1));
+  FakeMddsBridgeReset();
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  rmw_mdds_cpp::ipc::UniqueFd publisher =
+      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(publisher) << error;
+  auto publisher_endpoint =
+      MakeEndpoint(7855u, rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
+                   "/rt/depth_backpressure_topic", "std_msgs/msg/String");
+  publisher_endpoint.mdds_type_name = "std_msgs::msg::dds_::String_";
+  publisher_endpoint.qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+  publisher_endpoint.qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
+  publisher_endpoint.qos.depth = 1u;
+  RegisterEndpoint(publisher.get(), publisher_endpoint, 1u);
+
+  const char *topic_name = "rt/depth_backpressure_topic";
+  const char *type_name = "std_msgs::msg::dds_::String_";
+  ASSERT_EQ(1, FakeMddsBridgeHasPublisher(topic_name, type_name));
+  const int publish_count_before =
+      FakeMddsBridgePublisherPublishCount(topic_name, type_name);
+  FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 1u);
+
+  rmw_mdds_cpp::ipc::SampleMessage sample;
+  sample.entity_id = publisher_endpoint.entity_id;
+  sample.sequence_number = 1u;
+  sample.mdds_payload = true;
+  sample.payload = {'d', 'e', 'p', 't', 'h'};
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+      publisher.get(),
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kPublishSample, 2u,
+          rmw_mdds_cpp::ipc::EncodeSampleMessage(sample)},
+      &error))
+      << error;
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  EXPECT_EQ(publish_count_before,
+            FakeMddsBridgePublisherPublishCount(topic_name, type_name))
+      << "reliable topic backpressure must not exceed KEEP_LAST depth";
+
+  FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 0u);
+  EXPECT_TRUE(WaitForFakePublisherPublishCountAtLeast(
+      topic_name, type_name, publish_count_before + 1,
+      std::chrono::seconds(1)));
+}
+
+TEST(RmwMddsIpcBroker, BestEffortTopicBridgePublishBypassesAckBackpressure) {
+  EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  EnvVarGuard max_unacked_guard("RMW_MDDS_TOPIC_BRIDGE_MAX_UNACKED");
+  EnvVarGuard timeout_guard("RMW_MDDS_TOPIC_BRIDGE_BACKPRESSURE_TIMEOUT_MS");
+  rmw_mdds_cpp::BridgeBackend::Instance().ResetForTesting();
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_TOPIC_BRIDGE_MAX_UNACKED", "1", 1));
+  ASSERT_EQ(
+      0,
+      setenv("RMW_MDDS_TOPIC_BRIDGE_BACKPRESSURE_TIMEOUT_MS", "50", 1));
+  FakeMddsBridgeReset();
+
+  TempSocketPath socket_path;
+  ASSERT_FALSE(socket_path.path().empty());
+
+  std::string error;
+  rmw_mdds_cpp::ipc::IpcBroker broker;
+  ASSERT_TRUE(broker.Start(socket_path.path(), &error)) << error;
+
+  rmw_mdds_cpp::ipc::UniqueFd publisher =
+      rmw_mdds_cpp::ipc::ConnectUnixSocket(socket_path.path(), &error);
+  ASSERT_TRUE(publisher) << error;
+  auto publisher_endpoint =
+      MakeEndpoint(7905u, rmw_mdds_cpp::ipc::EndpointKind::kPublisher,
+                   "/rt/best_effort_topic", "std_msgs/msg/String");
+  publisher_endpoint.mdds_type_name = "std_msgs::msg::dds_::String_";
+  publisher_endpoint.qos.reliability =
+      RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT;
+  RegisterEndpoint(publisher.get(), publisher_endpoint, 1u);
+
+  const char *topic_name = "rt/best_effort_topic";
+  const char *type_name = "std_msgs::msg::dds_::String_";
+  ASSERT_EQ(1, FakeMddsBridgeHasPublisher(topic_name, type_name));
+  const int publish_count_before =
+      FakeMddsBridgePublisherPublishCount(topic_name, type_name);
+  FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 1u);
+
+  rmw_mdds_cpp::ipc::SampleMessage sample;
+  sample.entity_id = publisher_endpoint.entity_id;
+  sample.sequence_number = 1u;
+  sample.mdds_payload = true;
+  sample.payload = {'b', 'e', 's', 't'};
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+      publisher.get(),
+      rmw_mdds_cpp::ipc::Frame{
+          rmw_mdds_cpp::ipc::MessageKind::kPublishSample, 2u,
+          rmw_mdds_cpp::ipc::EncodeSampleMessage(sample)},
+      &error))
+      << error;
+
+  EXPECT_TRUE(WaitForFakePublisherPublishCountAtLeast(
+      topic_name, type_name, publish_count_before + 1,
+      std::chrono::milliseconds(250)))
+      << "best-effort topic bridge publish must not wait for acknowledgements";
+  FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 0u);
 }
 
 TEST(RmwMddsIpcBroker, SynthesizesRemoteServiceGraphFromBridgeMatchedClient) {

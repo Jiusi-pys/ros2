@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "ipc_loan_pool.hpp"
 #include "rmw/qos_profiles.h"
 #include "rosidl_runtime_c/type_hash.h"
 
@@ -46,6 +47,8 @@ enum class MessageKind : uint16_t
   kUnregisterEntity = 14u,
   kPublishSample = 20u,
   kDeliverSample = 21u,
+  kDeliverLoanedSample = 22u,
+  kReturnLoanedSample = 23u,
   kGraphUpdate = 30u,
 };
 
@@ -86,6 +89,12 @@ struct EndpointDescriptor
   rosidl_type_hash_t type_hash = rosidl_get_zero_initialized_type_hash();
   rmw_qos_profile_t qos = rmw_qos_profile_default;
   bool ignore_local_publications = false;
+  uint32_t loaned_message_size = 0u;
+  uint32_t loan_pool_version = 0u;
+  uint32_t loaned_payload_capacity = 0u;
+  uint32_t loaned_arena_capacity = 0u;
+  uint32_t loaned_slot_count = 0u;
+  uint32_t loan_pool_flags = 0u;
 };
 
 struct SampleMessage
@@ -94,6 +103,17 @@ struct SampleMessage
   uint64_t sequence_number = 0u;
   bool mdds_payload = false;
   std::vector<uint8_t> payload;
+};
+
+struct LoanedSampleMessage
+{
+  uint64_t entity_id = 0u;
+  uint64_t loan_id = 0u;
+  uint64_t pool_generation = 0u;
+  uint64_t sequence_number = 0u;
+  uint32_t slot_index = 0u;
+  uint32_t payload_size = 0u;
+  bool mdds_payload = false;
 };
 
 struct GraphUpdateMessage
@@ -126,6 +146,18 @@ bool DecodeEntityId(const uint8_t * data, size_t size, uint64_t * entity_id, std
 std::vector<uint8_t> EncodeSampleMessage(const SampleMessage & sample);
 bool DecodeSampleMessage(
   const uint8_t * data, size_t size, SampleMessage * sample, std::string * error);
+
+std::vector<uint8_t> EncodeLoanPoolDescriptor(const LoanPoolDescriptor & descriptor);
+bool DecodeLoanPoolDescriptor(
+  const uint8_t * data, size_t size, LoanPoolDescriptor * descriptor, std::string * error);
+
+std::vector<uint8_t> EncodeLoanedSampleMessage(const LoanedSampleMessage & sample);
+bool DecodeLoanedSampleMessage(
+  const uint8_t * data, size_t size, LoanedSampleMessage * sample, std::string * error);
+
+std::vector<uint8_t> EncodeLoanReturn(uint64_t loan_id);
+bool DecodeLoanReturn(
+  const uint8_t * data, size_t size, uint64_t * loan_id, std::string * error);
 
 }  // namespace ipc
 }  // namespace rmw_mdds_cpp

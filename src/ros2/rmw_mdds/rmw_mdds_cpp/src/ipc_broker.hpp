@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -91,9 +92,20 @@ private:
                         EndpointKind expected_kind);
   void UnregisterEntity(Connection *connection, const Frame &frame);
   void PublishSample(Connection *connection, const Frame &frame);
+  void ReturnLoanedSample(Connection *connection, const Frame &frame);
+  bool SendSampleDelivery(Connection *connection, const SampleMessage &sample,
+                          uint64_t request_id);
+  bool SendLoanedDeliveryLocked(
+    Connection * connection, const SampleMessage & sample, uint64_t request_id,
+    bool * pool_full, std::string * error);
+  bool QueueLoanedDeliveryLocked(
+    Connection * connection, const SampleMessage & sample, uint64_t request_id,
+    std::string * error);
   void DeliverBridgeSample(const EndpointDescriptor &subscription_endpoint,
                            const std::vector<uint8_t> &payload,
                            uint64_t sequence_number);
+  void RequestGraphUpdate(bool publish_local_graph);
+  void GraphUpdateLoop();
   void BroadcastGraphUpdate();
   void ReleaseBridgePublisher(void *bridge_publisher, bool shared,
                               const std::string &bridge_topic,
@@ -122,7 +134,8 @@ private:
   void OnGraphSync(const std::vector<uint8_t> &payload);
   void PublishLocalGraph();
   bool SendFrame(Connection *connection, const Frame &frame);
-  void SendAck(Connection *connection, uint64_t request_id);
+  void SendAck(Connection *connection, uint64_t request_id,
+               const std::vector<uint8_t> &payload = {});
   void SendError(Connection *connection, uint64_t request_id,
                  const std::string &message);
 
@@ -158,6 +171,9 @@ private:
   size_t last_graph_sync_body_size_ = 0u;
   std::chrono::steady_clock::time_point last_graph_sync_publish_{};
   bool graph_sync_publish_dirty_ = false;
+  std::condition_variable graph_update_cv_;
+  bool graph_update_requested_ = false;
+  bool graph_publish_requested_ = false;
   std::map<uint64_t, RemoteGraphBucket> remote_graph_endpoints_;
   std::thread graph_reannounce_thread_;
 };

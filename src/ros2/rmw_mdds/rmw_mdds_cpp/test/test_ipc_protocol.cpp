@@ -45,6 +45,7 @@ TEST(RmwMddsIpcProtocol, EndpointDescriptorRoundTripPreservesGraphFields)
   endpoint.qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
   endpoint.qos.durability = RMW_QOS_POLICY_DURABILITY_VOLATILE;
   endpoint.ignore_local_publications = true;
+  endpoint.loaned_message_size = 256u;
 
   const std::vector<uint8_t> frame = rmw_mdds_cpp::ipc::EncodeFrame(
     rmw_mdds_cpp::ipc::Frame{
@@ -85,6 +86,160 @@ TEST(RmwMddsIpcProtocol, EndpointDescriptorRoundTripPreservesGraphFields)
   EXPECT_EQ(endpoint.qos.reliability, decoded_endpoint.qos.reliability);
   EXPECT_EQ(endpoint.qos.durability, decoded_endpoint.qos.durability);
   EXPECT_EQ(endpoint.ignore_local_publications, decoded_endpoint.ignore_local_publications);
+  EXPECT_EQ(endpoint.loaned_message_size, decoded_endpoint.loaned_message_size);
+}
+
+TEST(RmwMddsIpcProtocol, LoanPoolAndSampleDescriptorsRoundTripWithoutPayloadBytes)
+{
+  rmw_mdds_cpp::ipc::LoanPoolDescriptor pool;
+  pool.path = "/tmp/rmw_mdds_loan_test.pool";
+  pool.generation = 0x123456789abcdef0u;
+  pool.slot_size = 64u;
+  pool.slot_count = 32u;
+  const std::vector<uint8_t> encoded_pool =
+    rmw_mdds_cpp::ipc::EncodeLoanPoolDescriptor(pool);
+
+  rmw_mdds_cpp::ipc::LoanPoolDescriptor decoded_pool;
+  std::string error;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeLoanPoolDescriptor(
+    encoded_pool.data(), encoded_pool.size(), &decoded_pool, &error)) << error;
+  EXPECT_EQ(pool.path, decoded_pool.path);
+  EXPECT_EQ(pool.generation, decoded_pool.generation);
+  EXPECT_EQ(pool.slot_size, decoded_pool.slot_size);
+  EXPECT_EQ(pool.slot_count, decoded_pool.slot_count);
+
+  rmw_mdds_cpp::ipc::LoanedSampleMessage sample;
+  sample.entity_id = 17u;
+  sample.loan_id = 19u;
+  sample.pool_generation = pool.generation;
+  sample.sequence_number = 23u;
+  sample.slot_index = 7u;
+  sample.payload_size = 64u;
+  sample.mdds_payload = true;
+  const std::vector<uint8_t> encoded_sample =
+    rmw_mdds_cpp::ipc::EncodeLoanedSampleMessage(sample);
+  EXPECT_LT(encoded_sample.size(), rmw_mdds_cpp::ipc::kSampleMessageHeaderSize + sample.payload_size);
+
+  rmw_mdds_cpp::ipc::LoanedSampleMessage decoded_sample;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeLoanedSampleMessage(
+    encoded_sample.data(), encoded_sample.size(), &decoded_sample, &error)) << error;
+  EXPECT_EQ(sample.entity_id, decoded_sample.entity_id);
+  EXPECT_EQ(sample.loan_id, decoded_sample.loan_id);
+  EXPECT_EQ(sample.pool_generation, decoded_sample.pool_generation);
+  EXPECT_EQ(sample.sequence_number, decoded_sample.sequence_number);
+  EXPECT_EQ(sample.slot_index, decoded_sample.slot_index);
+  EXPECT_EQ(sample.payload_size, decoded_sample.payload_size);
+  EXPECT_EQ(sample.mdds_payload, decoded_sample.mdds_payload);
+
+  const std::vector<uint8_t> encoded_return =
+    rmw_mdds_cpp::ipc::EncodeLoanReturn(sample.loan_id);
+  uint64_t returned_loan = 0u;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeLoanReturn(
+    encoded_return.data(), encoded_return.size(), &returned_loan, &error)) << error;
+  EXPECT_EQ(sample.loan_id, returned_loan);
+}
+
+TEST(RmwMddsIpcProtocol, DynamicLoanRequestAndPoolDescriptorRoundTrip)
+{
+  rmw_mdds_cpp::ipc::EndpointDescriptor endpoint;
+  endpoint.entity_id = 0x7071727374757677u;
+  endpoint.local_context_id = 0x6162636465666768u;
+  endpoint.domain_id = 197u;
+  endpoint.kind = rmw_mdds_cpp::ipc::EndpointKind::kSubscription;
+  endpoint.node_name = "dynamic_loan_node";
+  endpoint.node_namespace = "/mdds";
+  endpoint.topic_name = "/dynamic_loan";
+  endpoint.type_name = "std_msgs/msg/String";
+  endpoint.mdds_type_name = "std_msgs/msg/String";
+  endpoint.loan_pool_version = rmw_mdds_cpp::ipc::kDynamicLoanPoolVersion;
+  endpoint.loaned_payload_capacity = rmw_mdds_cpp::ipc::kDefaultDynamicLoanPayloadCapacity;
+  endpoint.loaned_arena_capacity = rmw_mdds_cpp::ipc::kDefaultDynamicLoanArenaCapacity;
+  endpoint.loaned_slot_count = rmw_mdds_cpp::ipc::kDefaultDynamicLoanPoolSlotCount;
+  endpoint.loan_pool_flags = rmw_mdds_cpp::ipc::kLoanPoolFlagTypedArena;
+
+  const std::vector<uint8_t> encoded_endpoint =
+    rmw_mdds_cpp::ipc::EncodeEndpointDescriptor(endpoint);
+  rmw_mdds_cpp::ipc::EndpointDescriptor decoded_endpoint;
+  std::string error;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeEndpointDescriptor(
+    encoded_endpoint.data(), encoded_endpoint.size(), &decoded_endpoint, &error)) << error;
+  EXPECT_EQ(endpoint.loan_pool_version, decoded_endpoint.loan_pool_version);
+  EXPECT_EQ(endpoint.loaned_payload_capacity, decoded_endpoint.loaned_payload_capacity);
+  EXPECT_EQ(endpoint.loaned_arena_capacity, decoded_endpoint.loaned_arena_capacity);
+  EXPECT_EQ(endpoint.loaned_slot_count, decoded_endpoint.loaned_slot_count);
+  EXPECT_EQ(endpoint.loan_pool_flags, decoded_endpoint.loan_pool_flags);
+  EXPECT_EQ(0u, decoded_endpoint.loaned_message_size);
+
+  rmw_mdds_cpp::ipc::LoanPoolDescriptor pool;
+  pool.path = "/tmp/rmw_mdds_dynamic_loan_test.pool";
+  pool.generation = 0x1020304050607080u;
+  pool.version = rmw_mdds_cpp::ipc::kDynamicLoanPoolVersion;
+  pool.flags = rmw_mdds_cpp::ipc::kLoanPoolFlagTypedArena;
+  pool.slot_size = endpoint.loaned_payload_capacity;
+  pool.arena_size = endpoint.loaned_arena_capacity;
+  pool.slot_count = endpoint.loaned_slot_count;
+  const std::vector<uint8_t> encoded_pool =
+    rmw_mdds_cpp::ipc::EncodeLoanPoolDescriptor(pool);
+  rmw_mdds_cpp::ipc::LoanPoolDescriptor decoded_pool;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::DecodeLoanPoolDescriptor(
+    encoded_pool.data(), encoded_pool.size(), &decoded_pool, &error)) << error;
+  EXPECT_EQ(pool.path, decoded_pool.path);
+  EXPECT_EQ(pool.generation, decoded_pool.generation);
+  EXPECT_EQ(pool.version, decoded_pool.version);
+  EXPECT_EQ(pool.flags, decoded_pool.flags);
+  EXPECT_EQ(pool.slot_size, decoded_pool.slot_size);
+  EXPECT_EQ(pool.arena_size, decoded_pool.arena_size);
+  EXPECT_EQ(pool.slot_count, decoded_pool.slot_count);
+}
+
+TEST(RmwMddsIpcProtocol, DynamicLoanRequestRejectsUnknownVersionAndFlags)
+{
+  rmw_mdds_cpp::ipc::EndpointDescriptor endpoint;
+  endpoint.entity_id = 99u;
+  endpoint.kind = rmw_mdds_cpp::ipc::EndpointKind::kSubscription;
+  endpoint.topic_name = "/dynamic_loan_invalid";
+  endpoint.type_name = "std_msgs/msg/String";
+  endpoint.mdds_type_name = endpoint.type_name;
+  endpoint.loan_pool_version = rmw_mdds_cpp::ipc::kDynamicLoanPoolVersion + 1u;
+  endpoint.loaned_payload_capacity = 1024u;
+  endpoint.loaned_arena_capacity = 4096u;
+  endpoint.loaned_slot_count = 1u;
+  endpoint.loan_pool_flags = rmw_mdds_cpp::ipc::kLoanPoolFlagTypedArena;
+  std::vector<uint8_t> encoded = rmw_mdds_cpp::ipc::EncodeEndpointDescriptor(endpoint);
+  rmw_mdds_cpp::ipc::EndpointDescriptor decoded;
+  std::string error;
+  EXPECT_FALSE(rmw_mdds_cpp::ipc::DecodeEndpointDescriptor(
+    encoded.data(), encoded.size(), &decoded, &error));
+
+  endpoint.loan_pool_version = rmw_mdds_cpp::ipc::kDynamicLoanPoolVersion;
+  endpoint.loan_pool_flags = rmw_mdds_cpp::ipc::kLoanPoolFlagTypedArena | 0x80000000u;
+  encoded = rmw_mdds_cpp::ipc::EncodeEndpointDescriptor(endpoint);
+  EXPECT_FALSE(rmw_mdds_cpp::ipc::DecodeEndpointDescriptor(
+    encoded.data(), encoded.size(), &decoded, &error));
+}
+
+TEST(RmwMddsIpcProtocol, EndpointRejectsMixedFixedAndDynamicLoanRequests)
+{
+  rmw_mdds_cpp::ipc::EndpointDescriptor endpoint;
+  endpoint.entity_id = 100u;
+  endpoint.kind = rmw_mdds_cpp::ipc::EndpointKind::kSubscription;
+  endpoint.topic_name = "/mixed_loan_request";
+  endpoint.type_name = "std_msgs/msg/String";
+  endpoint.mdds_type_name = endpoint.type_name;
+  endpoint.loaned_message_size = sizeof(int32_t);
+  endpoint.loan_pool_version = rmw_mdds_cpp::ipc::kDynamicLoanPoolVersion;
+  endpoint.loaned_payload_capacity =
+    rmw_mdds_cpp::ipc::kDefaultDynamicLoanPayloadCapacity;
+  endpoint.loaned_arena_capacity =
+    rmw_mdds_cpp::ipc::kDefaultDynamicLoanArenaCapacity;
+  endpoint.loaned_slot_count =
+    rmw_mdds_cpp::ipc::kDefaultDynamicLoanPoolSlotCount;
+  endpoint.loan_pool_flags = rmw_mdds_cpp::ipc::kLoanPoolFlagTypedArena;
+
+  const std::vector<uint8_t> encoded =
+    rmw_mdds_cpp::ipc::EncodeEndpointDescriptor(endpoint);
+  EXPECT_TRUE(encoded.empty())
+    << "an endpoint must not advertise both v1 fixed and v2 dynamic loan pools";
 }
 
 TEST(RmwMddsIpcProtocol, SampleRoundTripPreservesEntitySequenceAndPayload)

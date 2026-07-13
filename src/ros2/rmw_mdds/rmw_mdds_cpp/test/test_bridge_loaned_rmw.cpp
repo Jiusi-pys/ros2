@@ -16,8 +16,11 @@
 #include <std_msgs/msg/int32_multi_array.h>
 #include <std_msgs/msg/multi_array_dimension.h>
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <new>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/int32_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -39,29 +42,103 @@
 #include "rosidl_runtime_c/string_functions.h"
 #include "rosidl_typesupport_cpp/message_type_support.hpp"
 
+namespace
+{
+std::atomic<size_t> g_executable_new_count{0u};
+} // namespace
+
+// Keep a strong executable-side allocator in this test. Sanitizer runtimes and
+// real applications are allowed to own these symbols, so a dynamic MDDS loan
+// cannot rely on the replacement operators exported by librmw_mdds_cpp.
+void * operator new(std::size_t size)
+{
+  g_executable_new_count.fetch_add(1u, std::memory_order_relaxed);
+  void *ptr = std::malloc(size == 0u ? 1u : size);
+  if (ptr == nullptr) {
+    throw std::bad_alloc();
+  }
+  return ptr;
+}
+
+void * operator new[](std::size_t size) {return ::operator new(size);}
+
+void * operator new(std::size_t size, const std::nothrow_t &) noexcept
+{
+  try {
+    return ::operator new(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+void * operator new[](std::size_t size, const std::nothrow_t &) noexcept
+{
+  try {
+    return ::operator new[](size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+void operator delete(void *ptr) noexcept {std::free(ptr);}
+
+void operator delete[](void *ptr) noexcept {::operator delete(ptr);}
+
+void operator delete(void *ptr, std::size_t) noexcept
+{
+  ::operator delete(ptr);
+}
+
+void operator delete[](void *ptr, std::size_t) noexcept
+{
+  ::operator delete(ptr);
+}
+
+void operator delete(void *ptr, const std::nothrow_t &) noexcept
+{
+  ::operator delete(ptr);
+}
+
+void operator delete[](void *ptr, const std::nothrow_t &) noexcept
+{
+  ::operator delete[](ptr);
+}
+
 extern "C" void FakeMddsBridgeReset(void);
 extern "C" int FakeMddsBridgeBorrowLoanedCount(void);
 extern "C" int FakeMddsBridgePublishLoanedCount(void);
 extern "C" int FakeMddsBridgeReturnLoanedCount(void);
-extern "C" void *FakeMddsBridgeLastBorrowedData(void);
+extern "C" void * FakeMddsBridgeLastBorrowedData(void);
 extern "C" uint32_t FakeMddsBridgeLastBorrowedSize(void);
-extern "C" const uint8_t *FakeMddsBridgeLastPayloadData(void);
+extern "C" const uint8_t * FakeMddsBridgeLastPayloadData(void);
 extern "C" uint32_t FakeMddsBridgeLastPayloadLen(void);
 
-namespace {
-void SetEnclave(rmw_init_options_t *options, const char *enclave) {
+namespace
+{
+void SetEnclave(rmw_init_options_t *options, const char *enclave)
+{
   options->allocator.deallocate(options->enclave, options->allocator.state);
   options->enclave = rcutils_strdup(enclave, options->allocator);
   ASSERT_NE(nullptr, options->enclave);
 }
 } // namespace
 
+TEST(RmwMddsBridgeLoanedRmw, GeneratedMessageCapturesRuntimeMemoryResource) {
+  rosidl_runtime_cpp::MessageMemoryResource resource{};
+  std::unique_ptr<std_msgs::msg::String> message;
+  {
+    rosidl_runtime_cpp::ScopedMessageMemoryResource scope(&resource);
+    message = std::make_unique<std_msgs::msg::String>();
+  }
+  EXPECT_EQ(&resource, message->data.get_allocator().resource());
+}
+
 TEST(RmwMddsBridgeLoanedRmw,
      StringAdapterDirectBufferEncodesGenericLegacyPayload) {
   rmw_mdds_cpp::StringAdapter adapter;
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::Int32MultiArray>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::Int32MultiArray>();
   ASSERT_TRUE(adapter.Init(type_support));
 
   std_msgs::msg::Int32MultiArray msg;
@@ -83,6 +160,10 @@ TEST(RmwMddsBridgeLoanedRmw,
   EXPECT_EQ(expected.size(), written_size);
   EXPECT_EQ(expected, actual);
 
+  std_msgs::msg::Int32MultiArray decoded;
+  ASSERT_TRUE(adapter.Decode(actual.data(), actual.size(), &decoded));
+  EXPECT_EQ(msg, decoded);
+
   std::vector<uint8_t> too_small(expected.size() - 1u);
   written_size = 0;
   EXPECT_FALSE(adapter.EncodeIntoBuffer(&msg, too_small.data(),
@@ -94,7 +175,7 @@ TEST(RmwMddsBridgeLoanedRmw,
      StringAdapterDirectBufferEncodesCGenericLegacyPayload) {
   rmw_mdds_cpp::StringAdapter adapter;
   const rosidl_message_type_support_t *type_support =
-      ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32MultiArray);
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32MultiArray);
   ASSERT_TRUE(adapter.Init(type_support));
 
   std_msgs__msg__Int32MultiArray msg;
@@ -144,16 +225,16 @@ TEST(RmwMddsBridgeLoanedRmw, BorrowLoanedMessageUsesBridgeOwnedTypedStorage) {
   rmw_context_t context = rmw_get_zero_initialized_context();
   ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
   rmw_node_t *node =
-      rmw_create_node(&context, "mdds_bridge_loaned_storage_node", "/mdds");
+    rmw_create_node(&context, "mdds_bridge_loaned_storage_node", "/mdds");
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::Int32>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::Int32>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher =
-      rmw_create_publisher(node, type_support, "/mdds_bridge_loaned_int32",
+    rmw_create_publisher(node, type_support, "/mdds_bridge_loaned_int32",
                            &rmw_qos_profile_default, &publisher_options);
   ASSERT_NE(nullptr, publisher);
   ASSERT_TRUE(publisher->can_loan_messages);
@@ -204,10 +285,10 @@ TEST(RmwMddsBridgeLoanedRmw, BorrowLoanedMessageRejectsMismatchedTypeSupport) {
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *int32_type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::Int32>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::Int32>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher = rmw_create_publisher(
       node, int32_type_support, "/mdds_bridge_loaned_type_mismatch",
       &rmw_qos_profile_default, &publisher_options);
@@ -219,7 +300,7 @@ TEST(RmwMddsBridgeLoanedRmw, BorrowLoanedMessageRejectsMismatchedTypeSupport) {
             rmw_borrow_loaned_message(
                 publisher,
                 rosidl_typesupport_cpp::get_message_type_support_handle<
-                    std_msgs::msg::String>(),
+        std_msgs::msg::String>(),
                 &loaned_message));
   EXPECT_EQ(nullptr, loaned_message);
   EXPECT_EQ(0, FakeMddsBridgeBorrowLoanedCount());
@@ -246,14 +327,14 @@ TEST(RmwMddsBridgeLoanedRmw, PublishLoanedMessagePublishesRawBridgeLoan) {
   rmw_context_t context = rmw_get_zero_initialized_context();
   ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
   rmw_node_t *node =
-      rmw_create_node(&context, "mdds_bridge_loaned_node", "/mdds");
+    rmw_create_node(&context, "mdds_bridge_loaned_node", "/mdds");
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::Int32>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::Int32>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher = rmw_create_publisher(
       node, type_support, "/mdds_bridge_loaned_int32_publish",
       &rmw_qos_profile_default, &publisher_options);
@@ -307,10 +388,10 @@ TEST(RmwMddsBridgeLoanedRmw,
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::String>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::String>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher = rmw_create_publisher(
       node, type_support, "/mdds_bridge_loaned_unbounded_string",
       &rmw_qos_profile_default, &publisher_options);
@@ -323,12 +404,20 @@ TEST(RmwMddsBridgeLoanedRmw,
   ASSERT_NE(nullptr, loaned_message);
   EXPECT_EQ(1, FakeMddsBridgeBorrowLoanedCount());
   auto *msg = static_cast<std_msgs::msg::String *>(loaned_message);
+  EXPECT_NE(nullptr, msg->data.get_allocator().resource())
+      << "borrowed dynamic fields must retain the MDDS memory resource";
+  const size_t executable_allocations_before =
+    g_executable_new_count.load(std::memory_order_relaxed);
   msg->data.assign(4096u, 's');
+  EXPECT_EQ(executable_allocations_before,
+            g_executable_new_count.load(std::memory_order_relaxed))
+      << "dynamic loan storage must not depend on global operator new "
+         "interposition";
   auto *bridge_begin = static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
   ASSERT_NE(nullptr, bridge_begin);
   const uint32_t bridge_size = FakeMddsBridgeLastBorrowedSize();
   const auto *dynamic_begin =
-      reinterpret_cast<const uint8_t *>(msg->data.data());
+    reinterpret_cast<const uint8_t *>(msg->data.data());
   EXPECT_GE(dynamic_begin, bridge_begin);
   EXPECT_LE(dynamic_begin + msg->data.size(), bridge_begin + bridge_size);
   EXPECT_EQ(RMW_RET_OK, rmw_return_loaned_message_from_publisher(
@@ -358,14 +447,14 @@ TEST(RmwMddsBridgeLoanedRmw,
   rmw_context_t context = rmw_get_zero_initialized_context();
   ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
   rmw_node_t *node =
-      rmw_create_node(&context, "mdds_full_parity_loaned_string_node", "/mdds");
+    rmw_create_node(&context, "mdds_full_parity_loaned_string_node", "/mdds");
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::String>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::String>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher = rmw_create_publisher(
       node, type_support, "/mdds_full_parity_loaned_string",
       &rmw_qos_profile_default, &publisher_options);
@@ -382,7 +471,7 @@ TEST(RmwMddsBridgeLoanedRmw,
     auto *msg = static_cast<std_msgs::msg::String *>(loaned_message);
     msg->data.assign(4096u, 's');
     auto *bridge_begin =
-        static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
+      static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
     ASSERT_NE(nullptr, bridge_begin);
     const uint32_t bridge_size = FakeMddsBridgeLastBorrowedSize();
     auto *dynamic_begin = reinterpret_cast<const uint8_t *>(msg->data.data());
@@ -422,10 +511,10 @@ TEST(RmwMddsBridgeLoanedRmw,
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::Int32MultiArray>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::Int32MultiArray>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher = rmw_create_publisher(
       node, type_support, "/mdds_full_parity_loaned_sequence",
       &rmw_qos_profile_default, &publisher_options);
@@ -442,7 +531,7 @@ TEST(RmwMddsBridgeLoanedRmw,
     auto *msg = static_cast<std_msgs::msg::Int32MultiArray *>(loaned_message);
     msg->data.assign(1024u, 3588);
     auto *bridge_begin =
-        static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
+      static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
     ASSERT_NE(nullptr, bridge_begin);
     const uint32_t bridge_size = FakeMddsBridgeLastBorrowedSize();
     auto *dynamic_begin = reinterpret_cast<const uint8_t *>(msg->data.data());
@@ -483,10 +572,10 @@ TEST(RmwMddsBridgeLoanedRmw,
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::Int32MultiArray>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::Int32MultiArray>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher = rmw_create_publisher(
       node, type_support, "/mdds_full_parity_loaned_nested_dynamic",
       &rmw_qos_profile_default, &publisher_options);
@@ -508,11 +597,11 @@ TEST(RmwMddsBridgeLoanedRmw,
     msg->data.assign(1024u, 42);
 
     auto *bridge_begin =
-        static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
+      static_cast<uint8_t *>(FakeMddsBridgeLastBorrowedData());
     ASSERT_NE(nullptr, bridge_begin);
     const uint32_t bridge_size = FakeMddsBridgeLastBorrowedSize();
     auto *label_begin =
-        reinterpret_cast<const uint8_t *>(msg->layout.dim[0].label.data());
+      reinterpret_cast<const uint8_t *>(msg->layout.dim[0].label.data());
     auto *data_begin = reinterpret_cast<const uint8_t *>(msg->data.data());
     const size_t data_bytes = msg->data.size() * sizeof(msg->data[0]);
 
@@ -552,16 +641,16 @@ TEST(RmwMddsBridgeLoanedRmw, ReturnLoanedMessageReturnsBorrowedBridgeLoan) {
   rmw_context_t context = rmw_get_zero_initialized_context();
   ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
   rmw_node_t *node =
-      rmw_create_node(&context, "mdds_bridge_loaned_return_node", "/mdds");
+    rmw_create_node(&context, "mdds_bridge_loaned_return_node", "/mdds");
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::Int32>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::Int32>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher =
-      rmw_create_publisher(node, type_support, "/mdds_bridge_loaned_return",
+    rmw_create_publisher(node, type_support, "/mdds_bridge_loaned_return",
                            &rmw_qos_profile_default, &publisher_options);
   ASSERT_NE(nullptr, publisher);
   ASSERT_TRUE(publisher->can_loan_messages);
@@ -601,16 +690,16 @@ TEST(RmwMddsBridgeLoanedRmw, PublisherDoesNotAdvertiseLoaningWithoutBridge) {
   rmw_context_t context = rmw_get_zero_initialized_context();
   ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
   rmw_node_t *node =
-      rmw_create_node(&context, "mdds_heap_loaned_return_node", "/mdds");
+    rmw_create_node(&context, "mdds_heap_loaned_return_node", "/mdds");
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::String>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::String>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher =
-      rmw_create_publisher(node, type_support, "/mdds_heap_loaned_return",
+    rmw_create_publisher(node, type_support, "/mdds_heap_loaned_return",
                            &rmw_qos_profile_default, &publisher_options);
   ASSERT_NE(nullptr, publisher);
   EXPECT_FALSE(publisher->can_loan_messages);
@@ -653,16 +742,16 @@ TEST(RmwMddsBridgeLoanedRmw, PublisherLoanedApisRejectForeignPointers) {
   rmw_context_t context = rmw_get_zero_initialized_context();
   ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
   rmw_node_t *node =
-      rmw_create_node(&context, "mdds_foreign_loaned_pointer_node", "/mdds");
+    rmw_create_node(&context, "mdds_foreign_loaned_pointer_node", "/mdds");
   ASSERT_NE(nullptr, node);
 
   const rosidl_message_type_support_t *type_support =
-      rosidl_typesupport_cpp::get_message_type_support_handle<
-          std_msgs::msg::String>();
+    rosidl_typesupport_cpp::get_message_type_support_handle<
+    std_msgs::msg::String>();
   rmw_publisher_options_t publisher_options =
-      rmw_get_default_publisher_options();
+    rmw_get_default_publisher_options();
   rmw_publisher_t *publisher =
-      rmw_create_publisher(node, type_support, "/mdds_foreign_loaned_pointer",
+    rmw_create_publisher(node, type_support, "/mdds_foreign_loaned_pointer",
                            &rmw_qos_profile_default, &publisher_options);
   ASSERT_NE(nullptr, publisher);
 

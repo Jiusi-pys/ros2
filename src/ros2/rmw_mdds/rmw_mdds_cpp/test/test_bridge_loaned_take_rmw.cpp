@@ -21,9 +21,10 @@
 
 #include "rcutils/allocator.h"
 #include "rcutils/strdup.h"
+#include "rmw/dynamic_message_type_support.h"
+#include "rmw/error_handling.h"
 #include "rmw/init.h"
 #include "rmw/init_options.h"
-#include "rmw/dynamic_message_type_support.h"
 #include "rmw/publisher_options.h"
 #include "rmw/qos_profiles.h"
 #include "rmw/rmw.h"
@@ -124,6 +125,51 @@ TEST(RmwMddsBridgeLoanedTakeRmw,
             rmw_return_loaned_message_from_subscription(subscription,
                                                         loaned_message));
   EXPECT_EQ(1, FakeMddsBridgeSubscriberReturnLoanedCount());
+
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_subscription(node, subscription));
+  EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
+  EXPECT_EQ(RMW_RET_OK, rmw_shutdown(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
+  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
+  unsetenv("RMW_MDDS_BRIDGE_LIBRARY");
+  unsetenv("RMW_IMPLEMENTATION");
+}
+
+TEST(RmwMddsBridgeLoanedTakeRmw,
+     ReturnLoanedMessageRejectsForeignPointerWithoutFreeingIt) {
+  FakeMddsBridgeReset();
+  ASSERT_EQ(0, setenv("RMW_IMPLEMENTATION", "rmw_mdds_cpp", 1));
+  ASSERT_EQ(0, setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_PATH, 1));
+
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
+  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, allocator));
+  SetEnclave(&options, "/rmw_mdds_bridge_foreign_loan_return_test");
+
+  rmw_context_t context = rmw_get_zero_initialized_context();
+  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
+  rmw_node_t *node = rmw_create_node(
+      &context, "mdds_bridge_foreign_loan_return_node", "/mdds");
+  ASSERT_NE(nullptr, node);
+
+  const rosidl_message_type_support_t *type_support =
+      rosidl_typesupport_cpp::get_message_type_support_handle<
+          std_msgs::msg::Int32>();
+  rmw_subscription_options_t subscription_options =
+      rmw_get_default_subscription_options();
+  rmw_subscription_t *subscription = rmw_create_subscription(
+      node, type_support, "/mdds_bridge_foreign_loan_return_int32",
+      &rmw_qos_profile_default, &subscription_options);
+  ASSERT_NE(nullptr, subscription);
+  ASSERT_TRUE(subscription->can_loan_messages);
+
+  std_msgs::msg::Int32 foreign_message;
+  foreign_message.data = 3588;
+  EXPECT_EQ(RMW_RET_ERROR, rmw_return_loaned_message_from_subscription(
+                               subscription, &foreign_message));
+  EXPECT_EQ(3588, foreign_message.data);
+  EXPECT_EQ(0, FakeMddsBridgeSubscriberReturnLoanedCount());
+  rmw_reset_error();
 
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_subscription(node, subscription));
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));

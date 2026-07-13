@@ -20,7 +20,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <new>
 
+#include "ipc_client.hpp"
 #include "rcutils/time.h"
 #include "rmw/error_handling.h"
 #include "rmw_dds_common/qos.hpp"
@@ -1479,64 +1481,45 @@ bool StringContentFilterClauseMatches(
 
 }  // namespace
 
-bool PayloadMatchesContentFilter(
-  const SubscriptionData & subscription, const std::vector<uint8_t> & payload, bool payload_is_mdds)
+bool MessageMatchesContentFilter(
+  const SubscriptionData & subscription, const void * message)
 {
-  if (subscription.numeric_filter_enabled) {
-    // Decode the sample and evaluate grouped numeric clauses against introspected fields. If the
-    // sample cannot be decoded / a field read fails, keep it (a filter must not silently drop data).
-    void * message = subscription.adapter.AllocateMessage();
-    if (message == nullptr) {
-      return true;
-    }
-    bool keep = true;
-    const bool decoded = payload_is_mdds ?
-      subscription.adapter.DecodeMdds(payload.data(), payload.size(), message) :
-      subscription.adapter.Decode(payload.data(), payload.size(), message);
-    if (decoded) {
-      if (!subscription.numeric_filter_disjunctions.empty()) {
-        keep = false;
-        for (const auto & disjunct : subscription.numeric_filter_disjunctions) {
-          bool disjunct_matches = true;
-          for (const auto & clause : disjunct) {
-            double field_value = 0.0;
-            if (!subscription.adapter.ReadNumericField(message, clause.field, &field_value)) {
-              subscription.adapter.DestroyMessage(message);
-              return true;
-            }
-            if (!CompareNumeric(field_value, clause.op, clause.value)) {
-              disjunct_matches = false;
-              break;
-            }
-          }
-          if (disjunct_matches) {
-            keep = true;
-            break;
-          }
-        }
-      } else {
-        double field_value = 0.0;
-        if (subscription.adapter.ReadNumericField(message, subscription.numeric_filter_field, &field_value)) {
-          keep = CompareNumeric(
-            field_value, subscription.numeric_filter_op, subscription.numeric_filter_value);
-        }
-      }
-    }
-    subscription.adapter.DestroyMessage(message);
-    return keep;
-  }
-  if (!subscription.content_filter_enabled) {
-    return true;
-  }
-  void * message = subscription.adapter.AllocateMessage();
   if (message == nullptr) {
     return true;
   }
-  const bool decoded = payload_is_mdds ?
-    subscription.adapter.DecodeMdds(payload.data(), payload.size(), message) :
-    subscription.adapter.Decode(payload.data(), payload.size(), message);
-  if (!decoded) {
-    subscription.adapter.DestroyMessage(message);
+  if (subscription.numeric_filter_enabled) {
+    bool keep = true;
+    if (!subscription.numeric_filter_disjunctions.empty()) {
+      keep = false;
+      for (const auto & disjunct : subscription.numeric_filter_disjunctions) {
+        bool disjunct_matches = true;
+        for (const auto & clause : disjunct) {
+          double field_value = 0.0;
+          if (!subscription.adapter.ReadNumericField(message, clause.field, &field_value)) {
+            return true;
+          }
+          if (!CompareNumeric(field_value, clause.op, clause.value)) {
+            disjunct_matches = false;
+            break;
+          }
+        }
+        if (disjunct_matches) {
+          keep = true;
+          break;
+        }
+      }
+    } else {
+      double field_value = 0.0;
+      if (subscription.adapter.ReadNumericField(
+          message, subscription.numeric_filter_field, &field_value))
+      {
+        keep = CompareNumeric(
+          field_value, subscription.numeric_filter_op, subscription.numeric_filter_value);
+      }
+    }
+    return keep;
+  }
+  if (!subscription.content_filter_enabled) {
     return true;
   }
 
@@ -1546,7 +1529,6 @@ bool PayloadMatchesContentFilter(
       for (const auto & clause : disjunct) {
         std::string field_value;
         if (!subscription.adapter.ReadStringField(message, clause.field, &field_value)) {
-          subscription.adapter.DestroyMessage(message);
           return true;
         }
         if (!StringContentFilterClauseMatches(field_value, clause)) {
@@ -1555,11 +1537,9 @@ bool PayloadMatchesContentFilter(
         }
       }
       if (disjunct_matches) {
-        subscription.adapter.DestroyMessage(message);
         return true;
       }
     }
-    subscription.adapter.DestroyMessage(message);
     return false;
   }
 
@@ -1567,15 +1547,12 @@ bool PayloadMatchesContentFilter(
     for (const auto & clause : subscription.string_filter_clauses) {
       std::string field_value;
       if (!subscription.adapter.ReadStringField(message, clause.field, &field_value)) {
-        subscription.adapter.DestroyMessage(message);
         return true;
       }
       if (!StringContentFilterClauseMatches(field_value, clause)) {
-        subscription.adapter.DestroyMessage(message);
         return false;
       }
     }
-    subscription.adapter.DestroyMessage(message);
     return true;
   }
 
@@ -1585,12 +1562,160 @@ bool PayloadMatchesContentFilter(
   clause.value = subscription.string_filter_value;
   std::string field_value;
   if (!subscription.adapter.ReadStringField(message, clause.field, &field_value)) {
-    subscription.adapter.DestroyMessage(message);
     return true;
   }
-  const bool keep = StringContentFilterClauseMatches(field_value, clause);
+  return StringContentFilterClauseMatches(field_value, clause);
+}
+
+bool PayloadMatchesContentFilter(
+  const SubscriptionData & subscription, const std::vector<uint8_t> & payload, bool payload_is_mdds)
+{
+  if (!subscription.numeric_filter_enabled && !subscription.content_filter_enabled) {
+    return true;
+  }
+  void * message = subscription.adapter.AllocateMessage();
+  if (message == nullptr) {
+    return true;
+  }
+  const bool decoded = payload_is_mdds ?
+    subscription.adapter.DecodeMdds(payload.data(), payload.size(), message) :
+    subscription.adapter.Decode(payload.data(), payload.size(), message);
+  const bool keep = !decoded || MessageMatchesContentFilter(subscription, message);
   subscription.adapter.DestroyMessage(message);
   return keep;
+}
+
+bool ConstructBrokerLoanedMessage(
+  SubscriptionData * subscription, BrokerLoanedSample * sample, std::string * error)
+{
+  if (
+    subscription == nullptr || sample == nullptr || !sample->dynamic ||
+    sample->arena == nullptr || sample->arena_capacity == 0u)
+  {
+    if (error != nullptr) {
+      *error = "dynamic broker loan has no typed arena";
+    }
+    return false;
+  }
+  if (sample->typed_message != nullptr) {
+    return true;
+  }
+  if (!subscription->adapter.SupportsDynamicLoanedMessage()) {
+    if (error != nullptr) {
+      *error = "message type does not support allocator-aware dynamic loans";
+    }
+    return false;
+  }
+  void * message_storage = subscription->adapter.MessageStorageAtEnd(
+    sample->arena, sample->arena_capacity);
+  if (message_storage == nullptr) {
+    if (error != nullptr) {
+      *error = "typed arena is smaller than the generated ROS message";
+    }
+    return false;
+  }
+  const uintptr_t arena_begin = reinterpret_cast<uintptr_t>(sample->arena);
+  const uintptr_t message_begin = reinterpret_cast<uintptr_t>(message_storage);
+  if (message_begin < arena_begin) {
+    if (error != nullptr) {
+      *error = "typed message placement is outside the arena";
+    }
+    return false;
+  }
+
+  std::shared_ptr<MddsLoanMemoryResource> resource;
+  try {
+    resource = std::make_shared<MddsLoanMemoryResource>(
+      sample->arena, static_cast<size_t>(message_begin - arena_begin));
+  } catch (const std::bad_alloc &) {
+    if (error != nullptr) {
+      *error = "failed to allocate typed-arena metadata";
+    }
+    return false;
+  }
+
+  rosidl_runtime_cpp::ScopedMessageMemoryResource scope(resource->Resource());
+  void * message = subscription->adapter.ConstructMessageInPlace(
+    message_storage,
+    sample->arena_capacity - static_cast<size_t>(message_begin - arena_begin));
+  if (message == nullptr) {
+    if (error != nullptr) {
+      *error = "failed to construct generated ROS message in typed arena";
+    }
+    return false;
+  }
+  const bool decoded = sample->from_bridge ?
+    subscription->adapter.DecodeMdds(sample->data, sample->len, message) :
+    subscription->adapter.Decode(sample->data, sample->len, message);
+  if (
+    !decoded || !subscription->adapter.DynamicStorageWithinLoan(
+      message, sample->arena, sample->arena_capacity))
+  {
+    subscription->adapter.DestroyMessageInPlace(message);
+    if (error != nullptr) {
+      *error = decoded ?
+        "decoded dynamic message escaped the typed arena" :
+        "failed to decode dynamic message in the typed arena";
+    }
+    return false;
+  }
+  sample->typed_message = message;
+  sample->memory_resource = std::move(resource);
+  return true;
+}
+
+void DestroyBrokerLoanedSampleMessage(
+  SubscriptionData * subscription, BrokerLoanedSample * sample)
+{
+  if (subscription == nullptr || sample == nullptr || sample->typed_message == nullptr) {
+    return;
+  }
+  rosidl_runtime_cpp::ScopedMessageMemoryResource scope(
+    sample->memory_resource == nullptr ? nullptr : sample->memory_resource->Resource());
+  subscription->adapter.DestroyMessageInPlace(sample->typed_message);
+  sample->typed_message = nullptr;
+  sample->memory_resource.reset();
+}
+
+void DestroyBrokerLoanedMessageRecord(
+  SubscriptionData * subscription, BrokerLoanedMessageRecord * record)
+{
+  if (
+    subscription == nullptr || record == nullptr || !record->message_in_arena ||
+    record->data == nullptr)
+  {
+    return;
+  }
+  rosidl_runtime_cpp::ScopedMessageMemoryResource scope(
+    record->memory_resource == nullptr ? nullptr : record->memory_resource->Resource());
+  subscription->adapter.DestroyMessageInPlace(const_cast<void *>(record->data));
+  record->data = nullptr;
+  record->memory_resource.reset();
+  record->message_in_arena = false;
+}
+
+void DiscardBrokerLoanedLocalState(SubscriptionData * subscription)
+{
+  if (subscription == nullptr) {
+    return;
+  }
+  std::deque<BrokerLoanedSample> queued;
+  std::vector<BrokerLoanedMessageRecord> active;
+  {
+    std::lock_guard<std::mutex> lock(subscription->mutex);
+    queued.swap(subscription->broker_loaned_queue);
+    active.reserve(subscription->broker_loaned_messages.size());
+    for (const auto & entry : subscription->broker_loaned_messages) {
+      active.push_back(entry.second);
+    }
+    subscription->broker_loaned_messages.clear();
+  }
+  for (auto & sample : queued) {
+    DestroyBrokerLoanedSampleMessage(subscription, &sample);
+  }
+  for (auto & record : active) {
+    DestroyBrokerLoanedMessageRecord(subscription, &record);
+  }
 }
 
 bool OffersTransientLocalDurability(const PublisherData * publisher)
@@ -1835,6 +1960,71 @@ void EnqueueSample(SubscriptionData * subscription, const QueuedSample & sample)
   }
 }
 
+void EnqueueBrokerLoanedSample(
+  SubscriptionData * subscription, const BrokerLoanedSample & sample)
+{
+  if (
+    subscription == nullptr || sample.data == nullptr || sample.loan_id == 0u ||
+    (!sample.dynamic && sample.len == 0u))
+  {
+    return;
+  }
+  CallbackInvocation callback;
+  CallbackInvocation message_lost_callback;
+  std::vector<BrokerLoanedSample> evicted_samples;
+  void * broker_client = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(subscription->mutex);
+    const uint64_t pub_seq = sample.info.publication_sequence_number;
+    if (pub_seq != 0u) {
+      std::array<uint8_t, RMW_GID_STORAGE_SIZE> writer_key{};
+      std::memcpy(writer_key.data(), sample.info.publisher_gid.data, RMW_GID_STORAGE_SIZE);
+      auto it = subscription->last_publication_seq_by_writer.find(writer_key);
+      if (it != subscription->last_publication_seq_by_writer.end() && pub_seq > it->second + 1u) {
+        const uint64_t lost = pub_seq - it->second - 1u;
+        subscription->message_lost_total += static_cast<size_t>(lost);
+        message_lost_callback = CallbackInvocation{
+          subscription->message_lost_callback, subscription->message_lost_callback_user_data,
+          static_cast<size_t>(lost)};
+      }
+      if (it == subscription->last_publication_seq_by_writer.end() || pub_seq > it->second) {
+        subscription->last_publication_seq_by_writer[writer_key] = pub_seq;
+      }
+    }
+    BrokerLoanedSample queued_sample = sample;
+    queued_sample.info.received_timestamp =
+      ReceivedTimestampFor(queued_sample.info.source_timestamp);
+    queued_sample.info.reception_sequence_number = subscription->next_reception_sequence_number++;
+    subscription->requested_deadline_last_active_ns =
+      static_cast<int64_t>(queued_sample.info.received_timestamp);
+    if (
+      subscription->actual_qos.history == RMW_QOS_POLICY_HISTORY_KEEP_LAST &&
+      subscription->actual_qos.depth > 0u)
+    {
+      while (subscription->broker_loaned_queue.size() >= subscription->actual_qos.depth) {
+        evicted_samples.push_back(std::move(subscription->broker_loaned_queue.front()));
+        subscription->broker_loaned_queue.pop_front();
+      }
+    }
+    subscription->broker_loaned_queue.push_back(std::move(queued_sample));
+    broker_client = subscription->broker_client;
+    callback = CallbackInvocation{
+      subscription->new_message_callback, subscription->new_message_callback_user_data, 1};
+  }
+  for (auto & evicted : evicted_samples) {
+    DestroyBrokerLoanedSampleMessage(subscription, &evicted);
+    std::string ignored_error;
+    (void)BrokerClientReturnLoan(broker_client, evicted.loan_id, &ignored_error);
+  }
+  if (message_lost_callback.callback != nullptr && message_lost_callback.event_count != 0u) {
+    message_lost_callback.callback(
+      message_lost_callback.user_data, message_lost_callback.event_count);
+  }
+  if (callback.callback != nullptr) {
+    callback.callback(callback.user_data, callback.event_count);
+  }
+}
+
 size_t EnqueueRtpsUserDataForReader(
   const rtps::EntityId & reader_id, const rtps::GuidPrefix & writer_guid_prefix,
   const rtps::EntityId & writer_id, int64_t writer_sequence_number,
@@ -1905,7 +2095,21 @@ bool HasQueuedSample(SubscriptionData * subscription)
     return false;
   }
   std::lock_guard<std::mutex> lock(subscription->mutex);
-  return !subscription->queue.empty();
+  return !subscription->queue.empty() || !subscription->broker_loaned_queue.empty();
+}
+
+bool TakeBrokerLoanedSample(SubscriptionData * subscription, BrokerLoanedSample * sample)
+{
+  if (subscription == nullptr || sample == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(subscription->mutex);
+  if (subscription->broker_loaned_queue.empty()) {
+    return false;
+  }
+  *sample = subscription->broker_loaned_queue.front();
+  subscription->broker_loaned_queue.pop_front();
+  return true;
 }
 
 bool TakeQueuedSample(SubscriptionData * subscription, QueuedSample * sample)

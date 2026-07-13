@@ -69,10 +69,8 @@ bool MarkReadyGuards(rmw_guard_conditions_t * guard_conditions)
   for (size_t i = 0; i < guard_conditions->guard_condition_count; ++i) {
     auto * data =
       static_cast<rmw_mdds_cpp::GuardConditionData *>(guard_conditions->guard_conditions[i]);
-    ready[i] = data != nullptr && data->triggered;
-    if (ready[i]) {
-      data->triggered = false;
-    }
+    ready[i] = data != nullptr &&
+      data->triggered.exchange(false, std::memory_order_acq_rel);
     any_ready = any_ready || ready[i];
   }
   if (any_ready) {

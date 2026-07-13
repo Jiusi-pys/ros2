@@ -26,6 +26,10 @@ namespace
 constexpr uint32_t kFrameMagic = 0x3149504du;  // "MPI1" in little-endian byte order.
 constexpr uint16_t kFrameVersion = 1u;
 constexpr size_t kTypeHashWireSize = 1u + ROSIDL_TYPE_HASH_SIZE;
+constexpr uint32_t kDynamicLoanRequestMagic = 0x3252504du;  // "MPR2"
+constexpr uint32_t kDynamicLoanDescriptorMagic = 0x3244504du;  // "MPD2"
+constexpr size_t kDynamicLoanRequestWireSize = 6u * sizeof(uint32_t);
+constexpr size_t kDynamicLoanDescriptorWireSize = 4u * sizeof(uint32_t);
 
 void SetError(std::string * error, const char * message)
 {
@@ -178,6 +182,8 @@ bool IsKnownMessageKind(uint16_t kind)
     case MessageKind::kUnregisterEntity:
     case MessageKind::kPublishSample:
     case MessageKind::kDeliverSample:
+    case MessageKind::kDeliverLoanedSample:
+    case MessageKind::kReturnLoanedSample:
     case MessageKind::kGraphUpdate:
       return true;
   }
@@ -324,6 +330,9 @@ DecodeStatus DecodeFrame(const uint8_t * data, size_t size, Frame * frame, std::
 
 std::vector<uint8_t> EncodeEndpointDescriptor(const EndpointDescriptor & endpoint)
 {
+  if (endpoint.loaned_message_size != 0u && endpoint.loan_pool_version != 0u) {
+    return {};
+  }
   std::vector<uint8_t> out;
   AppendU64(&out, endpoint.entity_id);
   AppendU64(&out, endpoint.local_context_id);
@@ -338,6 +347,16 @@ std::vector<uint8_t> EncodeEndpointDescriptor(const EndpointDescriptor & endpoin
   AppendString(&out, endpoint.mdds_type_name);
   AppendTypeHash(&out, endpoint.type_hash);
   AppendU32(&out, endpoint.domain_id);
+  if (endpoint.loaned_message_size != 0u) {
+    AppendU32(&out, endpoint.loaned_message_size);
+  } else if (endpoint.loan_pool_version != 0u) {
+    AppendU32(&out, kDynamicLoanRequestMagic);
+    AppendU32(&out, endpoint.loan_pool_version);
+    AppendU32(&out, endpoint.loaned_payload_capacity);
+    AppendU32(&out, endpoint.loaned_arena_capacity);
+    AppendU32(&out, endpoint.loaned_slot_count);
+    AppendU32(&out, endpoint.loan_pool_flags);
+  }
   return out;
 }
 
@@ -381,7 +400,7 @@ bool DecodeEndpointDescriptor(
     return false;
   }
   size_t remaining = size - offset;
-  if (remaining == sizeof(uint32_t)) {
+  if (remaining == sizeof(uint32_t) || remaining == 2u * sizeof(uint32_t)) {
     if (!ReadU32(data, size, &offset, &decoded.domain_id)) {
       SetError(error, "truncated endpoint domain id");
       return false;
@@ -392,12 +411,53 @@ bool DecodeEndpointDescriptor(
       return false;
     }
     remaining = size - offset;
-    if (remaining == sizeof(uint32_t)) {
+    if (remaining != 0u) {
       if (!ReadU32(data, size, &offset, &decoded.domain_id)) {
         SetError(error, "truncated endpoint domain id");
         return false;
       }
     }
+  } else if (remaining != 0u) {
+    SetError(error, "endpoint payload has a truncated compatibility suffix");
+    return false;
+  }
+  remaining = size - offset;
+  if (remaining == sizeof(uint32_t)) {
+    if (!ReadU32(data, size, &offset, &decoded.loaned_message_size)) {
+      SetError(error, "truncated endpoint loaned-message size");
+      return false;
+    }
+  } else if (remaining == kDynamicLoanRequestWireSize) {
+    uint32_t magic = 0u;
+    if (
+      !ReadU32(data, size, &offset, &magic) ||
+      !ReadU32(data, size, &offset, &decoded.loan_pool_version) ||
+      !ReadU32(data, size, &offset, &decoded.loaned_payload_capacity) ||
+      !ReadU32(data, size, &offset, &decoded.loaned_arena_capacity) ||
+      !ReadU32(data, size, &offset, &decoded.loaned_slot_count) ||
+      !ReadU32(data, size, &offset, &decoded.loan_pool_flags))
+    {
+      SetError(error, "truncated dynamic loan-pool request");
+      return false;
+    }
+    if (
+      magic != kDynamicLoanRequestMagic ||
+      decoded.loan_pool_version != kDynamicLoanPoolVersion ||
+      decoded.loan_pool_flags != kLoanPoolFlagTypedArena ||
+      decoded.loaned_payload_capacity == 0u ||
+      decoded.loaned_payload_capacity > kDefaultDynamicLoanPayloadCapacity ||
+      decoded.loaned_arena_capacity == 0u ||
+      decoded.loaned_arena_capacity > kDefaultDynamicLoanArenaCapacity ||
+      decoded.loaned_slot_count == 0u ||
+      decoded.loaned_slot_count > kMaxDynamicLoanPoolSlotCount ||
+      decoded.kind != EndpointKind::kSubscription)
+    {
+      SetError(error, "dynamic loan-pool request is invalid or unsupported");
+      return false;
+    }
+  } else if (remaining != 0u) {
+    SetError(error, "endpoint payload has an invalid loan-pool suffix");
+    return false;
   }
   if (offset != size) {
     SetError(error, "endpoint payload has trailing bytes");
@@ -415,7 +475,14 @@ std::vector<uint8_t> EncodeEndpointList(const std::vector<EndpointDescriptor> & 
   std::vector<uint8_t> out;
   AppendU32(&out, static_cast<uint32_t>(endpoints.size()));
   for (const auto & endpoint : endpoints) {
-    std::vector<uint8_t> encoded_endpoint = EncodeEndpointDescriptor(endpoint);
+    EndpointDescriptor graph_endpoint = endpoint;
+    graph_endpoint.loaned_message_size = 0u;
+    graph_endpoint.loan_pool_version = 0u;
+    graph_endpoint.loaned_payload_capacity = 0u;
+    graph_endpoint.loaned_arena_capacity = 0u;
+    graph_endpoint.loaned_slot_count = 0u;
+    graph_endpoint.loan_pool_flags = 0u;
+    std::vector<uint8_t> encoded_endpoint = EncodeEndpointDescriptor(graph_endpoint);
     if (encoded_endpoint.size() > std::numeric_limits<uint32_t>::max()) {
       return {};
     }
@@ -595,6 +662,133 @@ bool DecodeSampleMessage(
   }
   *sample = std::move(decoded);
   return true;
+}
+
+std::vector<uint8_t> EncodeLoanPoolDescriptor(const LoanPoolDescriptor & descriptor)
+{
+  std::vector<uint8_t> out;
+  AppendString(&out, descriptor.path);
+  AppendU64(&out, descriptor.generation);
+  AppendU32(&out, descriptor.slot_size);
+  AppendU32(&out, descriptor.slot_count);
+  if (
+    descriptor.version != kFixedLoanPoolVersion || descriptor.flags != 0u ||
+    descriptor.arena_size != 0u)
+  {
+    AppendU32(&out, kDynamicLoanDescriptorMagic);
+    AppendU32(&out, descriptor.version);
+    AppendU32(&out, descriptor.arena_size);
+    AppendU32(&out, descriptor.flags);
+  }
+  return out;
+}
+
+bool DecodeLoanPoolDescriptor(
+  const uint8_t * data, size_t size, LoanPoolDescriptor * descriptor, std::string * error)
+{
+  if (descriptor == nullptr) {
+    SetError(error, "loan pool descriptor output is null");
+    return false;
+  }
+  size_t offset = 0u;
+  LoanPoolDescriptor decoded;
+  if (!ReadString(data, size, &offset, &decoded.path, error) ||
+    !ReadU64(data, size, &offset, &decoded.generation) ||
+    !ReadU32(data, size, &offset, &decoded.slot_size) ||
+    !ReadU32(data, size, &offset, &decoded.slot_count))
+  {
+    SetError(error, "truncated loan pool descriptor");
+    return false;
+  }
+  const size_t remaining = size - offset;
+  if (remaining == kDynamicLoanDescriptorWireSize) {
+    uint32_t magic = 0u;
+    if (
+      !ReadU32(data, size, &offset, &magic) ||
+      !ReadU32(data, size, &offset, &decoded.version) ||
+      !ReadU32(data, size, &offset, &decoded.arena_size) ||
+      !ReadU32(data, size, &offset, &decoded.flags))
+    {
+      SetError(error, "truncated dynamic loan pool descriptor");
+      return false;
+    }
+    if (
+      magic != kDynamicLoanDescriptorMagic || decoded.version != kDynamicLoanPoolVersion ||
+      decoded.flags != kLoanPoolFlagTypedArena || decoded.slot_size == 0u ||
+      decoded.slot_size > kDefaultDynamicLoanPayloadCapacity || decoded.arena_size == 0u ||
+      decoded.arena_size > kDefaultDynamicLoanArenaCapacity || decoded.slot_count == 0u ||
+      decoded.slot_count > kMaxDynamicLoanPoolSlotCount)
+    {
+      SetError(error, "dynamic loan pool descriptor is invalid or unsupported");
+      return false;
+    }
+  } else if (remaining != 0u) {
+    SetError(error, "loan pool descriptor has an invalid version suffix");
+    return false;
+  }
+  if (offset != size) {
+    SetError(error, "loan pool descriptor has trailing bytes");
+    return false;
+  }
+  *descriptor = std::move(decoded);
+  return true;
+}
+
+std::vector<uint8_t> EncodeLoanedSampleMessage(const LoanedSampleMessage & sample)
+{
+  std::vector<uint8_t> out;
+  AppendU64(&out, sample.entity_id);
+  AppendU64(&out, sample.loan_id);
+  AppendU64(&out, sample.pool_generation);
+  AppendU64(&out, sample.sequence_number);
+  AppendU32(&out, sample.slot_index);
+  AppendU32(&out, sample.payload_size);
+  AppendU8(&out, sample.mdds_payload ? 1u : 0u);
+  return out;
+}
+
+bool DecodeLoanedSampleMessage(
+  const uint8_t * data, size_t size, LoanedSampleMessage * sample, std::string * error)
+{
+  if (sample == nullptr) {
+    SetError(error, "loaned sample output is null");
+    return false;
+  }
+  size_t offset = 0u;
+  uint8_t mdds_payload = 0u;
+  LoanedSampleMessage decoded;
+  if (!ReadU64(data, size, &offset, &decoded.entity_id) ||
+    !ReadU64(data, size, &offset, &decoded.loan_id) ||
+    !ReadU64(data, size, &offset, &decoded.pool_generation) ||
+    !ReadU64(data, size, &offset, &decoded.sequence_number) ||
+    !ReadU32(data, size, &offset, &decoded.slot_index) ||
+    !ReadU32(data, size, &offset, &decoded.payload_size) ||
+    !ReadU8(data, size, &offset, &mdds_payload))
+  {
+    SetError(error, "truncated loaned sample descriptor");
+    return false;
+  }
+  if (
+    offset != size || decoded.loan_id == 0u || decoded.pool_generation == 0u ||
+    decoded.slot_index >= kMaxLoanPoolSlotCount)
+  {
+    SetError(error, "loaned sample descriptor is invalid");
+    return false;
+  }
+  decoded.mdds_payload = mdds_payload != 0u;
+  *sample = decoded;
+  return true;
+}
+
+std::vector<uint8_t> EncodeLoanReturn(uint64_t loan_id)
+{
+  return EncodeEntityId(loan_id);
+}
+
+bool DecodeLoanReturn(
+  const uint8_t * data, size_t size, uint64_t * loan_id, std::string * error)
+{
+  return DecodeEntityId(data, size, loan_id, error);
 }
 
 }  // namespace ipc

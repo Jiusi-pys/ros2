@@ -78,7 +78,7 @@ rmw_trigger_guard_condition(const rmw_guard_condition_t * guard_condition)
     RMW_SET_ERROR_MSG("guard condition data is null");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  data->triggered = true;
+  data->triggered.store(true, std::memory_order_release);
   return RMW_RET_OK;
 }
 }  // extern "C"

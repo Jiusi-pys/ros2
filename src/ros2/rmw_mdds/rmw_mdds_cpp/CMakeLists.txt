@@ -35,6 +35,7 @@ add_library(rmw_mdds_cpp
   src/broker.cpp
   src/ipc_broker.cpp
   src/ipc_client.cpp
+  src/ipc_loan_pool.cpp
   src/ipc_protocol.cpp
   src/ipc_transport.cpp
   src/identifier.cpp
@@ -104,6 +105,7 @@ configure_rmw_library(rmw_mdds_cpp)
 add_executable(rmw_mdds_broker
   src/bridge_backend.cpp
   src/ipc_broker.cpp
+  src/ipc_loan_pool.cpp
   src/ipc_protocol.cpp
   src/ipc_transport.cpp
   src/rmw_mdds_broker_main.cpp
@@ -482,6 +484,7 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_ipc_protocol test/test_ipc_protocol.cpp)
   target_sources(test_ipc_protocol PRIVATE
+    src/ipc_loan_pool.cpp
     src/ipc_protocol.cpp
   )
   target_include_directories(test_ipc_protocol PRIVATE
@@ -490,6 +493,14 @@ if(BUILD_TESTING)
   target_link_libraries(test_ipc_protocol
     rmw::rmw
     rmw_mdds_cpp
+  )
+
+  ament_add_gtest(test_ipc_loan_pool test/test_ipc_loan_pool.cpp)
+  target_sources(test_ipc_loan_pool PRIVATE
+    src/ipc_loan_pool.cpp
+  )
+  target_include_directories(test_ipc_loan_pool PRIVATE
+    src
   )
 
   ament_add_gtest(test_rtps_protocol test/test_rtps_protocol.cpp)
@@ -552,6 +563,7 @@ if(BUILD_TESTING)
   target_sources(test_ipc_broker PRIVATE
     src/bridge_backend.cpp
     src/ipc_broker.cpp
+    src/ipc_loan_pool.cpp
     src/ipc_protocol.cpp
     src/ipc_transport.cpp
   )
@@ -571,6 +583,7 @@ if(BUILD_TESTING)
   target_sources(test_broker_mode PRIVATE
     src/bridge_backend.cpp
     src/ipc_broker.cpp
+    src/ipc_loan_pool.cpp
     src/ipc_protocol.cpp
     src/ipc_transport.cpp
   )
@@ -578,6 +591,8 @@ if(BUILD_TESTING)
     src
     ${RMW_MDDS_STD_MSGS_INCLUDE_DIR}
     ${RMW_MDDS_STD_SRVS_INCLUDE_DIR}
+    ${RMW_MDDS_SERVICE_MSGS_INCLUDE_DIR}
+    ${RMW_MDDS_BUILTIN_INTERFACES_INCLUDE_DIR}
   )
   target_link_libraries(test_broker_mode
     ${CMAKE_DL_LIBS}
@@ -706,7 +721,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_loan_arena test/test_loan_arena.cpp)
   target_sources(test_loan_arena PRIVATE src/loan_arena.cpp)
   target_include_directories(test_loan_arena PRIVATE src)
-  target_link_libraries(test_loan_arena rmw_mdds_cpp)
+  target_link_libraries(test_loan_arena
+    rmw_mdds_cpp
+    rosidl_runtime_cpp::rosidl_runtime_cpp
+  )
 
   ament_add_gtest(test_bridge_loaned_rmw test/test_bridge_loaned_rmw.cpp)
   target_sources(test_bridge_loaned_rmw PRIVATE src/string_adapter.cpp)

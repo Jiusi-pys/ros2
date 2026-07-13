@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -104,6 +105,7 @@ static std::string g_subscriber_type;
 static std::vector<uint8_t> g_last_payload;
 static int g_publish_count = 0;
 static int g_init_count = 0;
+static int g_shutdown_count = 0;
 static int g_borrow_loaned_count = 0;
 static int g_publish_loaned_count = 0;
 static int g_return_loaned_count = 0;
@@ -113,10 +115,18 @@ static int g_subscriber_return_loaned_count = 0;
 static int g_protected_transport_activate_count = 0;
 static int g_protected_transport_authenticated = 0;
 static int g_protected_transport_encrypted = 0;
+static int g_fail_next_publisher_create = 0;
+static int g_fail_next_subscriber_create = 0;
 static void *g_last_borrowed_data = nullptr;
 static uint32_t g_last_borrowed_size = 0;
 static void *g_last_subscriber_typed_storage = nullptr;
 static uint32_t g_last_subscriber_typed_storage_size = 0;
+static std::mutex g_mutex;
+
+struct DataCallbackTarget {
+  MddsBridgeDataCallback callback;
+  void *user_data;
+};
 
 static bool SameTopicAndType(const std::string &topic, const std::string &type,
                              const std::string &other_topic,
@@ -124,7 +134,30 @@ static bool SameTopicAndType(const std::string &topic, const std::string &type,
   return topic == other_topic && type == other_type;
 }
 
-static uint32_t CountSubscribersForPublisher(MddsBridgePublisher *publisher) {
+static MddsBridgePublisher *FindPublisherLocked(const std::string &topic,
+                                                const std::string &type) {
+  auto it = std::find_if(
+      g_publishers.begin(), g_publishers.end(),
+      [&topic, &type](const MddsBridgePublisher *publisher) {
+        return publisher != nullptr && publisher->topic == topic &&
+               publisher->type == type;
+      });
+  return it == g_publishers.end() ? nullptr : *it;
+}
+
+static MddsBridgeSubscriber *FindSubscriberLocked(const std::string &topic,
+                                                  const std::string &type) {
+  auto it = std::find_if(
+      g_subscribers.begin(), g_subscribers.end(),
+      [&topic, &type](const MddsBridgeSubscriber *subscriber) {
+        return subscriber != nullptr && subscriber->topic == topic &&
+               subscriber->type == type;
+      });
+  return it == g_subscribers.end() ? nullptr : *it;
+}
+
+static uint32_t
+CountSubscribersForPublisherLocked(MddsBridgePublisher *publisher) {
   if (publisher == nullptr) {
     return 0u;
   }
@@ -137,7 +170,8 @@ static uint32_t CountSubscribersForPublisher(MddsBridgePublisher *publisher) {
       }));
 }
 
-static uint32_t CountPublishersForSubscriber(MddsBridgeSubscriber *subscriber) {
+static uint32_t
+CountPublishersForSubscriberLocked(MddsBridgeSubscriber *subscriber) {
   if (subscriber == nullptr) {
     return 0u;
   }
@@ -150,21 +184,8 @@ static uint32_t CountPublishersForSubscriber(MddsBridgeSubscriber *subscriber) {
       }));
 }
 
-static void NotifyPublisherMatched(MddsBridgePublisher *publisher) {
-  if (publisher != nullptr && publisher->matched_callback != nullptr) {
-    publisher->matched_callback(CountSubscribersForPublisher(publisher),
-                                publisher->matched_user_data);
-  }
-}
-
-static void NotifySubscriberMatched(MddsBridgeSubscriber *subscriber) {
-  if (subscriber != nullptr && subscriber->matched_callback != nullptr) {
-    subscriber->matched_callback(CountPublishersForSubscriber(subscriber),
-                                 subscriber->matched_user_data);
-  }
-}
-
 void FakeMddsBridgeReset(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   for (auto *publisher : g_publishers) {
     delete publisher;
   }
@@ -180,6 +201,7 @@ void FakeMddsBridgeReset(void) {
   g_last_payload.clear();
   g_publish_count = 0;
   g_init_count = 0;
+  g_shutdown_count = 0;
   g_borrow_loaned_count = 0;
   g_publish_loaned_count = 0;
   g_return_loaned_count = 0;
@@ -189,144 +211,214 @@ void FakeMddsBridgeReset(void) {
   g_protected_transport_activate_count = 0;
   g_protected_transport_authenticated = 0;
   g_protected_transport_encrypted = 0;
+  g_fail_next_publisher_create = 0;
+  g_fail_next_subscriber_create = 0;
   g_last_borrowed_data = nullptr;
   g_last_borrowed_size = 0;
   g_last_subscriber_typed_storage = nullptr;
   g_last_subscriber_typed_storage_size = 0;
 }
 
-int FakeMddsBridgePublishCount(void) { return g_publish_count; }
+void FakeMddsBridgeFailNextPublisherCreate(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_fail_next_publisher_create = 1;
+}
 
-int FakeMddsBridgeInitCount(void) { return g_init_count; }
+void FakeMddsBridgeFailNextSubscriberCreate(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_fail_next_subscriber_create = 1;
+}
 
-int FakeMddsBridgeBorrowLoanedCount(void) { return g_borrow_loaned_count; }
+int FakeMddsBridgePublishCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_publish_count;
+}
 
-int FakeMddsBridgePublishLoanedCount(void) { return g_publish_loaned_count; }
+int FakeMddsBridgeInitCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_init_count;
+}
 
-int FakeMddsBridgeReturnLoanedCount(void) { return g_return_loaned_count; }
+int FakeMddsBridgeShutdownCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_shutdown_count;
+}
 
-void *FakeMddsBridgeLastBorrowedData(void) { return g_last_borrowed_data; }
+int FakeMddsBridgeBorrowLoanedCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_borrow_loaned_count;
+}
 
-uint32_t FakeMddsBridgeLastBorrowedSize(void) { return g_last_borrowed_size; }
+int FakeMddsBridgePublishLoanedCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_publish_loaned_count;
+}
+
+int FakeMddsBridgeReturnLoanedCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_return_loaned_count;
+}
+
+void *FakeMddsBridgeLastBorrowedData(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_last_borrowed_data;
+}
+
+uint32_t FakeMddsBridgeLastBorrowedSize(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_last_borrowed_size;
+}
 
 int FakeMddsBridgeSubscriberTakeLoanedCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return g_subscriber_take_loaned_count;
 }
 
 int FakeMddsBridgeSubscriberTakeLoanedWithStorageCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return g_subscriber_take_loaned_with_storage_count;
 }
 
 int FakeMddsBridgeSubscriberReturnLoanedCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return g_subscriber_return_loaned_count;
 }
 
 int FakeMddsBridgeProtectedTransportActivateCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return g_protected_transport_activate_count;
 }
 
 int FakeMddsBridgeProtectedTransportAuthenticated(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return g_protected_transport_authenticated;
 }
 
 int FakeMddsBridgeProtectedTransportEncrypted(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return g_protected_transport_encrypted;
 }
 
 void *FakeMddsBridgeLastSubscriberTypedStorage(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return g_last_subscriber_typed_storage;
 }
 
 uint32_t FakeMddsBridgeLastSubscriberTypedStorageSize(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return g_last_subscriber_typed_storage_size;
 }
 
 int FakeMddsBridgePublisherCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return static_cast<int>(g_publishers.size());
 }
 
 int FakeMddsBridgeSubscriberCount(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return static_cast<int>(g_subscribers.size());
 }
 
 const char *FakeMddsBridgeLastPublisherTopic(void) {
-  return g_publisher_topic.c_str();
+  thread_local std::string snapshot;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (snapshot != g_publisher_topic) {
+    snapshot = g_publisher_topic;
+  }
+  return snapshot.c_str();
 }
 
 const char *FakeMddsBridgeLastSubscriberTopic(void) {
-  return g_subscriber_topic.c_str();
+  thread_local std::string snapshot;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (snapshot != g_subscriber_topic) {
+    snapshot = g_subscriber_topic;
+  }
+  return snapshot.c_str();
 }
 
 const char *FakeMddsBridgeLastPublisherType(void) {
-  return g_publisher_type.c_str();
+  thread_local std::string snapshot;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (snapshot != g_publisher_type) {
+    snapshot = g_publisher_type;
+  }
+  return snapshot.c_str();
 }
 
 const char *FakeMddsBridgeLastSubscriberType(void) {
-  return g_subscriber_type.c_str();
+  thread_local std::string snapshot;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (snapshot != g_subscriber_type) {
+    snapshot = g_subscriber_type;
+  }
+  return snapshot.c_str();
 }
 
 const uint8_t *FakeMddsBridgeLastPayloadData(void) {
-  return g_last_payload.data();
+  thread_local std::vector<uint8_t> snapshot;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (snapshot != g_last_payload) {
+    snapshot = g_last_payload;
+  }
+  return snapshot.data();
 }
 
 uint32_t FakeMddsBridgeLastPayloadLen(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return static_cast<uint32_t>(g_last_payload.size());
 }
 
 int FakeMddsBridgeHasPublisher(const char *topicName, const char *typeName) {
   const std::string topic = topicName == nullptr ? "" : topicName;
   const std::string type = typeName == nullptr ? "" : typeName;
-  return std::any_of(g_publishers.begin(), g_publishers.end(),
-                     [&topic, &type](const MddsBridgePublisher *publisher) {
-                       return publisher != nullptr &&
-                              publisher->topic == topic &&
-                              publisher->type == type;
-                     })
-             ? 1
-             : 0;
-}
-
-MddsBridgePublisher *FakeMddsBridgeFindPublisher(const char *topicName,
-                                                 const char *typeName) {
-  const std::string topic = topicName == nullptr ? "" : topicName;
-  const std::string type = typeName == nullptr ? "" : typeName;
-  auto it = std::find_if(g_publishers.begin(), g_publishers.end(),
-                         [&topic, &type](const MddsBridgePublisher *publisher) {
-                           return publisher != nullptr &&
-                                  publisher->topic == topic &&
-                                  publisher->type == type;
-                         });
-  return it == g_publishers.end() ? nullptr : *it;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return FindPublisherLocked(topic, type) == nullptr ? 0 : 1;
 }
 
 int FakeMddsBridgePublisherPublishCount(const char *topicName,
                                         const char *typeName) {
-  const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *publisher = FindPublisherLocked(topic, type);
   return publisher == nullptr ? 0 : publisher->publish_count;
 }
 
 uint32_t FakeMddsBridgePublisherHistoryDepth(const char *topicName,
                                              const char *typeName) {
-  const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *publisher = FindPublisherLocked(topic, type);
   return publisher == nullptr ? 0u : publisher->qos.historyDepth;
 }
 
 int FakeMddsBridgePublisherHistoryKind(const char *topicName,
                                        const char *typeName) {
-  const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *publisher = FindPublisherLocked(topic, type);
   return publisher == nullptr ? -1 : publisher->qos.historyKind;
 }
 
 int FakeMddsBridgePublisherReliability(const char *topicName,
                                        const char *typeName) {
-  const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *publisher = FindPublisherLocked(topic, type);
   return publisher == nullptr ? -1 : publisher->qos.reliability;
 }
 
 void FakeMddsBridgeSetPublisherUnackedCount(const char *topicName,
                                             const char *typeName,
                                             uint32_t count) {
-  auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  auto *publisher = FindPublisherLocked(topic, type);
   if (publisher != nullptr) {
     publisher->unacked_count = count;
   }
@@ -334,15 +426,27 @@ void FakeMddsBridgeSetPublisherUnackedCount(const char *topicName,
 
 const uint8_t *FakeMddsBridgePublisherLastPayloadData(const char *topicName,
                                                       const char *typeName) {
-  const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
-  return publisher == nullptr || publisher->last_payload.empty()
-             ? nullptr
-             : publisher->last_payload.data();
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  thread_local std::vector<uint8_t> snapshot;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *publisher = FindPublisherLocked(topic, type);
+  if (publisher == nullptr) {
+    snapshot.clear();
+    return nullptr;
+  }
+  if (snapshot != publisher->last_payload) {
+    snapshot = publisher->last_payload;
+  }
+  return snapshot.empty() ? nullptr : snapshot.data();
 }
 
 uint32_t FakeMddsBridgePublisherLastPayloadLen(const char *topicName,
                                                const char *typeName) {
-  const auto *publisher = FakeMddsBridgeFindPublisher(topicName, typeName);
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *publisher = FindPublisherLocked(topic, type);
   return publisher == nullptr
              ? 0u
              : static_cast<uint32_t>(publisher->last_payload.size());
@@ -351,20 +455,15 @@ uint32_t FakeMddsBridgePublisherLastPayloadLen(const char *topicName,
 int FakeMddsBridgeHasSubscriber(const char *topicName, const char *typeName) {
   const std::string topic = topicName == nullptr ? "" : topicName;
   const std::string type = typeName == nullptr ? "" : typeName;
-  return std::any_of(g_subscribers.begin(), g_subscribers.end(),
-                     [&topic, &type](const MddsBridgeSubscriber *subscriber) {
-                       return subscriber != nullptr &&
-                              subscriber->topic == topic &&
-                              subscriber->type == type;
-                     })
-             ? 1
-             : 0;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return FindSubscriberLocked(topic, type) == nullptr ? 0 : 1;
 }
 
 int FakeMddsBridgeSubscriberCountFor(const char *topicName,
                                      const char *typeName) {
   const std::string topic = topicName == nullptr ? "" : topicName;
   const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
   return static_cast<int>(std::count_if(
       g_subscribers.begin(), g_subscribers.end(),
       [&topic, &type](const MddsBridgeSubscriber *subscriber) {
@@ -373,55 +472,61 @@ int FakeMddsBridgeSubscriberCountFor(const char *topicName,
       }));
 }
 
-MddsBridgeSubscriber *FakeMddsBridgeFindSubscriber(const char *topicName,
-                                                   const char *typeName) {
-  const std::string topic = topicName == nullptr ? "" : topicName;
-  const std::string type = typeName == nullptr ? "" : typeName;
-  auto it =
-      std::find_if(g_subscribers.begin(), g_subscribers.end(),
-                   [&topic, &type](const MddsBridgeSubscriber *subscriber) {
-                     return subscriber != nullptr &&
-                            subscriber->topic == topic &&
-                            subscriber->type == type;
-                   });
-  return it == g_subscribers.end() ? nullptr : *it;
-}
-
 uint32_t FakeMddsBridgeSubscriberHistoryDepth(const char *topicName,
                                               const char *typeName) {
-  const auto *subscriber = FakeMddsBridgeFindSubscriber(topicName, typeName);
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *subscriber = FindSubscriberLocked(topic, type);
   return subscriber == nullptr ? 0u : subscriber->qos.historyDepth;
 }
 
 int FakeMddsBridgeSubscriberHistoryKind(const char *topicName,
                                         const char *typeName) {
-  const auto *subscriber = FakeMddsBridgeFindSubscriber(topicName, typeName);
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *subscriber = FindSubscriberLocked(topic, type);
   return subscriber == nullptr ? -1 : subscriber->qos.historyKind;
 }
 
 int FakeMddsBridgeSubscriberReliability(const char *topicName,
                                         const char *typeName) {
-  const auto *subscriber = FakeMddsBridgeFindSubscriber(topicName, typeName);
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *subscriber = FindSubscriberLocked(topic, type);
   return subscriber == nullptr ? -1 : subscriber->qos.reliability;
 }
 
 void FakeMddsBridgeInject(const void *data, uint32_t len) {
-  if (g_subscribers.empty() || g_subscribers.back()->callback == nullptr) {
-    return;
+  DataCallbackTarget target = {};
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_subscribers.empty() || g_subscribers.back()->callback == nullptr) {
+      return;
+    }
+    target.callback = g_subscribers.back()->callback;
+    target.user_data = g_subscribers.back()->user_data;
   }
   MddsBridgeSample sample = {};
   sample.data = data;
   sample.len = len;
   sample.sequenceNumber = 1;
-  auto *subscriber = g_subscribers.back();
-  subscriber->callback(&sample, subscriber->user_data);
+  target.callback(&sample, target.user_data);
 }
 
 void FakeMddsBridgeInjectWithMetadata(const void *data, uint32_t len,
                                       uint64_t sequenceNumber,
                                       const uint8_t *senderGuid) {
-  if (g_subscribers.empty() || g_subscribers.back()->callback == nullptr) {
-    return;
+  DataCallbackTarget target = {};
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_subscribers.empty() || g_subscribers.back()->callback == nullptr) {
+      return;
+    }
+    target.callback = g_subscribers.back()->callback;
+    target.user_data = g_subscribers.back()->user_data;
   }
   MddsBridgeSample sample = {};
   sample.data = data;
@@ -430,8 +535,7 @@ void FakeMddsBridgeInjectWithMetadata(const void *data, uint32_t len,
   if (senderGuid != nullptr) {
     std::memcpy(sample.senderGuid, senderGuid, sizeof(sample.senderGuid));
   }
-  auto *subscriber = g_subscribers.back();
-  subscriber->callback(&sample, subscriber->user_data);
+  target.callback(&sample, target.user_data);
 }
 
 int FakeMddsBridgeInjectFor(const char *topicName, const char *typeName,
@@ -439,20 +543,25 @@ int FakeMddsBridgeInjectFor(const char *topicName, const char *typeName,
                             uint64_t sequenceNumber) {
   const std::string topic = topicName == nullptr ? "" : topicName;
   const std::string type = typeName == nullptr ? "" : typeName;
-  int delivered = 0;
-  for (auto *subscriber : g_subscribers) {
-    if (subscriber == nullptr || subscriber->callback == nullptr ||
-        subscriber->topic != topic || subscriber->type != type) {
-      continue;
+  std::vector<DataCallbackTarget> targets;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    for (auto *subscriber : g_subscribers) {
+      if (subscriber == nullptr || subscriber->callback == nullptr ||
+          subscriber->topic != topic || subscriber->type != type) {
+        continue;
+      }
+      targets.push_back({subscriber->callback, subscriber->user_data});
     }
+  }
+  for (const auto &target : targets) {
     MddsBridgeSample sample = {};
     sample.data = data;
     sample.len = len;
     sample.sequenceNumber = sequenceNumber;
-    subscriber->callback(&sample, subscriber->user_data);
-    ++delivered;
+    target.callback(&sample, target.user_data);
   }
-  return delivered;
+  return static_cast<int>(targets.size());
 }
 
 int FakeMddsBridgeQueueLoanedFor(const char *topicName, const char *typeName,
@@ -461,6 +570,7 @@ int FakeMddsBridgeQueueLoanedFor(const char *topicName, const char *typeName,
                                  const uint8_t *senderGuid) {
   const std::string topic = topicName == nullptr ? "" : topicName;
   const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
   int queued = 0;
   for (auto *subscriber : g_subscribers) {
     if (subscriber == nullptr || subscriber->topic != topic ||
@@ -485,14 +595,19 @@ int FakeMddsBridgeQueueLoanedFor(const char *topicName, const char *typeName,
 }
 
 int32_t MddsBridgeInit(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   ++g_init_count;
   return 0;
 }
 
-void MddsBridgeShutdown(void) {}
+void MddsBridgeShutdown(void) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  ++g_shutdown_count;
+}
 void MddsBridgeStopSpin(void) {}
 
 int32_t MddsBridgeActivateProtectedTransport(uint32_t flags) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   ++g_protected_transport_activate_count;
   g_protected_transport_authenticated = (flags & 0x1u) != 0u ? 1 : 0;
   g_protected_transport_encrypted = (flags & 0x2u) != 0u ? 1 : 0;
@@ -508,6 +623,11 @@ static MddsBridgePublisher *CreatePublisherQos(const char *topicName,
                                                uint32_t publisherFlags) {
   if (topicName == nullptr || typeName == nullptr ||
       (publisherFlags & ~kPublisherFlagRemoteOnly) != 0u) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_fail_next_publisher_create != 0) {
+    g_fail_next_publisher_create = 0;
     return nullptr;
   }
   auto *publisher = new MddsBridgePublisher;
@@ -539,37 +659,46 @@ MddsBridgePublisher *MddsBridgeCreatePublisherQosEx(
 
 int32_t MddsBridgePublish(MddsBridgePublisher *pub, const void *data,
                           uint32_t len) {
-  ++g_publish_count;
-  if (pub != nullptr) {
-    g_publisher_topic = pub->topic;
-    g_publisher_type = pub->type;
-    ++pub->publish_count;
-    pub->unacked_count = 1u;
-  }
-  const auto *begin = static_cast<const uint8_t *>(data);
-  if (begin != nullptr && len != 0) {
-    g_last_payload.assign(begin, begin + len);
+  std::vector<DataCallbackTarget> targets;
+  uint64_t sequence_number = 0u;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    ++g_publish_count;
+    sequence_number = static_cast<uint64_t>(g_publish_count);
     if (pub != nullptr) {
-      pub->last_payload.assign(begin, begin + len);
+      g_publisher_topic = pub->topic;
+      g_publisher_type = pub->type;
+      ++pub->publish_count;
+      pub->unacked_count = 1u;
     }
-  } else {
-    g_last_payload.clear();
-    if (pub != nullptr) {
-      pub->last_payload.clear();
-    }
-  }
-  if (pub != nullptr &&
-      (pub->publisher_flags & kPublisherFlagRemoteOnly) == 0u) {
-    MddsBridgeSample sample = {};
-    sample.data = data;
-    sample.len = len;
-    sample.sequenceNumber = static_cast<uint64_t>(g_publish_count);
-    for (auto *subscriber : g_subscribers) {
-      if (subscriber != nullptr && subscriber->callback != nullptr &&
-          pub->topic == subscriber->topic && pub->type == subscriber->type) {
-        subscriber->callback(&sample, subscriber->user_data);
+    const auto *begin = static_cast<const uint8_t *>(data);
+    if (begin != nullptr && len != 0) {
+      g_last_payload.assign(begin, begin + len);
+      if (pub != nullptr) {
+        pub->last_payload.assign(begin, begin + len);
+      }
+    } else {
+      g_last_payload.clear();
+      if (pub != nullptr) {
+        pub->last_payload.clear();
       }
     }
+    if (pub != nullptr &&
+        (pub->publisher_flags & kPublisherFlagRemoteOnly) == 0u) {
+      for (auto *subscriber : g_subscribers) {
+        if (subscriber != nullptr && subscriber->callback != nullptr &&
+            pub->topic == subscriber->topic && pub->type == subscriber->type) {
+          targets.push_back({subscriber->callback, subscriber->user_data});
+        }
+      }
+    }
+  }
+  MddsBridgeSample sample = {};
+  sample.data = data;
+  sample.len = len;
+  sample.sequenceNumber = sequence_number;
+  for (const auto &target : targets) {
+    target.callback(&sample, target.user_data);
   }
   return 0;
 }
@@ -584,9 +713,12 @@ int32_t MddsBridgeBorrowLoanedSample(MddsBridgePublisher *pub, uint32_t size,
   loan->data.resize(size);
   *outLoan = loan;
   *outBuf = loan->data.data();
-  g_last_borrowed_data = *outBuf;
-  g_last_borrowed_size = size;
-  ++g_borrow_loaned_count;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_last_borrowed_data = *outBuf;
+    g_last_borrowed_size = size;
+    ++g_borrow_loaned_count;
+  }
   return 0;
 }
 
@@ -595,7 +727,10 @@ int32_t MddsBridgePublishLoaned(MddsBridgePublisher *pub,
   if (pub == nullptr || loan == nullptr || len > loan->data.size()) {
     return -1;
   }
-  ++g_publish_loaned_count;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    ++g_publish_loaned_count;
+  }
   int32_t ret = MddsBridgePublish(pub, loan->data.data(), len);
   delete loan;
   return ret;
@@ -606,19 +741,26 @@ int32_t MddsBridgeReturnLoanedSample(MddsBridgePublisher *pub,
   if (pub == nullptr || loan == nullptr) {
     return -1;
   }
-  ++g_return_loaned_count;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    ++g_return_loaned_count;
+  }
   delete loan;
   return 0;
 }
 
 uint32_t MddsBridgePublisherGetUnackedCount(MddsBridgePublisher *pub) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   return pub == nullptr ? 0u : pub->unacked_count;
 }
 
 void MddsBridgeDestroyPublisher(MddsBridgePublisher *pub) {
-  auto it = std::find(g_publishers.begin(), g_publishers.end(), pub);
-  if (it != g_publishers.end()) {
-    g_publishers.erase(it);
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = std::find(g_publishers.begin(), g_publishers.end(), pub);
+    if (it != g_publishers.end()) {
+      g_publishers.erase(it);
+    }
   }
   delete pub;
 }
@@ -628,6 +770,11 @@ MddsBridgeSubscriber *MddsBridgeSubscribeQos(const char *topicName,
                                              const MddsBridgeQos *qos,
                                              MddsBridgeDataCallback cb,
                                              void *userData) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_fail_next_subscriber_create != 0) {
+    g_fail_next_subscriber_create = 0;
+    return nullptr;
+  }
   auto *subscriber = new MddsBridgeSubscriber;
   subscriber->topic = topicName;
   subscriber->type = typeName;
@@ -643,15 +790,21 @@ MddsBridgeSubscriber *MddsBridgeSubscribeQos(const char *topicName,
 }
 
 void MddsBridgeUnsubscribe(MddsBridgeSubscriber *sub) {
-  auto it = std::find(g_subscribers.begin(), g_subscribers.end(), sub);
-  if (it != g_subscribers.end()) {
-    delete *it;
-    g_subscribers.erase(it);
+  MddsBridgeSubscriber *removed = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = std::find(g_subscribers.begin(), g_subscribers.end(), sub);
+    if (it != g_subscribers.end()) {
+      removed = *it;
+      g_subscribers.erase(it);
+    }
   }
+  delete removed;
 }
 
 uint32_t MddsBridgePublisherGetSubCount(MddsBridgePublisher *pub) {
-  return CountSubscribersForPublisher(pub);
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return CountSubscribersForPublisherLocked(pub);
 }
 
 int32_t
@@ -661,14 +814,22 @@ MddsBridgePublisherSetOnMatchedCallback(MddsBridgePublisher *pub,
   if (pub == nullptr) {
     return -1;
   }
-  pub->matched_callback = callback;
-  pub->matched_user_data = userData;
-  NotifyPublisherMatched(pub);
+  uint32_t matched_count = 0u;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    pub->matched_callback = callback;
+    pub->matched_user_data = userData;
+    matched_count = CountSubscribersForPublisherLocked(pub);
+  }
+  if (callback != nullptr) {
+    callback(matched_count, userData);
+  }
   return 0;
 }
 
 uint32_t MddsBridgeSubscriberGetPubCount(MddsBridgeSubscriber *sub) {
-  return CountPublishersForSubscriber(sub);
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return CountPublishersForSubscriberLocked(sub);
 }
 
 int32_t
@@ -678,14 +839,22 @@ MddsBridgeSubscriberSetOnMatchedCallback(MddsBridgeSubscriber *sub,
   if (sub == nullptr) {
     return -1;
   }
-  sub->matched_callback = callback;
-  sub->matched_user_data = userData;
-  NotifySubscriberMatched(sub);
+  uint32_t matched_count = 0u;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    sub->matched_callback = callback;
+    sub->matched_user_data = userData;
+    matched_count = CountPublishersForSubscriberLocked(sub);
+  }
+  if (callback != nullptr) {
+    callback(matched_count, userData);
+  }
   return 0;
 }
 
 int32_t MddsBridgeSubscriberTakeLoaned(MddsBridgeSubscriber *sub,
                                        MddsBridgeLoanedMessage *message) {
+  std::lock_guard<std::mutex> lock(g_mutex);
   if (sub == nullptr || message == nullptr || sub->loaned_messages.empty()) {
     return -1;
   }
@@ -716,7 +885,10 @@ int32_t MddsBridgeSubscriberTakeLoanedWithStorage(
   if (ret != 0) {
     return ret;
   }
-  ++g_subscriber_take_loaned_with_storage_count;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    ++g_subscriber_take_loaned_with_storage_count;
+  }
   if (storageSize == 0u) {
     return 0;
   }
@@ -729,8 +901,11 @@ int32_t MddsBridgeSubscriberTakeLoanedWithStorage(
   loan->typed_storage_capacity = storageSize;
   *outStorage = loan->typed_storage;
   *outStorageCapacity = storageSize;
-  g_last_subscriber_typed_storage = loan->typed_storage;
-  g_last_subscriber_typed_storage_size = storageSize;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_last_subscriber_typed_storage = loan->typed_storage;
+    g_last_subscriber_typed_storage_size = storageSize;
+  }
   return 0;
 }
 
@@ -741,7 +916,10 @@ int32_t MddsBridgeSubscriberReturnLoaned(MddsBridgeSubscriber *sub,
   }
   delete static_cast<MddsBridgeLoanedPayload *>(message->loanHandle);
   message->loanHandle = nullptr;
-  ++g_subscriber_return_loaned_count;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    ++g_subscriber_return_loaned_count;
+  }
   return 0;
 }
 } // extern "C"

@@ -150,6 +150,14 @@ bool ValidateTopicName(const char * topic_name, const rmw_qos_profile_t * qos_po
   return ValidateFullTopicName(topic_name);
 }
 
+bool HasContentFilter(const rmw_subscription_options_t * subscription_options)
+{
+  return subscription_options != nullptr &&
+         subscription_options->content_filter_options != nullptr &&
+         subscription_options->content_filter_options->filter_expression != nullptr &&
+         subscription_options->content_filter_options->filter_expression[0] != '\0';
+}
+
 void BridgeCallback(const rmw_mdds_cpp::BridgeSample * sample, void * user_data)
 {
   auto * data = static_cast<rmw_mdds_cpp::SubscriptionData *>(user_data);
@@ -220,6 +228,23 @@ rmw_subscription_t * rmw_create_subscription(
       "rmw_mdds_cpp currently supports single-field scalar or string ROS messages only");
     return nullptr;
   }
+  bool initial_content_filter_enabled = false;
+  if (
+    subscription_options->content_filter_options != nullptr &&
+    subscription_options->content_filter_options->filter_expression != nullptr &&
+    subscription_options->content_filter_options->filter_expression[0] != '\0')
+  {
+    const rmw_ret_t content_filter_ret = rmw_mdds_cpp::SetSubscriptionContentFilter(
+      data, subscription_options->content_filter_options);
+    if (content_filter_ret == RMW_RET_OK) {
+      initial_content_filter_enabled = true;
+    } else {
+      rmw_reset_error();
+    }
+  }
+  data->broker_raw_loan_requested =
+    data->adapter.SupportsBrokerRawLoanedMessage() && !HasContentFilter(subscription_options);
+  data->broker_dynamic_loan_requested = data->adapter.SupportsDynamicLoanedMessage();
   if (rmw_mdds_cpp::BrokerModeEnabled()) {
     std::string error;
     data->broker_client = rmw_mdds_cpp::CreateSubscriptionBrokerClient(data, &error);
@@ -253,31 +278,28 @@ rmw_subscription_t * rmw_create_subscription(
   subscription->data = data;
   subscription->topic_name = rcutils_strdup(topic_name, allocator);
   subscription->options = *subscription_options;
+  const bool broker_can_loan =
+      data->broker_client != nullptr &&
+      rmw_mdds_cpp::BrokerClientSupportsLoanedMessages(data->broker_client);
+  const bool broker_dynamic_can_loan =
+      broker_can_loan && data->broker_dynamic_loan_requested &&
+      rmw_mdds_cpp::BrokerClientSupportsDynamicLoanedMessages(data->broker_client);
   const bool bridge_can_loan =
-      data->broker_client == nullptr &&
+      !broker_can_loan && data->broker_client == nullptr &&
       rmw_mdds_cpp::BridgeBackend::Instance().SupportsSubscriberLoanedMessages(
           data->bridge_subscription);
-  subscription->can_loan_messages =
-      data->adapter.IsValid() && data->adapter.SupportsRawLoanedMessage() &&
-      bridge_can_loan;
-  subscription->is_cft_enabled = false;
+  const bool broker_raw_can_loan =
+      broker_can_loan && data->broker_raw_loan_requested &&
+      data->adapter.SupportsBrokerRawLoanedMessage();
+  subscription->can_loan_messages = data->adapter.IsValid() &&
+    (broker_dynamic_can_loan || broker_raw_can_loan ||
+    (bridge_can_loan && data->adapter.SupportsRawLoanedMessage()));
+  subscription->is_cft_enabled = initial_content_filter_enabled;
   if (subscription->topic_name == nullptr) {
     rmw_mdds_cpp::DestroyBrokerClient(data->broker_client);
     delete data;
     rmw_subscription_free(subscription);
     return nullptr;
-  }
-  if (
-    subscription_options->content_filter_options != nullptr &&
-    subscription_options->content_filter_options->filter_expression != nullptr &&
-    subscription_options->content_filter_options->filter_expression[0] != '\0') {
-    const rmw_ret_t content_filter_ret =
-      rmw_mdds_cpp::SetSubscriptionContentFilter(data, subscription_options->content_filter_options);
-    if (content_filter_ret == RMW_RET_OK) {
-      subscription->is_cft_enabled = true;
-    } else {
-      rmw_reset_error();
-    }
   }
   rmw_mdds_cpp::RegisterSubscription(data);
   rmw_mdds_cpp::RegisterRtpsEndpoint(

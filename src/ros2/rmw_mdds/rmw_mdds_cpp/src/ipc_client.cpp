@@ -17,6 +17,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <spawn.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -40,8 +41,10 @@
 #include "broker.hpp"
 #include "context.hpp"
 #include "ipc_broker.hpp"
+#include "ipc_loan_pool.hpp"
 #include "ipc_protocol.hpp"
 #include "ipc_transport.hpp"
+#include "rmw/error_handling.h"
 #include "rmw_dds_common/qos.hpp"
 #include "rmw_mdds_cpp/identifier.hpp"
 
@@ -164,6 +167,18 @@ MakeSubscriptionEndpoint(SubscriptionData *subscription) {
   endpoint.type_hash = subscription->adapter.TypeHash();
   endpoint.qos = subscription->actual_qos;
   endpoint.ignore_local_publications = subscription->ignore_local_publications;
+  if (subscription->broker_raw_loan_requested) {
+    const size_t message_size = subscription->adapter.MessageSize();
+    if (message_size <= std::numeric_limits<uint32_t>::max()) {
+      endpoint.loaned_message_size = static_cast<uint32_t>(message_size);
+    }
+  } else if (subscription->broker_dynamic_loan_requested) {
+    endpoint.loan_pool_version = ipc::kDynamicLoanPoolVersion;
+    endpoint.loaned_payload_capacity = ipc::kDefaultDynamicLoanPayloadCapacity;
+    endpoint.loaned_arena_capacity = ipc::kDefaultDynamicLoanArenaCapacity;
+    endpoint.loaned_slot_count = ipc::kDefaultDynamicLoanPoolSlotCount;
+    endpoint.loan_pool_flags = ipc::kLoanPoolFlagTypedArena;
+  }
   return endpoint;
 }
 
@@ -240,6 +255,11 @@ void ClearGraphCache() {
   g_graph_cache_last_refresh = std::chrono::steady_clock::time_point{};
 }
 
+void MarkGraphCacheRefreshRequired() {
+  std::lock_guard<std::mutex> lock(g_graph_mutex);
+  g_graph_cache_last_refresh = std::chrono::steady_clock::time_point{};
+}
+
 bool GraphCacheFresh() {
   std::lock_guard<std::mutex> lock(g_graph_mutex);
   if (g_graph_cache_last_refresh == std::chrono::steady_clock::time_point{} ||
@@ -264,42 +284,51 @@ bool UpdateGraphCache(std::vector<ipc::EndpointDescriptor> endpoints,
   const size_t endpoint_count = endpoints.size();
   const bool has_non_synthetic_endpoint =
       GraphEndpointsContainNonSyntheticEndpoint(endpoints);
-  std::lock_guard<std::mutex> lock(g_graph_mutex);
-  const auto now = std::chrono::steady_clock::now();
-  if (epoch != 0u && g_graph_cache_broker_id == broker_id &&
-      g_graph_cache_epoch != 0u && epoch <= g_graph_cache_epoch) {
+  bool graph_changed = false;
+  {
+    std::lock_guard<std::mutex> lock(g_graph_mutex);
+    const auto now = std::chrono::steady_clock::now();
+    if (epoch != 0u && g_graph_cache_broker_id == broker_id &&
+        g_graph_cache_epoch != 0u && epoch <= g_graph_cache_epoch) {
+      if (from_explicit_refresh) {
+        g_graph_cache_last_refresh = now;
+      }
+      if (GraphDebugEnabled()) {
+        std::fprintf(
+            stderr,
+            "[rmw_mdds_graph] client cache stale drop broker_id=%llu "
+            "epoch=%llu current_broker=%llu current_epoch=%llu endpoints=%zu\n",
+            static_cast<unsigned long long>(broker_id),
+            static_cast<unsigned long long>(epoch),
+            static_cast<unsigned long long>(g_graph_cache_broker_id),
+            static_cast<unsigned long long>(g_graph_cache_epoch),
+            endpoint_count);
+      }
+      return from_explicit_refresh;
+    }
+    graph_changed = ipc::EncodeEndpointList(g_graph_endpoints) !=
+                    ipc::EncodeEndpointList(endpoints);
+    g_graph_endpoints = std::move(endpoints);
+    g_graph_cache_last_update = now;
     if (from_explicit_refresh) {
-      g_graph_cache_last_refresh = now;
+      g_graph_cache_last_refresh = g_graph_cache_last_update;
+    }
+    if (epoch != 0u) {
+      g_graph_cache_broker_id = broker_id;
+      g_graph_cache_epoch = epoch;
     }
     if (GraphDebugEnabled()) {
       std::fprintf(
           stderr,
-          "[rmw_mdds_graph] client cache stale drop broker_id=%llu "
-          "epoch=%llu current_broker=%llu current_epoch=%llu endpoints=%zu\n",
+          "[rmw_mdds_graph] client cache update broker_id=%llu epoch=%llu "
+          "endpoints=%zu has_non_synthetic=%d changed=%d\n",
           static_cast<unsigned long long>(broker_id),
-          static_cast<unsigned long long>(epoch),
-          static_cast<unsigned long long>(g_graph_cache_broker_id),
-          static_cast<unsigned long long>(g_graph_cache_epoch), endpoint_count);
+          static_cast<unsigned long long>(epoch), endpoint_count,
+          has_non_synthetic_endpoint ? 1 : 0, graph_changed ? 1 : 0);
     }
-    return from_explicit_refresh;
   }
-  g_graph_endpoints = std::move(endpoints);
-  g_graph_cache_last_update = now;
-  if (from_explicit_refresh) {
-    g_graph_cache_last_refresh = g_graph_cache_last_update;
-  }
-  if (epoch != 0u) {
-    g_graph_cache_broker_id = broker_id;
-    g_graph_cache_epoch = epoch;
-  }
-  if (GraphDebugEnabled()) {
-    std::fprintf(
-        stderr,
-        "[rmw_mdds_graph] client cache update broker_id=%llu epoch=%llu "
-        "endpoints=%zu has_non_synthetic=%d\n",
-        static_cast<unsigned long long>(broker_id),
-        static_cast<unsigned long long>(epoch), endpoint_count,
-        has_non_synthetic_endpoint ? 1 : 0);
+  if (graph_changed) {
+    TriggerGraphGuardConditions();
   }
   return true;
 }
@@ -481,7 +510,8 @@ size_t CountServiceAvailabilityEndpointsInList(
   }
   const uint32_t domain_id = DomainIdFromContext(client->context);
   return static_cast<size_t>(std::count_if(
-      endpoints.begin(), endpoints.end(), [domain_id, client](const auto &endpoint) {
+      endpoints.begin(), endpoints.end(),
+      [domain_id, client](const auto &endpoint) {
         return EndpointMatchesDomain(endpoint, domain_id) &&
                endpoint.kind == ipc::EndpointKind::kService &&
                endpoint.local_context_id != 0u &&
@@ -829,28 +859,6 @@ std::string ResolveExternalBrokerExecutable() {
   return std::string();
 }
 
-void RedirectBrokerChildStdio() {
-  const char *log_path = std::getenv("RMW_MDDS_BROKER_LOG");
-  const int out_fd =
-      (log_path != nullptr && log_path[0] != '\0')
-          ? open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0644)
-          : open("/dev/null", O_WRONLY);
-  if (out_fd >= 0) {
-    dup2(out_fd, STDOUT_FILENO);
-    dup2(out_fd, STDERR_FILENO);
-    if (out_fd > STDERR_FILENO) {
-      close(out_fd);
-    }
-  }
-  const int in_fd = open("/dev/null", O_RDONLY);
-  if (in_fd >= 0) {
-    dup2(in_fd, STDIN_FILENO);
-    if (in_fd > STDERR_FILENO) {
-      close(in_fd);
-    }
-  }
-}
-
 void WriteExternalBrokerPid(pid_t pid) {
   const char *pid_path = std::getenv("RMW_MDDS_BROKER_PID_FILE");
   if (pid_path == nullptr || pid_path[0] == '\0') {
@@ -867,23 +875,76 @@ void WriteExternalBrokerPid(pid_t pid) {
 pid_t StartExternalBrokerProcess(const std::string &broker_path,
                                  const std::string &socket_path,
                                  std::string *error) {
-  if (broker_path.empty()) {
-    SetError(error, "external broker executable is not configured or executable");
+  if (broker_path.empty() || broker_path.front() != '/') {
+    SetError(error,
+             "external broker executable must be an absolute executable path");
     return -1;
   }
 
-  const pid_t pid = fork();
-  if (pid < 0) {
-    SetError(error, "failed to fork external broker process");
+  posix_spawn_file_actions_t file_actions;
+  int result = posix_spawn_file_actions_init(&file_actions);
+  if (result != 0) {
+    SetError(error,
+             std::string("failed to initialize broker spawn file actions: ") +
+                 std::strerror(result));
     return -1;
   }
-  if (pid == 0) {
-    setsid();
-    RedirectBrokerChildStdio();
-    execl(broker_path.c_str(), broker_path.c_str(), "--socket",
-          socket_path.c_str(), static_cast<char *>(nullptr));
-    _exit(127);
+
+  const char *log_path = std::getenv("RMW_MDDS_BROKER_LOG");
+  const char *output_path =
+      (log_path != nullptr && log_path[0] != '\0') ? log_path : "/dev/null";
+  result = posix_spawn_file_actions_addopen(&file_actions, STDIN_FILENO,
+                                            "/dev/null", O_RDONLY, 0);
+  if (result == 0) {
+    result = posix_spawn_file_actions_addopen(
+        &file_actions, STDOUT_FILENO, output_path,
+        O_WRONLY | O_CREAT | O_APPEND, 0644);
   }
+  if (result == 0) {
+    result = posix_spawn_file_actions_adddup2(&file_actions, STDOUT_FILENO,
+                                              STDERR_FILENO);
+  }
+  if (result != 0) {
+    posix_spawn_file_actions_destroy(&file_actions);
+    SetError(error,
+             std::string("failed to configure broker spawn file actions: ") +
+                 std::strerror(result));
+    return -1;
+  }
+
+  posix_spawnattr_t attributes;
+  result = posix_spawnattr_init(&attributes);
+  if (result != 0) {
+    posix_spawn_file_actions_destroy(&file_actions);
+    SetError(error,
+             std::string("failed to initialize broker spawn attributes: ") +
+                 std::strerror(result));
+    return -1;
+  }
+  result = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
+  if (result != 0) {
+    posix_spawnattr_destroy(&attributes);
+    posix_spawn_file_actions_destroy(&file_actions);
+    SetError(error,
+             std::string("failed to configure broker spawn attributes: ") +
+                 std::strerror(result));
+    return -1;
+  }
+
+  char *const arguments[] = {const_cast<char *>(broker_path.c_str()),
+                             const_cast<char *>("--socket"),
+                             const_cast<char *>(socket_path.c_str()), nullptr};
+  pid_t pid = -1;
+  result = posix_spawn(&pid, broker_path.c_str(), &file_actions, &attributes,
+                       arguments, environ);
+  posix_spawnattr_destroy(&attributes);
+  posix_spawn_file_actions_destroy(&file_actions);
+  if (result != 0) {
+    SetError(error, std::string("failed to spawn external broker process: ") +
+                        std::strerror(result));
+    return -1;
+  }
+
   WriteExternalBrokerPid(pid);
   return pid;
 }
@@ -1001,11 +1062,24 @@ bool ConnectBrokerSocketWithAutoStart(const std::string &socket_path,
   return false;
 }
 
+class IpcClient;
+// Some rclpy-managed services outlive rmw_shutdown. Keep enough process-wide
+// ownership metadata to join their reader threads before shared-library
+// teardown.
+std::mutex g_ipc_clients_mutex;
+std::vector<IpcClient *> g_ipc_clients;
+
+void RegisterIpcClient(IpcClient *client);
+void UnregisterIpcClient(IpcClient *client);
+
 class IpcClient {
 public:
-  IpcClient() = default;
+  explicit IpcClient(rmw_context_t *context) : context_(context) {}
 
-  ~IpcClient() { Stop(); }
+  ~IpcClient() {
+    UnregisterIpcClient(this);
+    Stop();
+  }
 
   IpcClient(const IpcClient &) = delete;
   IpcClient &operator=(const IpcClient &) = delete;
@@ -1063,8 +1137,37 @@ public:
       return false;
     }
 
+    const bool fixed_loan_requested = endpoint.loaned_message_size > 0u;
+    const bool dynamic_loan_requested =
+      endpoint.loan_pool_version == ipc::kDynamicLoanPoolVersion;
+    if (fixed_loan_requested || dynamic_loan_requested) {
+      ipc::LoanPoolDescriptor descriptor;
+      const bool decoded = ipc::DecodeLoanPoolDescriptor(
+        ack.payload.data(), ack.payload.size(), &descriptor, error);
+      const bool descriptor_matches = decoded &&
+        ((fixed_loan_requested &&
+          descriptor.version == ipc::kFixedLoanPoolVersion && descriptor.flags == 0u &&
+          descriptor.slot_size == endpoint.loaned_message_size && descriptor.arena_size == 0u) ||
+        (dynamic_loan_requested &&
+          descriptor.version == endpoint.loan_pool_version &&
+          descriptor.flags == endpoint.loan_pool_flags &&
+          descriptor.slot_size == endpoint.loaned_payload_capacity &&
+          descriptor.arena_size == endpoint.loaned_arena_capacity &&
+          descriptor.slot_count == endpoint.loaned_slot_count));
+      if (!descriptor_matches || !loan_pool_.Open(descriptor, error))
+      {
+        SetError(error, "broker registration returned an invalid loan pool: " +
+          (error == nullptr ? std::string() : *error));
+        return false;
+      }
+    } else if (!ack.payload.empty()) {
+      SetError(error, "broker returned an unexpected loan pool descriptor");
+      return false;
+    }
+
     fd_ = std::move(fd);
-    entity_id_ = endpoint.entity_id;
+    entity_id_.store(endpoint.entity_id);
+    MarkGraphCacheRefreshRequired();
     return true;
   }
 
@@ -1081,17 +1184,29 @@ public:
 
   void StartReaderThread() {
     running_.store(true);
+    RegisterIpcClient(this);
+    try {
     reader_thread_ = std::thread(&IpcClient::ReaderLoop, this);
+    } catch (...) {
+      UnregisterIpcClient(this);
+      running_.store(false);
+      throw;
+    }
+  }
+
+  bool UsesContext(const rmw_context_t *context) const {
+    return context_ == context;
   }
 
   void Stop() {
+    std::lock_guard<std::mutex> stop_lock(stop_mutex_);
     bool clear_graph_after_reader_stops = false;
-    if (entity_id_ != 0u) {
+    const uint64_t entity_id = entity_id_.exchange(0u);
+    if (entity_id != 0u) {
       if (GraphDebugEnabled()) {
         std::fprintf(stderr, "[rmw_mdds_graph] client stop entity=%llu\n",
-                     static_cast<unsigned long long>(entity_id_));
+                     static_cast<unsigned long long>(entity_id));
       }
-      entity_id_ = 0u;
       clear_graph_after_reader_stops = true;
     }
     running_.store(false);
@@ -1099,11 +1214,18 @@ public:
       std::lock_guard<std::mutex> lock(write_mutex_);
       if (fd_.get() >= 0) {
         shutdown(fd_.get(), SHUT_RDWR);
-        fd_.reset();
       }
     }
     if (reader_thread_.joinable()) {
       reader_thread_.join();
+    }
+    if (subscription_ != nullptr) {
+      DiscardBrokerLoanedLocalState(subscription_);
+      subscription_ = nullptr;
+    }
+    {
+      std::lock_guard<std::mutex> lock(write_mutex_);
+      fd_.reset();
     }
     if (clear_graph_after_reader_stops) {
       ClearGraphCache();
@@ -1118,7 +1240,7 @@ public:
       return false;
     }
     ipc::SampleMessage sample;
-    sample.entity_id = entity_id_;
+    sample.entity_id = entity_id_.load();
     sample.sequence_number = sequence_number;
     sample.mdds_payload = mdds_payload;
     sample.payload = payload;
@@ -1126,6 +1248,31 @@ public:
     frame.kind = ipc::MessageKind::kPublishSample;
     frame.request_id = next_request_id_++;
     frame.payload = ipc::EncodeSampleMessage(sample);
+    return ipc::WriteFrame(fd_.get(), frame, error);
+  }
+
+  bool SupportsLoanedMessages() const {
+    return loan_pool_.valid();
+  }
+
+  bool SupportsDynamicLoanedMessages() const {
+    return loan_pool_.dynamic();
+  }
+
+  bool ReturnLoan(uint64_t loan_id, std::string *error) {
+    if (loan_id == 0u) {
+      SetError(error, "broker loan id is zero");
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(write_mutex_);
+    if (fd_.get() < 0) {
+      SetError(error, "broker client socket is not connected");
+      return false;
+    }
+    ipc::Frame frame;
+    frame.kind = ipc::MessageKind::kReturnLoanedSample;
+    frame.request_id = next_request_id_++;
+    frame.payload = ipc::EncodeLoanReturn(loan_id);
     return ipc::WriteFrame(fd_.get(), frame, error);
   }
 
@@ -1138,6 +1285,72 @@ private:
                                  &update, &error)) {
         UpdateGraphCache(std::move(update));
       }
+      return;
+    }
+    if (frame.kind == ipc::MessageKind::kDeliverLoanedSample) {
+      ipc::LoanedSampleMessage sample;
+      if (!ipc::DecodeLoanedSampleMessage(
+          frame.payload.data(), frame.payload.size(), &sample, &error))
+      {
+        return;
+      }
+      const void * payload = loan_pool_.Resolve(
+        sample.pool_generation, sample.slot_index, sample.payload_size, &error);
+      void * arena = nullptr;
+      const bool dynamic = loan_pool_.dynamic();
+      if (dynamic) {
+        arena = loan_pool_.ResolveArena(
+          sample.pool_generation, sample.slot_index, &error);
+      }
+      if (
+        payload == nullptr || (dynamic && arena == nullptr) || subscription_ == nullptr ||
+        sample.entity_id != entity_id_.load())
+      {
+        (void)ReturnLoan(sample.loan_id, nullptr);
+        return;
+      }
+      BrokerLoanedSample queued_sample;
+      queued_sample.data = static_cast<const uint8_t *>(payload);
+      queued_sample.len = sample.payload_size;
+      queued_sample.arena = arena;
+      queued_sample.arena_capacity = loan_pool_.arena_capacity();
+      queued_sample.slot_index = sample.slot_index;
+      queued_sample.loan_id = sample.loan_id;
+      queued_sample.from_bridge = sample.mdds_payload;
+      queued_sample.dynamic = dynamic;
+
+      bool matches_filter = true;
+      bool decode_failed = false;
+      {
+        std::lock_guard<std::mutex> lock(subscription_->mutex);
+        if (subscription_->content_filter_enabled || subscription_->numeric_filter_enabled) {
+          if (dynamic) {
+            decode_failed = !ConstructBrokerLoanedMessage(
+              subscription_, &queued_sample, &error);
+            if (!decode_failed) {
+              matches_filter = MessageMatchesContentFilter(
+                *subscription_, queued_sample.typed_message);
+            }
+          } else {
+            const auto * begin = static_cast<const uint8_t *>(payload);
+            std::vector<uint8_t> copied_payload(begin, begin + sample.payload_size);
+            matches_filter = PayloadMatchesContentFilter(
+              *subscription_, copied_payload, sample.mdds_payload);
+          }
+        }
+      }
+      if (decode_failed || !matches_filter) {
+        DestroyBrokerLoanedSampleMessage(subscription_, &queued_sample);
+        (void)ReturnLoan(sample.loan_id, nullptr);
+        rmw_reset_error();
+        return;
+      }
+      queued_sample.info = rmw_get_zero_initialized_message_info();
+      queued_sample.info.publisher_gid.implementation_identifier = rmw_mdds_cpp_identifier;
+      queued_sample.info.source_timestamp = NowNanoseconds();
+      queued_sample.info.publication_sequence_number = sample.sequence_number;
+      queued_sample.info.from_intra_process = false;
+      EnqueueBrokerLoanedSample(subscription_, queued_sample);
       return;
     }
     if (frame.kind != ipc::MessageKind::kDeliverSample) {
@@ -1188,21 +1401,54 @@ private:
   }
 
   ipc::UniqueFd fd_;
+  ipc::LoanPoolMapping loan_pool_;
+  rmw_context_t *context_ = nullptr;
   std::mutex write_mutex_;
   std::thread reader_thread_;
   std::atomic<bool> running_{false};
-  uint64_t entity_id_ = 0u;
+  std::atomic<uint64_t> entity_id_{0u};
+  std::mutex stop_mutex_;
   uint64_t next_request_id_ = 2u;
   std::vector<ipc::Frame> pending_frames_;
   SubscriptionData *subscription_ = nullptr;
   BrokerDeliveryCallback delivery_callback_ = nullptr;
   void *delivery_user_data_ = nullptr;
 };
+
+void RegisterIpcClient(IpcClient *client) {
+  if (client == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_ipc_clients_mutex);
+  if (std::find(g_ipc_clients.begin(), g_ipc_clients.end(), client) ==
+      g_ipc_clients.end()) {
+    g_ipc_clients.push_back(client);
+  }
+}
+
+void UnregisterIpcClient(IpcClient *client) {
+  std::lock_guard<std::mutex> lock(g_ipc_clients_mutex);
+  g_ipc_clients.erase(
+      std::remove(g_ipc_clients.begin(), g_ipc_clients.end(), client),
+      g_ipc_clients.end());
+}
 } // namespace
 
 void NoteContextInitialized() {
   std::lock_guard<std::mutex> lock(g_auto_broker_mutex);
   ++g_active_context_count;
+}
+
+void StopBrokerClientsForContext(rmw_context_t *context) {
+  if (context == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_ipc_clients_mutex);
+  for (IpcClient *client : g_ipc_clients) {
+    if (client != nullptr && client->UsesContext(context)) {
+      client->Stop();
+    }
+  }
 }
 
 void ShutdownEmbeddedBrokerIfLastContext() {
@@ -1472,7 +1718,7 @@ void *CreatePublisherBrokerClient(PublisherData *publisher,
     SetError(error, "publisher data is null");
     return nullptr;
   }
-  auto client = std::make_unique<IpcClient>();
+  auto client = std::make_unique<IpcClient>(publisher->context);
   if (!client->ConnectAndRegister(MakePublisherEndpoint(publisher), error)) {
     return nullptr;
   }
@@ -1486,7 +1732,7 @@ void *CreateSubscriptionBrokerClient(SubscriptionData *subscription,
     SetError(error, "subscription data is null");
     return nullptr;
   }
-  auto client = std::make_unique<IpcClient>();
+  auto client = std::make_unique<IpcClient>(subscription->context);
   if (!client->ConnectAndRegister(MakeSubscriptionEndpoint(subscription),
                                   error)) {
     return nullptr;
@@ -1506,7 +1752,7 @@ void *CreateClientBrokerClient(ClientData *client_data,
     SetError(error, "client broker delivery callback is null");
     return nullptr;
   }
-  auto client = std::make_unique<IpcClient>();
+  auto client = std::make_unique<IpcClient>(client_data->context);
   if (!client->ConnectAndRegister(MakeClientEndpoint(client_data), error)) {
     return nullptr;
   }
@@ -1525,7 +1771,7 @@ void *CreateServiceBrokerClient(ServiceData *service,
     SetError(error, "service broker delivery callback is null");
     return nullptr;
   }
-  auto client = std::make_unique<IpcClient>();
+  auto client = std::make_unique<IpcClient>(service->context);
   if (!client->ConnectAndRegister(MakeServiceEndpoint(service), error)) {
     return nullptr;
   }
@@ -1546,6 +1792,25 @@ bool BrokerClientPublish(void *client, const std::vector<uint8_t> &payload,
     return false;
   }
   return ipc_client->Publish(payload, sequence_number, mdds_payload, error);
+}
+
+bool BrokerClientSupportsLoanedMessages(void *client) {
+  auto *ipc_client = static_cast<IpcClient *>(client);
+  return ipc_client != nullptr && ipc_client->SupportsLoanedMessages();
+}
+
+bool BrokerClientSupportsDynamicLoanedMessages(void *client) {
+  auto *ipc_client = static_cast<IpcClient *>(client);
+  return ipc_client != nullptr && ipc_client->SupportsDynamicLoanedMessages();
+}
+
+bool BrokerClientReturnLoan(void *client, uint64_t loan_id, std::string *error) {
+  auto *ipc_client = static_cast<IpcClient *>(client);
+  if (ipc_client == nullptr) {
+    SetError(error, "broker client is null");
+    return false;
+  }
+  return ipc_client->ReturnLoan(loan_id, error);
 }
 
 } // namespace rmw_mdds_cpp

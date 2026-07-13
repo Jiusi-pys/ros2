@@ -40,6 +40,9 @@ std::string BrokerSocketPath();
  * singletons; tearing them down on an earlier context's fini would break the
  * others). Call NoteContextInitialized() on each successful rmw_init. */
 void NoteContextInitialized();
+/* Stop per-entity broker readers at rmw_shutdown even when an upper layer
+ * defers child-entity destruction until process teardown. */
+void StopBrokerClientsForContext(rmw_context_t * context);
 
 /* Decrement the live-context count and, when it reaches zero, stop the embedded
  * auto-started broker (if this process hosts it) and quiesce the MDDS bridge
@@ -87,6 +90,9 @@ void DestroyBrokerClient(void * client);
 bool BrokerClientPublish(
   void * client, const std::vector<uint8_t> & payload, uint64_t sequence_number,
   std::string * error, bool mdds_payload = false);
+bool BrokerClientSupportsLoanedMessages(void * client);
+bool BrokerClientSupportsDynamicLoanedMessages(void * client);
+bool BrokerClientReturnLoan(void * client, uint64_t loan_id, std::string * error);
 
 }  // namespace rmw_mdds_cpp
 

@@ -405,10 +405,9 @@ TEST(RmwMddsPubSub, SecurityEnforceInitFailsClosedWithoutPolicyEnforcement)
   EXPECT_EQ(nullptr, context.implementation_identifier);
   EXPECT_EQ(nullptr, context.impl);
 
-  const char * error = rmw_get_error_string().str;
-  ASSERT_NE(nullptr, error);
-  EXPECT_NE(nullptr, std::strstr(error, "security"));
-  EXPECT_NE(nullptr, std::strstr(error, "not supported"));
+  const std::string error = rmw_get_error_string().str;
+  EXPECT_NE(std::string::npos, error.find("security"));
+  EXPECT_NE(std::string::npos, error.find("not supported"));
   rmw_reset_error();
 
   EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
@@ -495,9 +494,8 @@ TEST(RmwMddsPubSub, DISABLED_Sros2PolicyRejectsUnauthorizedPublisher)
   if (publisher != nullptr) {
     EXPECT_EQ(RMW_RET_OK, rmw_destroy_publisher(node, publisher));
   }
-  const char * error = rmw_get_error_string().str;
-  ASSERT_NE(nullptr, error);
-  EXPECT_NE(nullptr, std::strstr(error, "security"));
+  const std::string error = rmw_get_error_string().str;
+  EXPECT_NE(std::string::npos, error.find("security"));
   rmw_reset_error();
 
   EXPECT_EQ(RMW_RET_OK, rmw_destroy_node(node));
@@ -613,9 +611,8 @@ TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsTamperedSignedPermissions)
   const rmw_ret_t init_ret = rmw_init(&options, &context);
   EXPECT_NE(RMW_RET_OK, init_ret)
     << "tampered signed permissions must be rejected before endpoint creation";
-  const char * error = rmw_get_error_string().str;
-  ASSERT_NE(nullptr, error);
-  EXPECT_NE(nullptr, std::strstr(error, "signature"))
+  const std::string error = rmw_get_error_string().str;
+  EXPECT_NE(std::string::npos, error.find("signature"))
     << "tampered signed policy rejection must identify signature validation";
   rmw_reset_error();
 
@@ -649,9 +646,8 @@ TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsSignedIdentityMismatch)
   const rmw_ret_t init_ret = rmw_init(&options, &context);
   EXPECT_NE(RMW_RET_OK, init_ret)
     << "signed permissions must be rejected when identity material does not match the grant";
-  const char * error = rmw_get_error_string().str;
-  ASSERT_NE(nullptr, error);
-  EXPECT_NE(nullptr, std::strstr(error, "identity"))
+  const std::string error = rmw_get_error_string().str;
+  EXPECT_NE(std::string::npos, error.find("identity"))
     << "identity mismatch rejection must identify the mismatched identity material";
   rmw_reset_error();
 
@@ -678,11 +674,10 @@ TEST(RmwMddsPubSub, DISABLED_FullParitySros2RejectsSignedPolicyWithoutAuthentica
   const rmw_ret_t init_ret = rmw_init(&options, &context);
   EXPECT_NE(RMW_RET_OK, init_ret)
     << "signed protected policy must fail closed when authenticated/encrypted transport is absent";
-  const char * error = rmw_get_error_string().str;
-  ASSERT_NE(nullptr, error);
-  EXPECT_NE(nullptr, std::strstr(error, "authenticated"))
+  const std::string error = rmw_get_error_string().str;
+  EXPECT_NE(std::string::npos, error.find("authenticated"))
     << "protected policy rejection must identify missing authenticated transport";
-  EXPECT_NE(nullptr, std::strstr(error, "transport"))
+  EXPECT_NE(std::string::npos, error.find("transport"))
     << "protected policy rejection must identify missing authenticated transport";
   rmw_reset_error();
 

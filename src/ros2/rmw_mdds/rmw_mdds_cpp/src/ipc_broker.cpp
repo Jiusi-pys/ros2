@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <random>
@@ -32,6 +33,7 @@
 #include <utility>
 
 #include "bridge_backend.hpp"
+#include "ipc_loan_pool.hpp"
 #include "rmw/types.h"
 
 namespace rmw_mdds_cpp {
@@ -59,12 +61,54 @@ struct IpcBroker::Connection {
     std::unique_ptr<BridgeSubscriptionState> subscription_state;
   };
 
+  struct PendingLoanDelivery {
+    SampleMessage sample;
+    uint64_t request_id = 0u;
+  };
+
   UniqueFd fd;
   std::mutex write_mutex;
   std::thread thread;
   std::vector<EndpointDescriptor> endpoints;
   std::vector<BridgeEndpoint> bridge_endpoints;
+  std::mutex loan_pool_mutex;
+  std::unique_ptr<LoanPoolOwner> loan_pool;
+  uint64_t loan_pool_entity_id = 0u;
+  bool loan_pool_reliable = false;
+  bool loan_pool_keep_last = true;
+  size_t loan_pool_pending_limit = 1u;
+  std::deque<PendingLoanDelivery> pending_loan_deliveries;
   std::atomic<bool> active{true};
+
+  void ResetLoanPoolLocked()
+  {
+    loan_pool.reset();
+    loan_pool_entity_id = 0u;
+    loan_pool_reliable = false;
+    loan_pool_keep_last = true;
+    loan_pool_pending_limit = 1u;
+    pending_loan_deliveries.clear();
+  }
+
+  void ConfigureLoanPoolLocked(
+    std::unique_ptr<LoanPoolOwner> pool, const EndpointDescriptor & endpoint)
+  {
+    ResetLoanPoolLocked();
+    loan_pool = std::move(pool);
+    if (loan_pool == nullptr) {
+      return;
+    }
+    loan_pool_entity_id = endpoint.entity_id;
+    loan_pool_reliable =
+      endpoint.qos.reliability != RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT;
+    loan_pool_keep_last = endpoint.qos.history != RMW_QOS_POLICY_HISTORY_KEEP_ALL;
+    if (loan_pool_keep_last) {
+      loan_pool_pending_limit = std::max<size_t>(
+        1u, std::min<size_t>(endpoint.qos.depth, kMaxLoanPoolSlotCount));
+    } else {
+      loan_pool_pending_limit = kMaxLoanPoolSlotCount;
+    }
+  }
 };
 
 IpcBroker::IpcBroker() = default;
@@ -79,6 +123,8 @@ constexpr std::chrono::seconds kGraphPeerTtl{30};
 constexpr std::chrono::seconds kBridgeDeliveryDedupeTtl{5};
 constexpr std::chrono::seconds kGraphSyncUnchangedPublishInterval{10};
 constexpr std::chrono::milliseconds kGraphSyncChangedPublishInterval{500};
+constexpr std::chrono::milliseconds kGraphUpdateCoalesceInterval{100};
+constexpr std::chrono::milliseconds kGraphReannounceInterval{1500};
 static_assert(
     kGraphPeerTtl > kGraphSyncUnchangedPublishInterval,
     "remote graph TTL must outlive the unchanged graph-sync heartbeat");
@@ -361,6 +407,8 @@ bool IpcBroker::Start(const std::string &socket_path, std::string *error) {
     bridge_enabled_ = bridge_enabled;
     broker_id_ = MakeBrokerId();
     graph_epoch_.store(0u);
+    graph_update_requested_ = false;
+    graph_publish_requested_ = false;
   }
   if (bridge_enabled) {
     // Ingest the DDS-side node list a gateway publishes, so cross-board nodes
@@ -394,24 +442,11 @@ bool IpcBroker::Start(const std::string &socket_path, std::string *error) {
           static_cast<unsigned long long>(broker_id_), graph_sync_subscription_,
           graph_sync_publisher_);
     }
-    // Periodic re-announce: DSoftBus pub/sub is not transient-local, so a board
-    // that joins later would miss earlier graph frames. A low-rate heartbeat
-    // (plus the immediate publish on every endpoint change) keeps peers
-    // current.
-    graph_reannounce_thread_ = std::thread([this]() {
-      while (running_.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        if (!running_.load()) {
-          break;
-        }
-        // Refresh local clients too. Bridge matched callbacks are the fast
-        // path, but a late or missed callback must not leave wait_for_service
-        // stuck behind a stale broker graph cache.
-        BroadcastGraphUpdate();
-        PublishLocalGraph();
-      }
-    });
   }
+  // One worker coalesces endpoint-registration bursts before constructing and
+  // fanning out a complete graph snapshot. It also provides the bridge
+  // heartbeat because DSoftBus graph sync is not transient-local.
+  graph_reannounce_thread_ = std::thread(&IpcBroker::GraphUpdateLoop, this);
   // Start accepting client registrations after the graph-sync bridge endpoints
   // exist. In no-prestart storms, accepting dozens of clients first can flood
   // MDDS bridge discovery before brokers have a chance to match their own
@@ -426,19 +461,11 @@ void IpcBroker::Stop() {
     return;
   }
 
-  // Stop the graph re-announce heartbeat first; it is the only thread that
-  // calls PublishLocalGraph() on a timer, so joining it here means no timer
-  // publish can race the graph_sync_publisher_ teardown below.
+  // Stop the graph worker first so no delayed broadcast or publish can race
+  // endpoint and graph-sync teardown below.
+  graph_update_cv_.notify_all();
   if (graph_reannounce_thread_.joinable()) {
     graph_reannounce_thread_.join();
-  }
-  if (node_sync_subscription_ != nullptr) {
-    BridgeBackend::Instance().Unsubscribe(node_sync_subscription_);
-    node_sync_subscription_ = nullptr;
-  }
-  if (graph_sync_subscription_ != nullptr) {
-    BridgeBackend::Instance().Unsubscribe(graph_sync_subscription_);
-    graph_sync_subscription_ = nullptr;
   }
 
   std::string socket_path;
@@ -456,11 +483,16 @@ void IpcBroker::Stop() {
     std::lock_guard<std::mutex> lock(mutex_);
     listener_.reset();
     for (auto &connection : connections_) {
+      connection->active.store(false);
       if (connection->fd) {
         shutdown(connection->fd.get(), SHUT_RDWR);
       }
       connection->fd.reset();
       DestroyBridgeEndpoints(connection.get());
+      {
+        std::lock_guard<std::mutex> loan_lock(connection->loan_pool_mutex);
+        connection->ResetLoanPoolLocked();
+      }
     }
   }
 
@@ -481,8 +513,16 @@ void IpcBroker::Stop() {
     }
   }
 
-  // All broker threads (accept / connections / re-announce) are joined now, so
-  // no one can touch the graph_sync publisher; safe to tear it down.
+  // All broker threads are joined, so endpoint bridge teardown cannot race
+  // node/graph-sync unsubscription or publisher destruction.
+  if (node_sync_subscription_ != nullptr) {
+    BridgeBackend::Instance().Unsubscribe(node_sync_subscription_);
+    node_sync_subscription_ = nullptr;
+  }
+  if (graph_sync_subscription_ != nullptr) {
+    BridgeBackend::Instance().Unsubscribe(graph_sync_subscription_);
+    graph_sync_subscription_ = nullptr;
+  }
   if (graph_sync_publisher_ != nullptr) {
     BridgeBackend::Instance().DestroyPublisher(graph_sync_publisher_);
     graph_sync_publisher_ = nullptr;
@@ -504,9 +544,15 @@ void IpcBroker::Stop() {
     last_graph_sync_body_size_ = 0u;
     last_graph_sync_publish_ = std::chrono::steady_clock::time_point{};
     graph_sync_publish_dirty_ = false;
+    graph_update_requested_ = false;
+    graph_publish_requested_ = false;
     broker_id_ = 0u;
     graph_epoch_.store(0u);
   }
+
+  // The broker owns the bridge runtime. Closing it here releases DSoftBus
+  // listen and peer sockets before a replacement broker starts.
+  BridgeBackend::Instance().Shutdown();
 
   if (!socket_path.empty()) {
     unlink(socket_path.c_str());
@@ -681,7 +727,9 @@ bool ShouldShareBridgePublisher(const EndpointDescriptor &endpoint) {
 constexpr size_t kServiceBridgeHistoryDepth = 16u * 1024u;
 constexpr uint32_t kDefaultServiceBridgeMaxUnacked = 1u;
 constexpr uint32_t kDefaultServiceBridgeBackpressureTimeoutMs = 30000u;
-constexpr uint32_t kServiceBridgeBackpressurePollMs = 5u;
+constexpr uint32_t kDefaultTopicBridgeMaxUnacked = 32u;
+constexpr uint32_t kDefaultTopicBridgeBackpressureTimeoutMs = 30000u;
+constexpr uint32_t kBridgeBackpressurePollMs = 5u;
 
 uint32_t ReadEnvUint32(const char *name, uint32_t default_value,
                        uint32_t max_value) {
@@ -709,14 +757,41 @@ std::chrono::milliseconds ServiceBridgeBackpressureTimeout() {
                     kDefaultServiceBridgeBackpressureTimeoutMs, 300000u));
 }
 
-void WaitForServiceBridgeBackpressure(const EndpointDescriptor &source,
-                                      const SampleMessage &sample,
-                                      void *bridge_publisher) {
-  if (!IsServiceLikeEndpoint(source.kind) || bridge_publisher == nullptr) {
+uint32_t TopicBridgeMaxUnacked(const EndpointDescriptor &source) {
+  const uint32_t configured = ReadEnvUint32(
+      "RMW_MDDS_TOPIC_BRIDGE_MAX_UNACKED", kDefaultTopicBridgeMaxUnacked,
+      1024u);
+  if (configured != 0u &&
+      source.qos.history == RMW_QOS_POLICY_HISTORY_KEEP_LAST &&
+      source.qos.depth != 0u && source.qos.depth < configured) {
+    return static_cast<uint32_t>(source.qos.depth);
+  }
+  return configured;
+}
+
+std::chrono::milliseconds TopicBridgeBackpressureTimeout() {
+  return std::chrono::milliseconds(
+      ReadEnvUint32("RMW_MDDS_TOPIC_BRIDGE_BACKPRESSURE_TIMEOUT_MS",
+                    kDefaultTopicBridgeBackpressureTimeoutMs, 300000u));
+}
+
+bool UsesReliableBridgeBackpressure(const EndpointDescriptor &source) {
+  return IsServiceLikeEndpoint(source.kind) ||
+         (source.kind == EndpointKind::kPublisher &&
+          source.qos.reliability == RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+}
+
+void WaitForReliableBridgeBackpressure(const EndpointDescriptor &source,
+                                       const SampleMessage &sample,
+                                       void *bridge_publisher) {
+  if (!UsesReliableBridgeBackpressure(source) || bridge_publisher == nullptr) {
     return;
   }
 
-  const uint32_t max_unacked = ServiceBridgeMaxUnacked();
+  const bool service_like = IsServiceLikeEndpoint(source.kind);
+  const uint32_t max_unacked =
+      service_like ? ServiceBridgeMaxUnacked()
+                   : TopicBridgeMaxUnacked(source);
   if (max_unacked == 0u) {
     return;
   }
@@ -728,7 +803,8 @@ void WaitForServiceBridgeBackpressure(const EndpointDescriptor &source,
     return;
   }
 
-  const auto timeout = ServiceBridgeBackpressureTimeout();
+  const auto timeout = service_like ? ServiceBridgeBackpressureTimeout()
+                                    : TopicBridgeBackpressureTimeout();
   const auto started = std::chrono::steady_clock::now();
   auto next_timeout_log = started + timeout;
   if (GraphDebugEnabled()) {
@@ -745,7 +821,7 @@ void WaitForServiceBridgeBackpressure(const EndpointDescriptor &source,
 
   for (;;) {
     std::this_thread::sleep_for(
-        std::chrono::milliseconds(kServiceBridgeBackpressurePollMs));
+        std::chrono::milliseconds(kBridgeBackpressurePollMs));
     if (!backend.PublisherUnackedCount(bridge_publisher, &unacked) ||
         unacked < max_unacked) {
       break;
@@ -951,7 +1027,7 @@ void IpcBroker::AcceptLoop() {
       std::lock_guard<std::mutex> lock(mutex_);
       connections_.push_back(std::move(connection));
     }
-    BroadcastGraphUpdate();
+    RequestGraphUpdate(false);
   }
   ReapInactiveConnections();
 }
@@ -978,11 +1054,14 @@ void IpcBroker::ClientLoop(Connection *connection) {
     DestroyBridgeEndpoints(connection);
     RemoveRetainedSamplesForConnectionLocked(&retained_samples_, connection);
     connection->endpoints.clear();
+    {
+      std::lock_guard<std::mutex> loan_lock(connection->loan_pool_mutex);
+      connection->ResetLoanPoolLocked();
+    }
   }
-  BroadcastGraphUpdate();
+  RequestGraphUpdate(true);
   // This client's endpoints are gone; re-announce the smaller local set so
   // peers drop the corresponding entries from their cross-board graph.
-  PublishLocalGraph();
 }
 
 void IpcBroker::ReapInactiveConnections() {
@@ -1026,6 +1105,9 @@ void IpcBroker::HandleFrame(Connection *connection, const Frame &frame) {
   case MessageKind::kPublishSample:
     PublishSample(connection, frame);
     break;
+  case MessageKind::kReturnLoanedSample:
+    ReturnLoanedSample(connection, frame);
+    break;
   default:
     SendError(connection, frame.request_id,
               "broker frame kind is not supported");
@@ -1039,7 +1121,9 @@ void IpcBroker::RegisterEndpoint(Connection *connection, const Frame &frame,
   std::string error;
   void *client_match_publisher = nullptr;
   void *sub_match_subscription = nullptr;
-  std::vector<Frame> retained_deliveries;
+  std::vector<SampleMessage> retained_deliveries;
+  std::unique_ptr<LoanPoolOwner> requested_loan_pool;
+  bool bridge_creation_failed = false;
   if (!DecodeEndpointDescriptor(frame.payload.data(), frame.payload.size(),
                                 &endpoint, &error)) {
     SendError(connection, frame.request_id, error);
@@ -1050,9 +1134,53 @@ void IpcBroker::RegisterEndpoint(Connection *connection, const Frame &frame,
               "endpoint kind does not match registration frame");
     return;
   }
+  const bool fixed_loan_requested = endpoint.loaned_message_size > 0u;
+  const bool dynamic_loan_requested =
+    endpoint.loan_pool_version == kDynamicLoanPoolVersion;
+  if (fixed_loan_requested || dynamic_loan_requested) {
+    if (
+      endpoint.kind != EndpointKind::kSubscription ||
+      (fixed_loan_requested && endpoint.loaned_message_size > kMaxSampleUserPayloadSize) ||
+      (dynamic_loan_requested &&
+      (endpoint.loan_pool_flags != kLoanPoolFlagTypedArena ||
+      endpoint.loaned_payload_capacity == 0u ||
+      endpoint.loaned_payload_capacity > kDefaultDynamicLoanPayloadCapacity ||
+      endpoint.loaned_arena_capacity == 0u ||
+      endpoint.loaned_arena_capacity > kDefaultDynamicLoanArenaCapacity ||
+      endpoint.loaned_slot_count == 0u ||
+      endpoint.loaned_slot_count > kMaxDynamicLoanPoolSlotCount)))
+    {
+      SendError(connection, frame.request_id, "invalid broker loaned-message size request");
+      return;
+    }
+    std::string socket_path;
+    uint64_t broker_id = 0u;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      socket_path = socket_path_;
+      broker_id = broker_id_;
+    }
+    requested_loan_pool = std::make_unique<LoanPoolOwner>();
+    const bool created = fixed_loan_requested ?
+      requested_loan_pool->Create(
+      socket_path, broker_id, endpoint.entity_id, endpoint.loaned_message_size,
+      kDefaultLoanPoolSlotCount, &error) :
+      requested_loan_pool->CreateDynamic(
+      socket_path, broker_id, endpoint.entity_id, endpoint.loaned_payload_capacity,
+      endpoint.loaned_arena_capacity, endpoint.loaned_slot_count, &error);
+    if (!created)
+    {
+      SendError(connection, frame.request_id, "broker loan pool creation failed: " + error);
+      return;
+    }
+  }
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    {
+      std::lock_guard<std::mutex> loan_lock(connection->loan_pool_mutex);
+      connection->ConfigureLoanPoolLocked(std::move(requested_loan_pool), endpoint);
+    }
     auto it =
         std::find_if(connection->endpoints.begin(), connection->endpoints.end(),
                      [&endpoint](const EndpointDescriptor &current) {
@@ -1119,7 +1247,9 @@ void IpcBroker::RegisterEndpoint(Connection *connection, const Frame &frame,
           BridgeTransportQosForEndpoint(endpoint);
       std::string bridge_topic;
       std::string bridge_type;
-      if (BridgePublisherTopicAndType(endpoint, &bridge_topic, &bridge_type)) {
+      const bool needs_bridge_publisher =
+          BridgePublisherTopicAndType(endpoint, &bridge_topic, &bridge_type);
+      if (needs_bridge_publisher) {
         if (ShouldShareBridgePublisher(endpoint)) {
           bridge_endpoint.shared_bridge_publisher = true;
           bridge_endpoint.bridge_publisher_topic = bridge_topic;
@@ -1168,8 +1298,9 @@ void IpcBroker::RegisterEndpoint(Connection *connection, const Frame &frame,
                   &bridge_transport_qos, BridgePublisherMode::kRemoteOnly);
         }
       }
-      if (BridgeSubscriptionTopicAndType(endpoint, &bridge_topic,
-                                         &bridge_type)) {
+      const bool needs_bridge_subscription =
+          BridgeSubscriptionTopicAndType(endpoint, &bridge_topic, &bridge_type);
+      if (needs_bridge_subscription) {
         if (ShouldShareBridgeSubscription(endpoint)) {
           bridge_endpoint.shared_bridge_subscription = true;
           bridge_endpoint.bridge_subscription_topic = bridge_topic;
@@ -1227,8 +1358,27 @@ void IpcBroker::RegisterEndpoint(Connection *connection, const Frame &frame,
                   bridge_endpoint.subscription_state.get());
         }
       }
-      if (bridge_endpoint.bridge_publisher != nullptr ||
-          bridge_endpoint.bridge_subscription != nullptr) {
+      const bool bridge_ready =
+          (!needs_bridge_publisher ||
+           bridge_endpoint.bridge_publisher != nullptr) &&
+          (!needs_bridge_subscription ||
+           bridge_endpoint.bridge_subscription != nullptr);
+      if (!bridge_ready) {
+        bridge_creation_failed = true;
+        if (bridge_endpoint.bridge_publisher != nullptr ||
+            bridge_endpoint.bridge_subscription != nullptr) {
+          connection->bridge_endpoints.push_back(std::move(bridge_endpoint));
+          RemoveBridgeEndpointForEntity(connection, endpoint.entity_id);
+        }
+        connection->endpoints.erase(
+            std::remove_if(connection->endpoints.begin(),
+                           connection->endpoints.end(),
+                           [&endpoint](const EndpointDescriptor &current) {
+                             return current.entity_id == endpoint.entity_id;
+                           }),
+            connection->endpoints.end());
+      } else if (bridge_endpoint.bridge_publisher != nullptr ||
+                 bridge_endpoint.bridge_subscription != nullptr) {
         // Service availability depends on both directions: rq/ must match the
         // remote server's request subscriber and rr/ must match its response
         // publisher. Capture both local bridge handles so either match change
@@ -1242,25 +1392,37 @@ void IpcBroker::RegisterEndpoint(Connection *connection, const Frame &frame,
         connection->bridge_endpoints.push_back(std::move(bridge_endpoint));
       }
     }
-    if (RequestsTransientLocalDurability(endpoint)) {
+    if (!bridge_creation_failed && RequestsTransientLocalDurability(endpoint)) {
       for (const auto &retained : retained_samples_) {
         if (!ShouldReplayRetainedSample(retained, endpoint)) {
           continue;
         }
-        Frame delivery;
-        delivery.kind = MessageKind::kDeliverSample;
-        delivery.request_id = 0u;
-        delivery.payload = EncodeSampleMessage(retained.sample);
-        retained_deliveries.push_back(std::move(delivery));
+        retained_deliveries.push_back(retained.sample);
       }
     }
   }
-  SendAck(connection, frame.request_id);
-  BroadcastGraphUpdate();
+  if (bridge_creation_failed) {
+    {
+      std::lock_guard<std::mutex> loan_lock(connection->loan_pool_mutex);
+      connection->ResetLoanPoolLocked();
+    }
+    SendError(connection, frame.request_id,
+              "MDDS bridge endpoint creation failed: resource limit");
+    RequestGraphUpdate(true);
+    return;
+  }
+  std::vector<uint8_t> ack_payload;
+  {
+    std::lock_guard<std::mutex> loan_lock(connection->loan_pool_mutex);
+    if (connection->loan_pool != nullptr) {
+      ack_payload = EncodeLoanPoolDescriptor(connection->loan_pool->descriptor());
+    }
+  }
+  SendAck(connection, frame.request_id, ack_payload);
   // Push our updated local endpoint set to peer brokers so their cross-board
   // graph reflects this new node/topic/service promptly (the timer also covers
   // it).
-  PublishLocalGraph();
+  RequestGraphUpdate(true);
   // Install the matched listener LAST: SetOnMatched may invoke the callback
   // synchronously with the current count, and the callback rebroadcasts the
   // graph. Doing this before SendAck would push a kGraphUpdate ahead of the
@@ -1275,7 +1437,7 @@ void IpcBroker::RegisterEndpoint(Connection *connection, const Frame &frame,
         sub_match_subscription, &IpcBroker::OnBridgePublisherMatched, this);
   }
   for (const auto &delivery : retained_deliveries) {
-    SendFrame(connection, delivery);
+    SendSampleDelivery(connection, delivery, 0u);
   }
 }
 
@@ -1308,6 +1470,10 @@ void IpcBroker::UnregisterEntity(Connection *connection, const Frame &frame) {
         RemoveRetainedSamplesForEndpointLocked(
             &retained_samples_, current_connection.get(), entity_id);
         RemoveBridgeEndpointForEntity(current_connection.get(), entity_id);
+        std::lock_guard<std::mutex> loan_lock(current_connection->loan_pool_mutex);
+        if (current_connection->loan_pool_entity_id == entity_id) {
+          current_connection->ResetLoanPoolLocked();
+        }
       }
     }
   }
@@ -1319,8 +1485,7 @@ void IpcBroker::UnregisterEntity(Connection *connection, const Frame &frame) {
 
   SendAck(connection, frame.request_id);
   if (removed) {
-    BroadcastGraphUpdate();
-    PublishLocalGraph();
+    RequestGraphUpdate(true);
   }
 }
 
@@ -1328,7 +1493,7 @@ void IpcBroker::OnBridgePublisherMatched(uint32_t /*matched_count*/,
                                          void *user_data) {
   auto *broker = static_cast<IpcBroker *>(user_data);
   if (broker != nullptr) {
-    broker->BroadcastGraphUpdate();
+    broker->RequestGraphUpdate(false);
   }
 }
 
@@ -1426,12 +1591,8 @@ void IpcBroker::PublishSample(Connection *connection, const Frame &frame) {
         IsServiceLikeEndpoint(source.kind) ? 1 : 0);
   }
 
-  Frame delivery;
-  delivery.kind = MessageKind::kDeliverSample;
-  delivery.request_id = frame.request_id;
-  delivery.payload = frame.payload;
   for (auto *target : targets) {
-    SendFrame(target, delivery);
+    SendSampleDelivery(target, sample, frame.request_id);
   }
   if (bridge_publisher != nullptr &&
       !(IsServiceLikeEndpoint(source.kind) && !targets.empty())) {
@@ -1439,7 +1600,7 @@ void IpcBroker::PublishSample(Connection *connection, const Frame &frame) {
     if (bridge_publisher_mutex != nullptr) {
       publish_lock = std::unique_lock<std::mutex>(*bridge_publisher_mutex);
     }
-    WaitForServiceBridgeBackpressure(source, sample, bridge_publisher);
+    WaitForReliableBridgeBackpressure(source, sample, bridge_publisher);
     const int32_t rc = BridgeBackend::Instance().Publish(
         bridge_publisher, sample.payload.data(),
         static_cast<uint32_t>(sample.payload.size()));
@@ -1464,6 +1625,172 @@ void IpcBroker::PublishSample(Connection *connection, const Frame &frame) {
   }
 }
 
+bool IpcBroker::SendSampleDelivery(
+    Connection *connection, const SampleMessage &sample, uint64_t request_id) {
+  if (connection == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> loan_lock(connection->loan_pool_mutex);
+  if (connection->loan_pool == nullptr) {
+    Frame delivery;
+    delivery.kind = MessageKind::kDeliverSample;
+    delivery.request_id = request_id;
+    delivery.payload = EncodeSampleMessage(sample);
+    return SendFrame(connection, delivery);
+  }
+
+  std::string error;
+  if (!connection->pending_loan_deliveries.empty()) {
+    const bool queued =
+      QueueLoanedDeliveryLocked(connection, sample, request_id, &error);
+    if (!queued && !error.empty()) {
+      SendError(connection, request_id, error);
+    }
+    return queued;
+  }
+
+  bool pool_full = false;
+  if (SendLoanedDeliveryLocked(
+      connection, sample, request_id, &pool_full, &error))
+  {
+    return true;
+  }
+  if (pool_full) {
+    error.clear();
+    const bool queued =
+      QueueLoanedDeliveryLocked(connection, sample, request_id, &error);
+    if (queued) {
+      return true;
+    }
+    if (!connection->loan_pool_reliable) {
+      return false;
+    }
+  }
+  if (!error.empty()) {
+    SendError(connection, request_id, error);
+  }
+  return false;
+}
+
+bool IpcBroker::SendLoanedDeliveryLocked(
+  Connection * connection, const SampleMessage & sample, uint64_t request_id,
+  bool * pool_full, std::string * error)
+{
+  if (pool_full != nullptr) {
+    *pool_full = false;
+  }
+  if (connection == nullptr || connection->loan_pool == nullptr) {
+    if (error != nullptr) {
+      *error = "broker loan pool is not available";
+    }
+    return false;
+  }
+  const LoanPoolDescriptor & pool = connection->loan_pool->descriptor();
+  if (
+    (pool.version == kFixedLoanPoolVersion && sample.payload.size() != pool.slot_size) ||
+    (pool.version == kDynamicLoanPoolVersion && sample.payload.size() > pool.slot_size))
+  {
+    if (error != nullptr) {
+      *error = pool.version == kFixedLoanPoolVersion ?
+        "sample is not the fixed-size raw layout registered for broker loaning" :
+        "sample exceeds the negotiated dynamic broker loan payload capacity";
+    }
+    return false;
+  }
+
+  uint64_t loan_id = 0u;
+  uint32_t slot_index = 0u;
+  if (!connection->loan_pool->Store(
+      sample.payload.data(), sample.payload.size(), &loan_id, &slot_index,
+      error, pool_full))
+  {
+    return false;
+  }
+
+  LoanedSampleMessage loaned;
+  loaned.entity_id = connection->loan_pool_entity_id;
+  loaned.loan_id = loan_id;
+  loaned.pool_generation = pool.generation;
+  loaned.sequence_number = sample.sequence_number;
+  loaned.slot_index = slot_index;
+  loaned.payload_size = static_cast<uint32_t>(sample.payload.size());
+  loaned.mdds_payload = sample.mdds_payload;
+  Frame delivery;
+  delivery.kind = MessageKind::kDeliverLoanedSample;
+  delivery.request_id = request_id;
+  delivery.payload = EncodeLoanedSampleMessage(loaned);
+  if (!SendFrame(connection, delivery)) {
+    (void)connection->loan_pool->Release(loan_id);
+    if (error != nullptr) {
+      *error = "failed to send broker loan descriptor";
+    }
+    return false;
+  }
+  return true;
+}
+
+bool IpcBroker::QueueLoanedDeliveryLocked(
+  Connection * connection, const SampleMessage & sample, uint64_t request_id,
+  std::string * error)
+{
+  if (connection == nullptr || !connection->loan_pool_reliable) {
+    return false;
+  }
+  if (connection->pending_loan_deliveries.size() >= connection->loan_pool_pending_limit) {
+    if (!connection->loan_pool_keep_last) {
+      if (error != nullptr) {
+        *error = "reliable broker loan pending queue reached its resource limit";
+      }
+      return false;
+    }
+    connection->pending_loan_deliveries.pop_front();
+  }
+  Connection::PendingLoanDelivery pending;
+  pending.sample = sample;
+  pending.request_id = request_id;
+  connection->pending_loan_deliveries.push_back(std::move(pending));
+  return true;
+}
+
+void IpcBroker::ReturnLoanedSample(Connection *connection, const Frame &frame) {
+  uint64_t loan_id = 0u;
+  std::string error;
+  if (!DecodeLoanReturn(frame.payload.data(), frame.payload.size(), &loan_id,
+                        &error) ||
+      loan_id == 0u) {
+    SendError(connection, frame.request_id,
+              error.empty() ? "invalid broker loan return" : error);
+    return;
+  }
+  bool released = false;
+  bool pending_delivery_failed = false;
+  {
+    std::lock_guard<std::mutex> loan_lock(connection->loan_pool_mutex);
+    released = connection->loan_pool != nullptr &&
+               connection->loan_pool->Release(loan_id);
+    if (released && !connection->pending_loan_deliveries.empty()) {
+      Connection::PendingLoanDelivery pending =
+        std::move(connection->pending_loan_deliveries.front());
+      connection->pending_loan_deliveries.pop_front();
+      bool pool_full = false;
+      pending_delivery_failed = !SendLoanedDeliveryLocked(
+        connection, pending.sample, pending.request_id, &pool_full, &error);
+      if (pool_full) {
+        connection->pending_loan_deliveries.push_front(std::move(pending));
+      }
+    }
+  }
+  if (!released) {
+    SendError(connection, frame.request_id,
+              "broker loan does not belong to this connection or was already returned");
+    return;
+  }
+  if (pending_delivery_failed && !error.empty()) {
+    SendError(connection, frame.request_id, error);
+  }
+  SendAck(connection, frame.request_id);
+}
+
 void IpcBroker::DeliverBridgeSample(
     const EndpointDescriptor &subscription_endpoint,
     const std::vector<uint8_t> &payload, uint64_t sequence_number) {
@@ -1476,11 +1803,6 @@ void IpcBroker::DeliverBridgeSample(
   sample.sequence_number = sequence_number;
   sample.mdds_payload = true;
   sample.payload = payload;
-
-  Frame delivery;
-  delivery.kind = MessageKind::kDeliverSample;
-  delivery.request_id = 0u;
-  delivery.payload = EncodeSampleMessage(sample);
 
   std::vector<Connection *> targets;
   {
@@ -1536,7 +1858,65 @@ void IpcBroker::DeliverBridgeSample(
     }
   }
   for (auto *target : targets) {
-    SendFrame(target, delivery);
+    SendSampleDelivery(target, sample, 0u);
+  }
+}
+
+void IpcBroker::RequestGraphUpdate(bool publish_local_graph) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_.load()) {
+      return;
+    }
+    graph_update_requested_ = true;
+    graph_publish_requested_ = graph_publish_requested_ || publish_local_graph;
+  }
+  graph_update_cv_.notify_one();
+}
+
+void IpcBroker::GraphUpdateLoop() {
+  auto next_reannounce =
+      std::chrono::steady_clock::now() + kGraphReannounceInterval;
+  while (true) {
+    bool broadcast = false;
+    bool publish = false;
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      graph_update_cv_.wait_until(lock, next_reannounce, [this]() {
+        return !running_.load() || graph_update_requested_;
+      });
+      if (!running_.load()) {
+        break;
+      }
+
+      auto now = std::chrono::steady_clock::now();
+      bool heartbeat = now >= next_reannounce;
+      if (graph_update_requested_ && !heartbeat) {
+        const auto coalesce_deadline = now + kGraphUpdateCoalesceInterval;
+        graph_update_cv_.wait_until(lock, coalesce_deadline,
+                                    [this]() { return !running_.load(); });
+        if (!running_.load()) {
+          break;
+        }
+        now = std::chrono::steady_clock::now();
+        heartbeat = now >= next_reannounce;
+      }
+
+      broadcast = graph_update_requested_ || (heartbeat && bridge_enabled_);
+      publish = bridge_enabled_ && (graph_publish_requested_ || heartbeat);
+      graph_update_requested_ = false;
+      graph_publish_requested_ = false;
+      if (heartbeat) {
+        next_reannounce = now + kGraphReannounceInterval;
+      }
+    }
+
+    if (broadcast) {
+      BroadcastGraphUpdate();
+    }
+    if (publish) {
+      PublishLocalGraph();
+    }
   }
 }
 
@@ -1877,7 +2257,7 @@ void IpcBroker::OnNodeSync(const std::vector<uint8_t> &payload) {
     }
     remote_node_endpoints_ = std::move(endpoints);
   }
-  BroadcastGraphUpdate();
+  RequestGraphUpdate(false);
 }
 
 void IpcBroker::PublishLocalGraph() {
@@ -2084,7 +2464,7 @@ void IpcBroker::OnGraphSync(const std::vector<uint8_t> &payload) {
                  static_cast<unsigned long long>(src),
                  static_cast<unsigned long long>(epoch), endpoint_count);
   }
-  BroadcastGraphUpdate();
+  RequestGraphUpdate(false);
 }
 
 bool IpcBroker::SendFrame(Connection *connection, const Frame &frame) {
@@ -2096,8 +2476,9 @@ bool IpcBroker::SendFrame(Connection *connection, const Frame &frame) {
   return WriteFrame(connection->fd.get(), frame, &error);
 }
 
-void IpcBroker::SendAck(Connection *connection, uint64_t request_id) {
-  SendFrame(connection, Frame{MessageKind::kAck, request_id, {}});
+void IpcBroker::SendAck(Connection *connection, uint64_t request_id,
+                        const std::vector<uint8_t> &payload) {
+  SendFrame(connection, Frame{MessageKind::kAck, request_id, payload});
 }
 
 void IpcBroker::SendError(Connection *connection, uint64_t request_id,

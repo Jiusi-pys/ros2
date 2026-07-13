@@ -15,10 +15,13 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "bridge_backend.hpp"
 #include "broker.hpp"
 #include "context.hpp"
+#include "ipc_client.hpp"
 #include "rmw_mdds_cpp/identifier.hpp"
 #include "rcutils/time.h"
 #include "rmw/error_handling.h"
@@ -64,6 +67,35 @@ bool TakeNextLiveSample(rmw_mdds_cpp::SubscriptionData * data, rmw_mdds_cpp::Que
     if (!IsSampleExpiredByLifespan(data->actual_qos, sample->info)) {
       return true;
     }
+  }
+  return false;
+}
+
+bool ReturnBrokerLoan(
+  rmw_mdds_cpp::SubscriptionData * data, uint64_t loan_id, const char * action)
+{
+  std::string error;
+  if (
+    data != nullptr && data->broker_client != nullptr &&
+    rmw_mdds_cpp::BrokerClientReturnLoan(data->broker_client, loan_id, &error))
+  {
+    return true;
+  }
+  RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s: %s", action, error.c_str());
+  return false;
+}
+
+bool TakeNextLiveBrokerLoan(
+  rmw_mdds_cpp::SubscriptionData * data, rmw_mdds_cpp::BrokerLoanedSample * sample)
+{
+  while (rmw_mdds_cpp::TakeBrokerLoanedSample(data, sample)) {
+    if (!IsSampleExpiredByLifespan(data->actual_qos, sample->info)) {
+      return true;
+    }
+    rmw_mdds_cpp::DestroyBrokerLoanedSampleMessage(data, sample);
+    std::string ignored_error;
+    (void)rmw_mdds_cpp::BrokerClientReturnLoan(
+      data->broker_client, sample->loan_id, &ignored_error);
   }
   return false;
 }
@@ -200,6 +232,28 @@ rmw_ret_t TakeSample(
     *message_info = rmw_get_zero_initialized_message_info();
   }
   auto * data = static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  rmw_mdds_cpp::BrokerLoanedSample broker_sample;
+  if (TakeNextLiveBrokerLoan(data, &broker_sample)) {
+    const bool decoded = broker_sample.from_bridge ?
+      data->adapter.DecodeMdds(broker_sample.data, broker_sample.len, ros_message) :
+      data->adapter.Decode(broker_sample.data, broker_sample.len, ros_message);
+    const rmw_message_info_t info = broker_sample.info;
+    rmw_mdds_cpp::DestroyBrokerLoanedSampleMessage(data, &broker_sample);
+    const bool returned = ReturnBrokerLoan(
+      data, broker_sample.loan_id, "failed to return broker loan after take");
+    if (!decoded) {
+      RMW_SET_ERROR_MSG("failed to decode broker loaned message");
+      return RMW_RET_ERROR;
+    }
+    if (!returned) {
+      return RMW_RET_ERROR;
+    }
+    if (message_info != nullptr) {
+      *message_info = info;
+    }
+    *taken = true;
+    return RMW_RET_OK;
+  }
   rmw_mdds_cpp::QueuedSample sample;
   if (!TakeNextLiveSample(data, &sample)) {
     bool attempted_bridge_loaned = false;
@@ -243,6 +297,37 @@ rmw_ret_t TakeSerializedSample(
   *taken = false;
 
   auto * data = static_cast<rmw_mdds_cpp::SubscriptionData *>(subscription->data);
+  rmw_mdds_cpp::BrokerLoanedSample broker_sample;
+  if (TakeNextLiveBrokerLoan(data, &broker_sample)) {
+    std::vector<uint8_t> payload;
+    bool converted = true;
+    if (broker_sample.from_bridge && data != nullptr && data->adapter.IsValid()) {
+      converted = data->adapter.MddsPayloadToSerialized(
+        broker_sample.data, broker_sample.len, &payload);
+    } else {
+      payload.assign(broker_sample.data, broker_sample.data + broker_sample.len);
+    }
+    const rmw_message_info_t info = broker_sample.info;
+    rmw_mdds_cpp::DestroyBrokerLoanedSampleMessage(data, &broker_sample);
+    const bool returned = ReturnBrokerLoan(
+      data, broker_sample.loan_id, "failed to return broker loan after serialized take");
+    if (!converted) {
+      RMW_SET_ERROR_MSG("failed to convert broker loaned payload to serialized message");
+      return RMW_RET_ERROR;
+    }
+    if (!returned) {
+      return RMW_RET_ERROR;
+    }
+    rmw_ret_t ret = StoreSerializedPayload(payload, serialized_message);
+    if (ret != RMW_RET_OK) {
+      return ret;
+    }
+    if (message_info != nullptr) {
+      *message_info = info;
+    }
+    *taken = true;
+    return RMW_RET_OK;
+  }
   rmw_mdds_cpp::QueuedSample sample;
   if (!TakeNextLiveSample(data, &sample)) {
     bool attempted_bridge_loaned = false;

@@ -105,7 +105,8 @@ bool ReadBytes(const uint8_t * data, size_t len, size_t * offset, void * out, si
 {
   if (
     data == nullptr || offset == nullptr || out == nullptr || *offset > len ||
-    len - *offset < size) {
+    len - *offset < size)
+  {
     return false;
   }
   std::memcpy(out, data + *offset, size);
@@ -153,7 +154,8 @@ bool WriteBytes(
 {
   if (
     buffer == nullptr || offset == nullptr || *offset > capacity ||
-    capacity - *offset < size || (data == nullptr && size != 0)) {
+    capacity - *offset < size || (data == nullptr && size != 0))
+  {
     return false;
   }
   if (size != 0) {
@@ -248,13 +250,44 @@ const CMessageMember * FindCMember(const CMessageMembers * members, const char *
   return nullptr;
 }
 
+bool ReadCppStringView(
+  const CppMessageMember & member, const void * field, size_t index,
+  const char ** data, size_t * size)
+{
+  if (
+    field == nullptr || data == nullptr || size == nullptr ||
+    member.string_size_function == nullptr ||
+    member.get_const_string_data_function == nullptr)
+  {
+    return false;
+  }
+  *size = member.string_size_function(field, index);
+  *data = static_cast<const char *>(member.get_const_string_data_function(field, index));
+  return *data != nullptr || *size == 0u;
+}
+
+bool AssignCppString(
+  const CppMessageMember & member, void * field, size_t index,
+  const char * data, size_t size)
+{
+  if (
+    field == nullptr || (data == nullptr && size != 0u) ||
+    member.assign_string_function == nullptr)
+  {
+    return false;
+  }
+  member.assign_string_function(field, index, data, size);
+  return true;
+}
+
 bool ReadCppScalar(
   const CppMessageMember * member, const uint8_t * base, uint8_t expected_type, void * out,
   size_t size)
 {
   if (
     member == nullptr || base == nullptr || out == nullptr || member->is_array_ ||
-    member->type_id_ != expected_type) {
+    member->type_id_ != expected_type)
+  {
     return false;
   }
   std::memcpy(out, base + member->offset_, size);
@@ -267,7 +300,8 @@ bool ReadCScalar(
 {
   if (
     member == nullptr || base == nullptr || out == nullptr || member->is_array_ ||
-    member->type_id_ != expected_type) {
+    member->type_id_ != expected_type)
+  {
     return false;
   }
   std::memcpy(out, base + member->offset_, size);
@@ -280,7 +314,8 @@ bool WriteCppScalar(
 {
   if (
     member == nullptr || base == nullptr || value == nullptr || member->is_array_ ||
-    member->type_id_ != expected_type) {
+    member->type_id_ != expected_type)
+  {
     return false;
   }
   std::memcpy(base + member->offset_, value, size);
@@ -293,7 +328,8 @@ bool WriteCScalar(
 {
   if (
     member == nullptr || base == nullptr || value == nullptr || member->is_array_ ||
-    member->type_id_ != expected_type) {
+    member->type_id_ != expected_type)
+  {
     return false;
   }
   std::memcpy(base + member->offset_, value, size);
@@ -369,7 +405,8 @@ bool ReadPoseStampedWire(const uint8_t * data, size_t len, PoseStampedWireFields
   offset += frame_id_size;
   if (
     !ReadBytes(data, len, &offset, &fields->stamp_sec, sizeof(fields->stamp_sec)) ||
-    !ReadBytes(data, len, &offset, &fields->stamp_nanosec, sizeof(fields->stamp_nanosec))) {
+    !ReadBytes(data, len, &offset, &fields->stamp_nanosec, sizeof(fields->stamp_nanosec)))
+  {
     return false;
   }
   for (double & value : fields->position) {
@@ -394,29 +431,40 @@ bool ExtractCppPoseStamped(
   const auto * base = static_cast<const uint8_t *>(ros_message);
   const CppMessageMember * header = FindCppMember(members, "header");
   const CppMessageMember * pose = FindCppMember(members, "pose");
-  const CppMessageMembers * header_members = ResolveCppMembers(header == nullptr ? nullptr : header->members_);
-  const CppMessageMembers * pose_members = ResolveCppMembers(pose == nullptr ? nullptr : pose->members_);
+  const CppMessageMembers * header_members = ResolveCppMembers(header ==
+        nullptr ? nullptr : header->members_);
+  const CppMessageMembers * pose_members = ResolveCppMembers(pose ==
+        nullptr ? nullptr : pose->members_);
   if (
     header == nullptr || pose == nullptr ||
     header->type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE ||
     pose->type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE ||
-    header_members == nullptr || pose_members == nullptr) {
+    header_members == nullptr || pose_members == nullptr)
+  {
     return false;
   }
 
   const auto * header_base = base + header->offset_;
   const CppMessageMember * frame_id = FindCppMember(header_members, "frame_id");
   const CppMessageMember * stamp = FindCppMember(header_members, "stamp");
-  const CppMessageMembers * stamp_members = ResolveCppMembers(stamp == nullptr ? nullptr : stamp->members_);
+  const CppMessageMembers * stamp_members = ResolveCppMembers(stamp ==
+        nullptr ? nullptr : stamp->members_);
   if (
     frame_id == nullptr || stamp == nullptr || frame_id->is_array_ ||
     frame_id->type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING ||
     stamp->type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE ||
-    stamp_members == nullptr) {
+    stamp_members == nullptr)
+  {
     return false;
   }
-  fields->frame_id =
-    *reinterpret_cast<const std::string *>(header_base + frame_id->offset_);
+  const char * frame_id_data = nullptr;
+  size_t frame_id_size = 0u;
+  if (!ReadCppStringView(
+      *frame_id, header_base + frame_id->offset_, 0u, &frame_id_data, &frame_id_size))
+  {
+    return false;
+  }
+  fields->frame_id.assign(frame_id_data == nullptr ? "" : frame_id_data, frame_id_size);
 
   const auto * stamp_base = header_base + stamp->offset_;
   if (
@@ -427,7 +475,8 @@ bool ExtractCppPoseStamped(
     !ReadCppScalar(
       FindCppMember(stamp_members, "nanosec"), stamp_base,
       rosidl_typesupport_introspection_cpp::ROS_TYPE_UINT32, &fields->stamp_nanosec,
-      sizeof(fields->stamp_nanosec))) {
+      sizeof(fields->stamp_nanosec)))
+  {
     return false;
   }
 
@@ -442,7 +491,8 @@ bool ExtractCppPoseStamped(
     position == nullptr || orientation == nullptr ||
     position->type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE ||
     orientation->type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE ||
-    position_members == nullptr || orientation_members == nullptr) {
+    position_members == nullptr || orientation_members == nullptr)
+  {
     return false;
   }
   const auto * position_base = pose_base + position->offset_;
@@ -486,25 +536,30 @@ bool ExtractCPoseStamped(
   const auto * base = static_cast<const uint8_t *>(ros_message);
   const CMessageMember * header = FindCMember(members, "header");
   const CMessageMember * pose = FindCMember(members, "pose");
-  const CMessageMembers * header_members = ResolveCMembers(header == nullptr ? nullptr : header->members_);
-  const CMessageMembers * pose_members = ResolveCMembers(pose == nullptr ? nullptr : pose->members_);
+  const CMessageMembers * header_members = ResolveCMembers(header ==
+        nullptr ? nullptr : header->members_);
+  const CMessageMembers * pose_members = ResolveCMembers(pose ==
+        nullptr ? nullptr : pose->members_);
   if (
     header == nullptr || pose == nullptr ||
     header->type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE ||
     pose->type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE ||
-    header_members == nullptr || pose_members == nullptr) {
+    header_members == nullptr || pose_members == nullptr)
+  {
     return false;
   }
 
   const auto * header_base = base + header->offset_;
   const CMessageMember * frame_id = FindCMember(header_members, "frame_id");
   const CMessageMember * stamp = FindCMember(header_members, "stamp");
-  const CMessageMembers * stamp_members = ResolveCMembers(stamp == nullptr ? nullptr : stamp->members_);
+  const CMessageMembers * stamp_members = ResolveCMembers(stamp ==
+        nullptr ? nullptr : stamp->members_);
   if (
     frame_id == nullptr || stamp == nullptr || frame_id->is_array_ ||
     frame_id->type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_STRING ||
     stamp->type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE ||
-    stamp_members == nullptr) {
+    stamp_members == nullptr)
+  {
     return false;
   }
   const auto * frame_id_value =
@@ -512,7 +567,8 @@ bool ExtractCPoseStamped(
   if (frame_id_value->data == nullptr && frame_id_value->size != 0) {
     return false;
   }
-  fields->frame_id.assign(frame_id_value->data == nullptr ? "" : frame_id_value->data, frame_id_value->size);
+  fields->frame_id.assign(frame_id_value->data == nullptr ? "" : frame_id_value->data,
+        frame_id_value->size);
 
   const auto * stamp_base = header_base + stamp->offset_;
   if (
@@ -523,7 +579,8 @@ bool ExtractCPoseStamped(
     !ReadCScalar(
       FindCMember(stamp_members, "nanosec"), stamp_base,
       rosidl_typesupport_introspection_c__ROS_TYPE_UINT32, &fields->stamp_nanosec,
-      sizeof(fields->stamp_nanosec))) {
+      sizeof(fields->stamp_nanosec)))
+  {
     return false;
   }
 
@@ -538,7 +595,8 @@ bool ExtractCPoseStamped(
     position == nullptr || orientation == nullptr ||
     position->type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE ||
     orientation->type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE ||
-    position_members == nullptr || orientation_members == nullptr) {
+    position_members == nullptr || orientation_members == nullptr)
+  {
     return false;
   }
   const auto * position_base = pose_base + position->offset_;
@@ -582,20 +640,27 @@ bool AssignCppPoseStamped(
   auto * base = static_cast<uint8_t *>(ros_message);
   const CppMessageMember * header = FindCppMember(members, "header");
   const CppMessageMember * pose = FindCppMember(members, "pose");
-  const CppMessageMembers * header_members = ResolveCppMembers(header == nullptr ? nullptr : header->members_);
-  const CppMessageMembers * pose_members = ResolveCppMembers(pose == nullptr ? nullptr : pose->members_);
+  const CppMessageMembers * header_members = ResolveCppMembers(header ==
+        nullptr ? nullptr : header->members_);
+  const CppMessageMembers * pose_members = ResolveCppMembers(pose ==
+        nullptr ? nullptr : pose->members_);
   if (header_members == nullptr || pose_members == nullptr) {
     return false;
   }
   auto * header_base = base + header->offset_;
   const CppMessageMember * frame_id = FindCppMember(header_members, "frame_id");
   const CppMessageMember * stamp = FindCppMember(header_members, "stamp");
-  const CppMessageMembers * stamp_members = ResolveCppMembers(stamp == nullptr ? nullptr : stamp->members_);
+  const CppMessageMembers * stamp_members = ResolveCppMembers(stamp ==
+        nullptr ? nullptr : stamp->members_);
   if (frame_id == nullptr || stamp_members == nullptr) {
     return false;
   }
-  auto * frame_id_value = reinterpret_cast<std::string *>(header_base + frame_id->offset_);
-  *frame_id_value = fields.frame_id;
+  if (!AssignCppString(
+      *frame_id, header_base + frame_id->offset_, 0u,
+      fields.frame_id.data(), fields.frame_id.size()))
+  {
+    return false;
+  }
   auto * stamp_base = header_base + stamp->offset_;
   if (
     !WriteCppScalar(
@@ -605,7 +670,8 @@ bool AssignCppPoseStamped(
     !WriteCppScalar(
       FindCppMember(stamp_members, "nanosec"), stamp_base,
       rosidl_typesupport_introspection_cpp::ROS_TYPE_UINT32, &fields.stamp_nanosec,
-      sizeof(fields.stamp_nanosec))) {
+      sizeof(fields.stamp_nanosec)))
+  {
     return false;
   }
 
@@ -660,21 +726,26 @@ bool AssignCPoseStamped(
   auto * base = static_cast<uint8_t *>(ros_message);
   const CMessageMember * header = FindCMember(members, "header");
   const CMessageMember * pose = FindCMember(members, "pose");
-  const CMessageMembers * header_members = ResolveCMembers(header == nullptr ? nullptr : header->members_);
-  const CMessageMembers * pose_members = ResolveCMembers(pose == nullptr ? nullptr : pose->members_);
+  const CMessageMembers * header_members = ResolveCMembers(header ==
+        nullptr ? nullptr : header->members_);
+  const CMessageMembers * pose_members = ResolveCMembers(pose ==
+        nullptr ? nullptr : pose->members_);
   if (header_members == nullptr || pose_members == nullptr) {
     return false;
   }
   auto * header_base = base + header->offset_;
   const CMessageMember * frame_id = FindCMember(header_members, "frame_id");
   const CMessageMember * stamp = FindCMember(header_members, "stamp");
-  const CMessageMembers * stamp_members = ResolveCMembers(stamp == nullptr ? nullptr : stamp->members_);
+  const CMessageMembers * stamp_members = ResolveCMembers(stamp ==
+        nullptr ? nullptr : stamp->members_);
   if (frame_id == nullptr || stamp_members == nullptr) {
     return false;
   }
   auto * frame_id_value =
     reinterpret_cast<rosidl_runtime_c__String *>(header_base + frame_id->offset_);
-  if (!rosidl_runtime_c__String__assignn(frame_id_value, fields.frame_id.data(), fields.frame_id.size())) {
+  if (!rosidl_runtime_c__String__assignn(frame_id_value, fields.frame_id.data(),
+        fields.frame_id.size()))
+  {
     return false;
   }
   auto * stamp_base = header_base + stamp->offset_;
@@ -686,7 +757,8 @@ bool AssignCPoseStamped(
     !WriteCScalar(
       FindCMember(stamp_members, "nanosec"), stamp_base,
       rosidl_typesupport_introspection_c__ROS_TYPE_UINT32, &fields.stamp_nanosec,
-      sizeof(fields.stamp_nanosec))) {
+      sizeof(fields.stamp_nanosec)))
+  {
     return false;
   }
 
@@ -739,7 +811,9 @@ bool SupportsCMessage(const CMessageMembers * members);
 bool SupportsCppValue(const CppMessageMember & member)
 {
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
-    return true;
+    return member.string_size_function != nullptr &&
+           member.get_const_string_data_function != nullptr &&
+           member.assign_string_function != nullptr;
   }
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
     return SupportsCppMessage(ResolveCppMembers(member.members_));
@@ -761,9 +835,10 @@ bool SupportsCppMember(const CppMessageMember & member)
   if (member.array_size_ == 0 && member.resize_function == nullptr) {
     return false;
   }
-  if (
-    member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING ||
-    member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
+  if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+    return true;
+  }
+  if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
     return member.get_const_function != nullptr && member.get_function != nullptr;
   }
   if (member.get_const_function == nullptr && member.fetch_function == nullptr) {
@@ -809,7 +884,8 @@ bool SupportsCMember(const CMessageMember & member)
   }
   if (
     member.size_function == nullptr || member.get_const_function == nullptr ||
-    member.get_function == nullptr) {
+    member.get_function == nullptr)
+  {
     return false;
   }
   if (member.array_size_ == 0 && member.resize_function == nullptr) {
@@ -831,31 +907,21 @@ bool SupportsCMessage(const CMessageMembers * members)
   return true;
 }
 
-bool SerializeCppString(const std::string * value, std::vector<uint8_t> * payload)
+bool SerializeCppString(
+  const CppMessageMember & member, const void * field, size_t index,
+  std::vector<uint8_t> * payload)
 {
-  if (value == nullptr || !AppendSequenceSize(value->size(), payload)) {
+  const char * data = nullptr;
+  size_t size = 0u;
+  if (
+    payload == nullptr || !ReadCppStringView(member, field, index, &data, &size) ||
+    !AppendSequenceSize(size, payload))
+  {
     return false;
   }
-  if (!value->empty()) {
-    AppendBytes(value->data(), value->size(), payload);
+  if (size != 0u) {
+    AppendBytes(data, size, payload);
   }
-  return true;
-}
-
-bool DeserializeCppString(const uint8_t * data, size_t len, size_t * offset, std::string * value)
-{
-  if (value == nullptr) {
-    return false;
-  }
-  size_t string_size = 0;
-  if (!ReadSequenceSize(data, len, offset, &string_size)) {
-    return false;
-  }
-  if (data == nullptr || offset == nullptr || *offset > len || len - *offset < string_size) {
-    return false;
-  }
-  value->assign(reinterpret_cast<const char *>(data + *offset), string_size);
-  *offset += string_size;
   return true;
 }
 
@@ -869,7 +935,7 @@ bool SerializeCppValue(
     return false;
   }
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
-    return SerializeCppString(static_cast<const std::string *>(value), payload);
+    return false;
   }
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
     return SerializeCppMessage(ResolveCppMembers(member.members_), value, payload);
@@ -890,6 +956,9 @@ bool SerializeCppMember(
   }
   const void * field = base + member.offset_;
   if (!member.is_array_) {
+    if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+      return SerializeCppString(member, field, 0u, payload);
+    }
     return SerializeCppValue(member, field, payload);
   }
   if (member.size_function == nullptr) {
@@ -900,12 +969,19 @@ bool SerializeCppMember(
     return false;
   }
   for (size_t i = 0; i < array_size; ++i) {
+    if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+      if (!SerializeCppString(member, field, i, payload)) {
+        return false;
+      }
+      continue;
+    }
     if (
-      member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING ||
-      member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
+      member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE)
+    {
       if (
         member.get_const_function == nullptr ||
-        !SerializeCppValue(member, member.get_const_function(field, i), payload)) {
+        !SerializeCppValue(member, member.get_const_function(field, i), payload))
+      {
         return false;
       }
       continue;
@@ -946,10 +1022,13 @@ bool SerializeCppMessage(
 bool MeasureCppMessageMembers(
   const CppMessageMembers * members, const void * ros_message, size_t * payload_size);
 
-bool MeasureCppString(const std::string * value, size_t * payload_size)
+bool MeasureCppString(
+  const CppMessageMember & member, const void * field, size_t index, size_t * payload_size)
 {
-  return value != nullptr && MeasureSequenceSize(value->size(), payload_size) &&
-         AddPayloadSize(value->size(), payload_size);
+  const char * data = nullptr;
+  size_t size = 0u;
+  return ReadCppStringView(member, field, index, &data, &size) &&
+         MeasureSequenceSize(size, payload_size) && AddPayloadSize(size, payload_size);
 }
 
 bool MeasureCppValue(const CppMessageMember & member, const void * value, size_t * payload_size)
@@ -958,7 +1037,7 @@ bool MeasureCppValue(const CppMessageMember & member, const void * value, size_t
     return false;
   }
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
-    return MeasureCppString(static_cast<const std::string *>(value), payload_size);
+    return false;
   }
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
     return MeasureCppMessageMembers(ResolveCppMembers(member.members_), value, payload_size);
@@ -974,6 +1053,9 @@ bool MeasureCppMember(const CppMessageMember & member, const uint8_t * base, siz
   }
   const void * field = base + member.offset_;
   if (!member.is_array_) {
+    if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+      return MeasureCppString(member, field, 0u, payload_size);
+    }
     return MeasureCppValue(member, field, payload_size);
   }
   if (member.size_function == nullptr) {
@@ -983,9 +1065,17 @@ bool MeasureCppMember(const CppMessageMember & member, const uint8_t * base, siz
   if (!MeasureSequenceSize(array_size, payload_size)) {
     return false;
   }
+  if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+    for (size_t i = 0; i < array_size; ++i) {
+      if (!MeasureCppString(member, field, i, payload_size)) {
+        return false;
+      }
+    }
+    return true;
+  }
   if (
-    member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING ||
-    member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
+    member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE)
+  {
     if (member.get_const_function == nullptr) {
       return false;
     }
@@ -1032,10 +1122,14 @@ bool WriteCppMessage(
   size_t capacity, size_t * offset);
 
 bool WriteCppString(
-  const std::string * value, uint8_t * buffer, size_t capacity, size_t * offset)
+  const CppMessageMember & member, const void * field, size_t index,
+  uint8_t * buffer, size_t capacity, size_t * offset)
 {
-  return value != nullptr && WriteSequenceSize(value->size(), buffer, capacity, offset) &&
-         WriteBytes(value->data(), value->size(), buffer, capacity, offset);
+  const char * data = nullptr;
+  size_t size = 0u;
+  return ReadCppStringView(member, field, index, &data, &size) &&
+         WriteSequenceSize(size, buffer, capacity, offset) &&
+         WriteBytes(data, size, buffer, capacity, offset);
 }
 
 bool WriteCppValue(
@@ -1046,7 +1140,7 @@ bool WriteCppValue(
     return false;
   }
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
-    return WriteCppString(static_cast<const std::string *>(value), buffer, capacity, offset);
+    return false;
   }
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
     return WriteCppMessage(ResolveCppMembers(member.members_), value, buffer, capacity, offset);
@@ -1064,6 +1158,9 @@ bool WriteCppMember(
   }
   const void * field = base + member.offset_;
   if (!member.is_array_) {
+    if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+      return WriteCppString(member, field, 0u, buffer, capacity, offset);
+    }
     return WriteCppValue(member, field, buffer, capacity, offset);
   }
   if (member.size_function == nullptr) {
@@ -1074,12 +1171,19 @@ bool WriteCppMember(
     return false;
   }
   for (size_t i = 0; i < array_size; ++i) {
+    if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+      if (!WriteCppString(member, field, i, buffer, capacity, offset)) {
+        return false;
+      }
+      continue;
+    }
     if (
-      member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING ||
-      member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
+      member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE)
+    {
       if (
         member.get_const_function == nullptr ||
-        !WriteCppValue(member, member.get_const_function(field, i), buffer, capacity, offset)) {
+        !WriteCppValue(member, member.get_const_function(field, i), buffer, capacity, offset))
+      {
         return false;
       }
       continue;
@@ -1122,6 +1226,26 @@ bool DeserializeCppMessage(
   const CppMessageMembers * members, const uint8_t * data, size_t len, size_t * offset,
   void * ros_message);
 
+bool DeserializeCppString(
+  const CppMessageMember & member, const uint8_t * data, size_t len, size_t * offset,
+  void * field, size_t index)
+{
+  size_t string_size = 0u;
+  if (!ReadSequenceSize(data, len, offset, &string_size)) {
+    return false;
+  }
+  if (offset == nullptr || *offset > len || len - *offset < string_size) {
+    return false;
+  }
+  const char * string_data = string_size == 0u ? nullptr :
+    reinterpret_cast<const char *>(data + *offset);
+  if (!AssignCppString(member, field, index, string_data, string_size)) {
+    return false;
+  }
+  *offset += string_size;
+  return true;
+}
+
 bool DeserializeCppValue(
   const CppMessageMember & member, const uint8_t * data, size_t len, size_t * offset, void * value)
 {
@@ -1129,7 +1253,7 @@ bool DeserializeCppValue(
     return false;
   }
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
-    return DeserializeCppString(data, len, offset, static_cast<std::string *>(value));
+    return false;
   }
   if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
     return DeserializeCppMessage(ResolveCppMembers(member.members_), data, len, offset, value);
@@ -1170,6 +1294,9 @@ bool DeserializeCppMember(
   }
   void * field = base + member.offset_;
   if (!member.is_array_) {
+    if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+      return DeserializeCppString(member, data, len, offset, field, 0u);
+    }
     return DeserializeCppValue(member, data, len, offset, field);
   }
 
@@ -1183,9 +1310,15 @@ bool DeserializeCppMember(
     return false;
   }
   for (size_t i = 0; i < array_size; ++i) {
+    if (member.type_id_ == rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING) {
+      if (!DeserializeCppString(member, data, len, offset, field, i)) {
+        return false;
+      }
+      continue;
+    }
     if (
-      member.type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING &&
-      member.type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE) {
+      member.type_id_ != rosidl_typesupport_introspection_cpp::ROS_TYPE_MESSAGE)
+    {
       if (!DeserializeCppScalarArrayItem(member, data, len, offset, field, i)) {
         return false;
       }
@@ -1386,7 +1519,9 @@ bool MeasureCMessageMembers(
   return true;
 }
 
-bool MeasureCMessage(const CMessageMembers * members, const void * ros_message, size_t * payload_size)
+bool MeasureCMessage(
+  const CMessageMembers * members, const void * ros_message,
+  size_t * payload_size)
 {
   if (payload_size == nullptr) {
     return false;
@@ -1538,7 +1673,8 @@ bool DeserializeCMember(
 
   size_t array_size = 0;
   if (
-    !ReadSequenceSize(data, len, offset, &array_size) || !ResizeCArray(member, field, array_size)) {
+    !ReadSequenceSize(data, len, offset, &array_size) || !ResizeCArray(member, field, array_size))
+  {
     return false;
   }
   if (member.get_function == nullptr) {
@@ -1547,7 +1683,8 @@ bool DeserializeCMember(
   for (size_t i = 0; i < array_size; ++i) {
     if (
       member.type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_STRING &&
-      member.type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE) {
+      member.type_id_ != rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE)
+    {
       if (!DeserializeCScalarArrayItem(member, data, len, offset, field, i)) {
         return false;
       }
@@ -1654,7 +1791,7 @@ bool StringAdapter::IsValid() const
   return storage_kind_ != StorageKind::None && (cpp_members_ != nullptr || c_members_ != nullptr);
 }
 
-const std::string & StringAdapter::TypeName() const { return type_name_; }
+const std::string & StringAdapter::TypeName() const {return type_name_;}
 
 bool StringAdapter::Encode(const void * ros_message, std::vector<uint8_t> * payload) const
 {
@@ -1664,9 +1801,20 @@ bool StringAdapter::Encode(const void * ros_message, std::vector<uint8_t> * payl
   const auto * base = static_cast<const uint8_t *>(ros_message);
   if (storage_kind_ == StorageKind::Cpp) {
     if (raw_string_payload_) {
-      const uint8_t * value_base = base + cpp_members_->members_[0].offset_;
-      const auto * value = reinterpret_cast<const std::string *>(value_base);
-      payload->assign(value->begin(), value->end());
+      const auto & member = cpp_members_->members_[0];
+      const char * value_data = nullptr;
+      size_t value_size = 0u;
+      if (!ReadCppStringView(
+          member, base + member.offset_, 0u, &value_data, &value_size))
+      {
+        return false;
+      }
+      payload->clear();
+      if (value_size != 0u) {
+        payload->insert(
+          payload->end(), reinterpret_cast<const uint8_t *>(value_data),
+          reinterpret_cast<const uint8_t *>(value_data) + value_size);
+      }
       return true;
     }
     if (raw_pose_stamped_payload_) {
@@ -1679,7 +1827,8 @@ bool StringAdapter::Encode(const void * ros_message, std::vector<uint8_t> * payl
     return SerializeCppMessage(cpp_members_, ros_message, payload);
   }
   if (
-    c_members_ == nullptr || (c_members_->member_count_ != 0 && c_members_->members_ == nullptr)) {
+    c_members_ == nullptr || (c_members_->member_count_ != 0 && c_members_->members_ == nullptr))
+  {
     return false;
   }
   if (raw_string_payload_) {
@@ -1711,10 +1860,10 @@ bool StringAdapter::EncodedSize(const void * ros_message, size_t * payload_size)
   const auto * base = static_cast<const uint8_t *>(ros_message);
   if (storage_kind_ == StorageKind::Cpp) {
     if (raw_string_payload_) {
-      const auto * value = reinterpret_cast<const std::string *>(
-        base + cpp_members_->members_[0].offset_);
-      *payload_size = value->size();
-      return true;
+      const auto & member = cpp_members_->members_[0];
+      const char * value_data = nullptr;
+      return ReadCppStringView(
+        member, base + member.offset_, 0u, &value_data, payload_size);
     }
     if (raw_pose_stamped_payload_) {
       PoseStampedWireFields fields;
@@ -1727,7 +1876,9 @@ bool StringAdapter::EncodedSize(const void * ros_message, size_t * payload_size)
     return MeasureCppMessage(cpp_members_, ros_message, payload_size);
   }
   if (storage_kind_ == StorageKind::C) {
-    if (c_members_ == nullptr || (c_members_->member_count_ != 0 && c_members_->members_ == nullptr)) {
+    if (c_members_ == nullptr ||
+      (c_members_->member_count_ != 0 && c_members_->members_ == nullptr))
+    {
       return false;
     }
     if (raw_string_payload_) {
@@ -1762,11 +1913,15 @@ bool StringAdapter::EncodeIntoBuffer(
   auto * out = static_cast<uint8_t *>(buffer);
   if (storage_kind_ == StorageKind::Cpp) {
     if (raw_string_payload_) {
-      const auto * value = reinterpret_cast<const std::string *>(
-        base + cpp_members_->members_[0].offset_);
-      *payload_size = value->size();
+      const auto & member = cpp_members_->members_[0];
+      const char * value_data = nullptr;
+      if (!ReadCppStringView(
+          member, base + member.offset_, 0u, &value_data, payload_size))
+      {
+        return false;
+      }
       size_t offset = 0;
-      return WriteBytes(value->data(), value->size(), out, capacity, &offset);
+      return WriteBytes(value_data, *payload_size, out, capacity, &offset);
     }
     if (raw_pose_stamped_payload_) {
       PoseStampedWireFields fields;
@@ -1786,7 +1941,9 @@ bool StringAdapter::EncodeIntoBuffer(
            offset == required_size;
   }
   if (storage_kind_ == StorageKind::C) {
-    if (c_members_ == nullptr || (c_members_->member_count_ != 0 && c_members_->members_ == nullptr)) {
+    if (c_members_ == nullptr ||
+      (c_members_->member_count_ != 0 && c_members_->members_ == nullptr))
+    {
       return false;
     }
     if (raw_string_payload_) {
@@ -1828,10 +1985,10 @@ bool StringAdapter::Decode(const uint8_t * data, size_t len, void * ros_message)
   if (storage_kind_ == StorageKind::Cpp) {
     if (raw_string_payload_) {
       size_t effective_len = (len > 0 && data[len - 1] == '\0') ? len - 1 : len;
-      uint8_t * value_base = base + cpp_members_->members_[0].offset_;
-      auto * value = reinterpret_cast<std::string *>(value_base);
-      value->assign(reinterpret_cast<const char *>(data), effective_len);
-      return true;
+      const auto & member = cpp_members_->members_[0];
+      return AssignCppString(
+        member, base + member.offset_, 0u,
+        reinterpret_cast<const char *>(data), effective_len);
     }
     if (raw_pose_stamped_payload_) {
       PoseStampedWireFields fields;
@@ -1842,7 +1999,8 @@ bool StringAdapter::Decode(const uint8_t * data, size_t len, void * ros_message)
     return DeserializeCppMessage(cpp_members_, data, len, &offset, ros_message) && offset == len;
   }
   if (
-    c_members_ == nullptr || (c_members_->member_count_ != 0 && c_members_->members_ == nullptr)) {
+    c_members_ == nullptr || (c_members_->member_count_ != 0 && c_members_->members_ == nullptr))
+  {
     return false;
   }
   if (raw_string_payload_) {

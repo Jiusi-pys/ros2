@@ -18,7 +18,10 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace rmw_mdds_cpp {
+#include "rosidl_runtime_cpp/message_allocator.hpp"
+
+namespace rmw_mdds_cpp
+{
 
 class MddsLoanArena {
 public:
@@ -28,12 +31,12 @@ public:
   void Reset(void *storage, size_t capacity);
   void Reset();
 
-  void *Allocate(size_t size, size_t alignment);
+  void * Allocate(size_t size, size_t alignment);
   bool Contains(const void *data, size_t size) const;
 
   size_t BytesUsed() const;
   size_t SegmentCount() const;
-  void *Data() const;
+  void * Data() const;
   size_t Capacity() const;
 
 private:
@@ -43,10 +46,25 @@ private:
   size_t segment_count_ = 0;
 };
 
-void ArmLoanArenaForNextAllocation(
-    MddsLoanArena *arena, size_t allocation_count = 1u,
-    size_t alignment = alignof(std::max_align_t));
-void DisarmLoanArenaAllocation(const MddsLoanArena *arena);
+class MddsLoanMemoryResource {
+public:
+  MddsLoanMemoryResource(void *storage, size_t capacity);
+
+  void * Allocate(size_t size, size_t alignment);
+  bool Contains(const void *data, size_t size) const;
+  size_t BytesUsed() const;
+  size_t SegmentCount() const;
+  const rosidl_runtime_cpp::MessageMemoryResource * Resource() const;
+
+private:
+  static void * AllocateCallback(void *state, size_t size, size_t alignment);
+  static void DeallocateCallback(
+    void *state, void *pointer, size_t size,
+    size_t alignment);
+
+  MddsLoanArena arena_;
+  rosidl_runtime_cpp::MessageMemoryResource resource_{};
+};
 
 } // namespace rmw_mdds_cpp
 

@@ -133,6 +133,7 @@ HOST_CLI_QOS_PROBE="${ROOT_DIR}/ohos/tools/run_rmw_mdds_host_cli_qos.sh"
 HOST_CLI_TRANSIENT_LOCAL_PROBE="${ROOT_DIR}/ohos/tools/run_rmw_mdds_host_cli_transient_local.sh"
 HOST_CLI_MESSAGE_INFO_PROBE="${ROOT_DIR}/ohos/tools/run_rmw_mdds_host_cli_message_info.sh"
 ARTIFACT_CONTRACT_SCRIPT="${ROOT_DIR}/ohos/test_rmw_mdds_artifact_contracts.sh"
+ACTION_BAG_CONTRACT_SCRIPT="${ROOT_DIR}/ohos/test_rmw_mdds_action_bag_contracts.sh"
 
 require_no_child_git "src/ros2/rmw_mdds"
 
@@ -173,6 +174,9 @@ require_contains "${BOARD_SROS2_PROTECTED_PROBE}" \
 require_file "${ZERO_COPY_CONTRACT_SCRIPT}"
 require_contains "${ZERO_COPY_CONTRACT_SCRIPT}" 'RESULT\|rmw_mdds_zero_copy_contracts\|PASS'
 require_file "${ARTIFACT_CONTRACT_SCRIPT}"
+require_file "${ACTION_BAG_CONTRACT_SCRIPT}"
+require_contains "${ACTION_BAG_CONTRACT_SCRIPT}" \
+  'RESULT\|rmw_mdds_action_bag_contracts\|PASS'
 require_file "${TYPE_DESCRIPTION_PROBE}"
 require_contains "${TYPE_DESCRIPTION_PROBE}" 'RMW_IMPLEMENTATION=rmw_mdds_cpp'
 require_contains "${TYPE_DESCRIPTION_PROBE}" '/talker/get_type_description'
@@ -195,6 +199,8 @@ require_contains "${HOST_CLI_ACTION_PROBE}" 'RMW_IMPLEMENTATION=rmw_mdds_cpp'
 require_contains "${HOST_CLI_ACTION_PROBE}" 'fibonacci_action_server'
 require_contains "${HOST_CLI_ACTION_PROBE}" 'ros2 action send_goal'
 require_contains "${HOST_CLI_ACTION_PROBE}" 'action_tutorials_interfaces/action/Fibonacci'
+require_contains "${HOST_CLI_ACTION_PROBE}" 'ros2 daemon stop'
+require_contains "${HOST_CLI_ACTION_PROBE}" 'timeout .*ros2 action list'
 require_contains "${HOST_CLI_ACTION_PROBE}" 'RESULT\|rmw_mdds_host_cli_action\|PASS'
 require_file "${HOST_CLI_PARAMS_PROBE}"
 require_contains "${HOST_CLI_PARAMS_PROBE}" 'RMW_IMPLEMENTATION=rmw_mdds_cpp'
@@ -207,6 +213,9 @@ require_contains "${HOST_CLI_LIFECYCLE_PROBE}" 'RMW_IMPLEMENTATION=rmw_mdds_cpp'
 require_contains "${HOST_CLI_LIFECYCLE_PROBE}" 'lifecycle_talker'
 require_contains "${HOST_CLI_LIFECYCLE_PROBE}" 'ros2 lifecycle get'
 require_contains "${HOST_CLI_LIFECYCLE_PROBE}" 'ros2 lifecycle set'
+require_contains "${HOST_CLI_LIFECYCLE_PROBE}" 'run_lifecycle_cli'
+require_contains "${HOST_CLI_LIFECYCLE_PROBE}" 'cli_rc >= 128'
+require_contains "${HOST_CLI_LIFECYCLE_PROBE}" 'terminated abnormally'
 require_contains "${HOST_CLI_LIFECYCLE_PROBE}" 'RESULT\|rmw_mdds_host_cli_lifecycle\|PASS'
 require_file "${HOST_CLI_GRAPH_PROBE}"
 require_contains "${HOST_CLI_GRAPH_PROBE}" 'RMW_IMPLEMENTATION=rmw_mdds_cpp'
@@ -246,6 +255,7 @@ require_no_unfiltered_bridge_loaned_take_payload_copy
 "${SROS2_POLICY_CONTRACT_SCRIPT}"
 "${ZERO_COPY_CONTRACT_SCRIPT}"
 "${ARTIFACT_CONTRACT_SCRIPT}"
+"${ACTION_BAG_CONTRACT_SCRIPT}"
 run_security_enforce_fail_closed_gate
 "${HOST_CONFORMANCE_SCRIPT}"
 "${TYPE_DESCRIPTION_PROBE}"

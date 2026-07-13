@@ -1,0 +1,36 @@
+diff --git a/test_rmw_implementation/test/test_client.cpp b/test_rmw_implementation/test/test_client.cpp
+index ffa6f42..af78440 100644
+--- a/test_rmw_implementation/test/test_client.cpp
++++ b/test_rmw_implementation/test/test_client.cpp
+@@ -413,6 +413,13 @@ TEST_F(TestClient, check_qos) {
+ 
+   rmw_client_t * client =
+     rmw_create_client(node, ts, service_name, &qos_profile);
++  ASSERT_NE(nullptr, client) << rmw_get_error_string().str;
++  OSRF_TESTING_TOOLS_CPP_SCOPE_EXIT(
++  {
++    rmw_ret_t ret = rmw_destroy_client(node, client);
++    EXPECT_EQ(RMW_RET_OK, ret) << rmw_get_error_string().str;
++    rmw_reset_error();
++  });
+ 
+   rmw_qos_profile_t actual_rp_qos;
+   rmw_ret_t ret = rmw_client_request_publisher_get_actual_qos(
+diff --git a/test_rmw_implementation/test/test_service.cpp b/test_rmw_implementation/test/test_service.cpp
+index f0e21bf..67349db 100644
+--- a/test_rmw_implementation/test/test_service.cpp
++++ b/test_rmw_implementation/test/test_service.cpp
+@@ -520,6 +520,13 @@ TEST_F(TestService, check_qos) {
+ 
+   rmw_service_t * srv =
+     rmw_create_service(node, ts, service_name, &qos_profile);
++  ASSERT_NE(nullptr, srv) << rmw_get_error_string().str;
++  OSRF_TESTING_TOOLS_CPP_SCOPE_EXIT(
++  {
++    rmw_ret_t ret = rmw_destroy_service(node, srv);
++    EXPECT_EQ(RMW_RET_OK, ret) << rmw_get_error_string().str;
++    rmw_reset_error();
++  });
+ 
+   rmw_qos_profile_t actual_rp_qos;
+   rmw_ret_t ret = rmw_service_response_publisher_get_actual_qos(

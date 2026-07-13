@@ -1,0 +1,2 @@
+ohos/patches/*.patch -whitespace
+ohos/patches_full/*.patch -whitespace

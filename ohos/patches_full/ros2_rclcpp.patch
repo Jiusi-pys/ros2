@@ -1,0 +1,230 @@
+diff --git a/rclcpp_action/include/rclcpp_action/client.hpp b/rclcpp_action/include/rclcpp_action/client.hpp
+index 742f1313..8369cf42 100644
+--- a/rclcpp_action/include/rclcpp_action/client.hpp
++++ b/rclcpp_action/include/rclcpp_action/client.hpp
+@@ -28,12 +28,14 @@
+ 
+ #include "rcl/event_callback.h"
+ 
++#include "rclcpp/clock.hpp"
+ #include "rclcpp/exceptions.hpp"
+ #include "rclcpp/macros.hpp"
+ #include "rclcpp/node_interfaces/node_base_interface.hpp"
+ #include "rclcpp/node_interfaces/node_logging_interface.hpp"
+ #include "rclcpp/node_interfaces/node_graph_interface.hpp"
+ #include "rclcpp/logger.hpp"
++#include "rclcpp/qos.hpp"
+ #include "rclcpp/time.hpp"
+ #include "rclcpp/waitable.hpp"
+ 
+@@ -180,6 +182,13 @@ public:
+   // End Waitables API
+   // -----------------
+ 
++  RCLCPP_ACTION_PUBLIC
++  void
++  configure_introspection(
++    rclcpp::Clock::SharedPtr clock,
++    const rclcpp::QoS & qos_service_event_pub,
++    rcl_service_introspection_state_t introspection_state);
++
+ protected:
+   RCLCPP_ACTION_PUBLIC
+   ClientBase(
+diff --git a/rclcpp_action/include/rclcpp_action/server.hpp b/rclcpp_action/include/rclcpp_action/server.hpp
+index dc64991c..4d716fb2 100644
+--- a/rclcpp_action/include/rclcpp_action/server.hpp
++++ b/rclcpp_action/include/rclcpp_action/server.hpp
+@@ -27,9 +27,11 @@
+ #include "rcl_action/action_server.h"
+ #include "rosidl_runtime_c/action_type_support_struct.h"
+ #include "rosidl_typesupport_cpp/action_type_support.hpp"
++#include "rclcpp/clock.hpp"
+ #include "rclcpp/node_interfaces/node_base_interface.hpp"
+ #include "rclcpp/node_interfaces/node_clock_interface.hpp"
+ #include "rclcpp/node_interfaces/node_logging_interface.hpp"
++#include "rclcpp/qos.hpp"
+ #include "rclcpp/waitable.hpp"
+ 
+ #include "rclcpp_action/visibility_control.hpp"
+@@ -179,6 +181,13 @@ public:
+   // End Waitables API
+   // -----------------
+ 
++  RCLCPP_ACTION_PUBLIC
++  void
++  configure_introspection(
++    rclcpp::Clock::SharedPtr clock,
++    const rclcpp::QoS & qos_service_event_pub,
++    rcl_service_introspection_state_t introspection_state);
++
+ protected:
+   RCLCPP_ACTION_PUBLIC
+   ServerBase(
+diff --git a/rclcpp_action/src/client.cpp b/rclcpp_action/src/client.cpp
+index 0954e79b..627d5e1b 100644
+--- a/rclcpp_action/src/client.cpp
++++ b/rclcpp_action/src/client.cpp
+@@ -105,6 +105,7 @@ public:
+     const rcl_action_client_options_t & client_options)
+   : node_graph_(node_graph),
+     node_handle(node_base->get_shared_rcl_node_handle()),
++    action_type_support_(type_support),
+     logger(node_logging->get_logger().get_child("rclcpp_action")),
+     random_bytes_generator(std::random_device{}())
+   {
+@@ -167,6 +168,7 @@ public:
+   // node_handle must be destroyed after client_handle to prevent memory leak
+   std::shared_ptr<rcl_node_t> node_handle{nullptr};
+   std::shared_ptr<rcl_action_client_t> client_handle{nullptr};
++  const rosidl_action_type_support_t * action_type_support_;
+   rclcpp::Logger logger;
+ 
+   using ResponseCallback = std::function<void (std::shared_ptr<void> response)>;
+@@ -797,4 +799,29 @@ ClientBase::execute(const std::shared_ptr<void> & data_in)
+     }, data_ptr->data);
+ }
+ 
++void
++ClientBase::configure_introspection(
++  rclcpp::Clock::SharedPtr clock,
++  const rclcpp::QoS & qos_service_event_pub,
++  rcl_service_introspection_state_t introspection_state)
++{
++  if (clock == nullptr) {
++    throw std::invalid_argument("clock is nullptr");
++  }
++
++  rcl_publisher_options_t publisher_options = rcl_publisher_get_default_options();
++  publisher_options.qos = qos_service_event_pub.get_rmw_qos_profile();
++  rcl_ret_t ret = rcl_action_client_configure_action_introspection(
++    pimpl_->client_handle.get(),
++    pimpl_->node_handle.get(),
++    clock->get_clock_handle(),
++    pimpl_->action_type_support_,
++    publisher_options,
++    introspection_state);
++  if (ret != RCL_RET_OK) {
++    rclcpp::exceptions::throw_from_rcl_error(
++      ret, "failed to configure action client introspection");
++  }
++}
++
+ }  // namespace rclcpp_action
+diff --git a/rclcpp_action/src/server.cpp b/rclcpp_action/src/server.cpp
+index 27be4b0f..8c9ac7c1 100644
+--- a/rclcpp_action/src/server.cpp
++++ b/rclcpp_action/src/server.cpp
+@@ -75,10 +75,15 @@ class ServerBaseImpl
+ {
+ public:
+   ServerBaseImpl(
++    rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_base,
++    const rosidl_action_type_support_t * type_support,
+     rclcpp::Clock::SharedPtr clock,
+     rclcpp::Logger logger
+   )
+-  : clock_(clock), logger_(logger)
++  : node_handle_(node_base->get_shared_rcl_node_handle()),
++    action_type_support_(type_support),
++    clock_(clock),
++    logger_(logger)
+   {
+   }
+ 
+@@ -225,6 +230,9 @@ public:
+   // Lock for action_server_
+   std::recursive_mutex action_server_reentrant_mutex_;
+ 
++  std::shared_ptr<rcl_node_t> node_handle_;
++  const rosidl_action_type_support_t * action_type_support_;
++
+   rclcpp::Clock::SharedPtr clock_;
+ 
+   // Do not declare this before clock_ as this depends on clock_(see #1526)
+@@ -263,7 +271,8 @@ ServerBase::ServerBase(
+   const rcl_action_server_options_t & options
+ )
+ : pimpl_(new ServerBaseImpl(
+-      node_clock->get_clock(), node_logging->get_logger().get_child("rclcpp_action")))
++      node_base, type_support, node_clock->get_clock(),
++      node_logging->get_logger().get_child("rclcpp_action")))
+ {
+   auto deleter = [node_base](rcl_action_server_t * ptr)
+     {
+@@ -1054,3 +1063,28 @@ ServerBase::clear_on_ready_callback()
+ 
+   entity_type_to_on_ready_callback_.clear();
+ }
++
++void
++ServerBase::configure_introspection(
++  rclcpp::Clock::SharedPtr clock,
++  const rclcpp::QoS & qos_service_event_pub,
++  rcl_service_introspection_state_t introspection_state)
++{
++  if (clock == nullptr) {
++    throw std::invalid_argument("clock is nullptr");
++  }
++
++  rcl_publisher_options_t publisher_options = rcl_publisher_get_default_options();
++  publisher_options.qos = qos_service_event_pub.get_rmw_qos_profile();
++  rcl_ret_t ret = rcl_action_server_configure_action_introspection(
++    pimpl_->action_server_.get(),
++    pimpl_->node_handle_.get(),
++    clock->get_clock_handle(),
++    pimpl_->action_type_support_,
++    publisher_options,
++    introspection_state);
++  if (ret != RCL_RET_OK) {
++    rclcpp::exceptions::throw_from_rcl_error(
++      ret, "failed to configure action server introspection");
++  }
++}
+diff --git a/rclcpp_action/test/test_client.cpp b/rclcpp_action/test/test_client.cpp
+index 4371f48a..60e7f130 100644
+--- a/rclcpp_action/test/test_client.cpp
++++ b/rclcpp_action/test/test_client.cpp
+@@ -1037,3 +1037,18 @@ TEST_F(TestClientAgainstServer, execute_rcl_errors)
+       rclcpp::exceptions::RCLError);
+   }
+ }
++
++TEST_F(TestClientAgainstServer, test_configure_introspection)
++{
++  auto action_client = rclcpp_action::create_client<ActionType>(client_node, action_name);
++
++  EXPECT_THROW(
++    action_client->configure_introspection(
++      nullptr, rclcpp::SystemDefaultsQoS(), RCL_SERVICE_INTROSPECTION_CONTENTS),
++    std::invalid_argument);
++
++  EXPECT_NO_THROW(
++    action_client->configure_introspection(
++      client_node->get_clock(), rclcpp::SystemDefaultsQoS(),
++      RCL_SERVICE_INTROSPECTION_CONTENTS));
++}
+diff --git a/rclcpp_action/test/test_server.cpp b/rclcpp_action/test/test_server.cpp
+index c63d1dfd..f4d306e2 100644
+--- a/rclcpp_action/test/test_server.cpp
++++ b/rclcpp_action/test/test_server.cpp
+@@ -1075,6 +1075,19 @@ protected:
+ 
+ class TestGoalRequestServer : public TestBasicServer {};
+ 
++TEST_F(TestBasicServer, test_configure_introspection)
++{
++  EXPECT_THROW(
++    action_server_->configure_introspection(
++      nullptr, rclcpp::SystemDefaultsQoS(), RCL_SERVICE_INTROSPECTION_CONTENTS),
++    std::invalid_argument);
++
++  EXPECT_NO_THROW(
++    action_server_->configure_introspection(
++      node_->get_clock(), rclcpp::SystemDefaultsQoS(),
++      RCL_SERVICE_INTROSPECTION_CONTENTS));
++}
++
+ TEST_F(TestGoalRequestServer, execute_goal_request_received_take_goal)
+ {
+   EXPECT_NO_THROW(SendClientGoalRequest());

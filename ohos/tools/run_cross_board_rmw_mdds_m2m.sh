@@ -42,9 +42,21 @@ sh_cap() { timeout 60s "${HDC}" -t "$1" shell "$2" 2>&1 | grep -v "dumped core" 
 # lane/run otherwise survives kill_all and poisons the action lane (partial feedback / no
 # SUCCEEDED). Documented residue in MDDS_RMW_NATIVE_DEFAULTON §4.
 PAT='ros2|python3.12|topic |add_two|service call|rmw_mdds_broker|fibonacci|action_tutorials'
+LANE_PAT='ros2|python3.12|topic |add_two|service call|fibonacci|action_tutorials'
+stop_matching_processes() {
+  local device="$1"
+  local pattern="$2"
+  sh_cap "$device" "pids=\$(ps -ef | grep -E \"${pattern}\" | grep -v grep | sed -E 's/^ *[^ ]+ +([0-9]+).*/\\1/'); for pid in \${pids}; do kill \"\${pid}\" 2>/dev/null || true; done; for attempt in 1 2 3 4 5; do alive=0; for pid in \${pids}; do kill -0 \"\${pid}\" 2>/dev/null && alive=1; done; [ \${alive} -eq 0 ] && break; sleep 1; done; for pid in \${pids}; do kill -0 \"\${pid}\" 2>/dev/null && kill -9 \"\${pid}\" 2>/dev/null || true; done; true" >/dev/null
+}
 kill_all() {
   for d in "$A" "$B"; do
-    sh_cap "$d" "ps -ef | grep -E \"${PAT}\" | grep -v grep | while read -r u pid r; do kill -9 \"\${pid}\" 2>/dev/null; done; true" >/dev/null
+    # Graceful broker shutdown releases MDDS/DSoftBus resources; SIGKILL is fallback only.
+    stop_matching_processes "$d" "$PAT"
+  done
+}
+kill_lane_processes() {
+  for d in "$A" "$B"; do
+    stop_matching_processes "$d" "$LANE_PAT"
   done
 }
 trap kill_all EXIT
@@ -60,26 +72,35 @@ FAIL_COUNT=0
 # handled by the bridge (MatchTriggerVisitor) and data flows once matched.
 sh_cap "$B" "nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/bin/ros2 topic echo /m2m_chatter std_msgs/msg/String --no-daemon > ${LOG}/echo.log 2>&1' >/dev/null 2>&1 & echo s" >/dev/null
 sleep 15
-sh_cap "$A" "nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/bin/ros2 topic pub --times 40 -r 2 -w 0 /m2m_chatter std_msgs/msg/String \"{data: dualmdds_ok}\" > ${LOG}/pub.log 2>&1' >/dev/null 2>&1 & echo p" >/dev/null
-sleep 22
-# STRICT: ros2 topic pub default QoS = RELIABLE -> a matched subscriber gets ALL 40
-# (echo prints one `data: dualmdds_ok` line per received message). >40=dup-bug, <38=gross loss.
+sh_cap "$A" "rm -f ${LOG}/pub.done; nohup sh -c '${MDDS} ROS_DOMAIN_ID=${DOM} ${PFX}/bin/ros2 topic pub --times 40 -r 2 -w 0 /m2m_chatter std_msgs/msg/String \"{data: dualmdds_ok}\" > ${LOG}/pub.log 2>&1; rc=\$?; echo RMW_MDDS_PUBLISH_DONE rc=\${rc} > ${LOG}/pub.done' >/dev/null 2>&1 & echo p" >/dev/null
+PUB_DONE=""
+for _ in {1..75}; do
+  PUB_DONE="$(sh_cap "$A" "cat ${LOG}/pub.done 2>/dev/null")"
+  [[ "${PUB_DONE}" == "RMW_MDDS_PUBLISH_DONE rc=0" ]] && break
+  [[ "${PUB_DONE}" == RMW_MDDS_PUBLISH_DONE\ rc=* ]] && break
+  sleep 1
+done
+sleep 3
+# STRICT: count only after the publisher's board-side completion marker. The
+# default QoS is RELIABLE, so all 40 completed publishes must arrive exactly once.
 RX="$(sh_cap "$B" "grep -c dualmdds_ok ${LOG}/echo.log 2>/dev/null")"
 RX="${RX:-0}"; [[ "$RX" =~ ^[0-9]+$ ]] || RX=0
-if [[ "$RX" -eq 40 ]]; then
+PUB_SENT="$(sh_cap "$A" "grep -c '^publishing #' ${LOG}/pub.log 2>/dev/null")"
+PUB_SENT="${PUB_SENT:-0}"; [[ "$PUB_SENT" =~ ^[0-9]+$ ]] || PUB_SENT=0
+if [[ "${PUB_DONE}" != "RMW_MDDS_PUBLISH_DONE rc=0" ]]; then
+  echo "RESULT|m2m_pubsub_std_msgs_string|FAIL|stage=publisher_completion;marker=${PUB_DONE:-missing};published=${PUB_SENT}/40;received=${RX}/40"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+elif [[ "$RX" -eq 40 && "$PUB_SENT" -eq 40 ]]; then
   echo "RESULT|m2m_pubsub_std_msgs_string|PASS|received=${RX}/40 exact(RELIABLE zero-loss)"
   PASS_COUNT=$((PASS_COUNT + 1))
-elif [[ "$RX" -ge 38 && "$RX" -le 40 ]]; then
-  echo "RESULT|m2m_pubsub_std_msgs_string|PASS|received=${RX}/40 WARN:lost $((40-RX)) in cross-board match-settle"
-  PASS_COUNT=$((PASS_COUNT + 1))
 else
-  echo "RESULT|m2m_pubsub_std_msgs_string|FAIL|received=${RX}/40 (want 38-40)"
+  echo "RESULT|m2m_pubsub_std_msgs_string|FAIL|published=${PUB_SENT}/40;received=${RX}/40 (want exact 40/40)"
   FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 # Reuse the broad cleanup (matches python3.12/ros2/topic on both boards): toybox
 # `ps -ef` can truncate the COMMAND column so a narrow 'topic pub'/'topic echo'
 # substring may miss the process and leak the lane-1 subscriber into lane 2.
-kill_all
+kill_lane_processes
 sleep 2
 
 # ---- Lane 2: service (AddTwoInts), A client -> B server --------------------
@@ -103,7 +124,7 @@ else
   echo "--- client call.log ---"; sh_cap "$A" "cat ${LOG}/call.log 2>/dev/null | tail -6"
   echo "--- server srv.log ---";  sh_cap "$B" "cat ${LOG}/srv.log 2>/dev/null | tail -4"
 fi
-kill_all
+kill_lane_processes
 sleep 2
 
 # ---- Lane 3: action (Fibonacci, full protocol), A send_goal -> B server -----

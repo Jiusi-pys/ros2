@@ -69,8 +69,9 @@ require_remote_file() {
 
 cleanup_device() {
   local device_id="$1"
+  # Graceful broker shutdown prevents stale DSoftBus sockets across test runs.
   capture_hdc_shell "${device_id}" \
-    "ps -ef | grep -E 'topic echo ${TOPIC_NAME}|topic pub .*${TOPIC_NAME}|rmw_mdds_broker' | grep -v grep | while read -r user pid rest; do kill -9 \"\${pid}\" 2>/dev/null || true; done; rm -f '${BROKER_SOCKET}'; true" >/dev/null || true
+    "pids=\$(ps -ef | grep -E 'topic echo ${TOPIC_NAME}|topic pub .*${TOPIC_NAME}|rmw_mdds_broker' | grep -v grep | sed -E 's/^ *[^ ]+ +([0-9]+).*/\\1/'); for pid in \${pids}; do kill \"\${pid}\" 2>/dev/null || true; done; for attempt in 1 2 3 4 5; do alive=0; for pid in \${pids}; do kill -0 \"\${pid}\" 2>/dev/null && alive=1; done; [ \${alive} -eq 0 ] && break; sleep 1; done; for pid in \${pids}; do kill -0 \"\${pid}\" 2>/dev/null && kill -9 \"\${pid}\" 2>/dev/null || true; done; rm -f '${BROKER_SOCKET}'; true" >/dev/null || true
 }
 
 run_direction() {

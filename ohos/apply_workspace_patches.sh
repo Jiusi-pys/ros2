@@ -44,3 +44,11 @@ apply_patch_file "${ROOT_DIR}/src/ros2/geometry2" \
   "${PATCH_DIR}/0006-geometry2-static-transform-publisher-shutdown-help.patch"
 apply_patch_file "${ROOT_DIR}/src/ros2/geometry2" \
   "${PATCH_DIR}/0007-geometry2-ohos-python-targets.patch"
+apply_patch_file "${ROOT_DIR}/src/ros2/rmw_implementation" \
+  "${PATCH_DIR}/0008-rmw-implementation-destroy-qos-test-entities.patch"
+apply_patch_file "${ROOT_DIR}/src/ros2/rcl" \
+  "${ROOT_DIR}/ohos/patches_full/ros2_rcl.patch"
+apply_patch_file "${ROOT_DIR}/src/ros2/rclcpp" \
+  "${ROOT_DIR}/ohos/patches_full/ros2_rclcpp.patch"
+apply_patch_file "${ROOT_DIR}/src/ros2/rosbag2" \
+  "${ROOT_DIR}/ohos/patches_full/ros2_rosbag2.patch"

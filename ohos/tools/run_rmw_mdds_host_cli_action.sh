@@ -58,21 +58,32 @@ export RMW_MDDS_BROKER_SOCKET="${LOG_DIR}/broker.sock"
 export ROS_DOMAIN_ID="${DOMAIN_ID}"
 export ROS_LOG_DIR="${LOG_DIR}"
 
+stop_ros2_daemon() {
+  timeout 10s ros2 daemon stop >/dev/null 2>&1 || true
+}
+
+# ros2 action list is daemon-backed. A daemon from an earlier run can have the
+# same domain/RMW key but a different broker socket, so replace it before the
+# server and query establish their graph connections.
+stop_ros2_daemon
+
 timeout 30s ros2 run action_tutorials_cpp fibonacci_action_server >"${SERVER_LOG}" 2>&1 &
 server_pid=$!
 
 cleanup() {
   kill "${server_pid}" >/dev/null 2>&1 || true
   wait "${server_pid}" >/dev/null 2>&1 || true
+  stop_ros2_daemon
 }
 trap cleanup EXIT
 
 action_ready=0
 for _ in $(seq 1 100); do
-  if ros2 action list 2>/dev/null | grep -qx "${ACTION_NAME}"; then
+  if timeout 5s ros2 action list 2>/dev/null | grep -qx "${ACTION_NAME}"; then
     action_ready=1
     break
   fi
+  kill -0 "${server_pid}" >/dev/null 2>&1 || break
   sleep 0.25
 done
 

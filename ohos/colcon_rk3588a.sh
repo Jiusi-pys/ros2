@@ -3,6 +3,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PACKAGE_SEARCH_ROOTS=(
+  "${ROOT_DIR}/src"
+  "${ROOT_DIR}/ohos/tools"
+  "${ROOT_DIR}/src/ros2/rmw_fastrtps"
+  "${ROOT_DIR}/src/ros2/rmw_cyclonedds"
+)
 
 DEFAULT_OHOS_ROOT="/home/kaihong/M-DDS_4.1"
 if [[ ! -d "${DEFAULT_OHOS_ROOT}/command-line-tools" && -d "/home/kaihong/M-DDS/command-line-tools" ]]; then
@@ -27,10 +33,12 @@ PYTHON_BIN="${ROS2_OHOS_PYTHON_HOST:-${COMMAND_LINE_TOOLS_ROOT}/sdk/default/open
 
 UNDERLAY_PREFIX="${ROS2_OHOS_ROS2_PREFIX:-${ROOT_DIR}/install/ohos-ros2}"
 FASTDDS_PREFIX="${ROS2_OHOS_FASTDDS_INSTALL_DIR:-${ROOT_DIR}/install/ohos-fastdds}"
+CYCLONEDDS_PREFIX="${ROS2_OHOS_CYCLONEDDS_INSTALL_DIR:-${ROOT_DIR}/install/ohos-cyclonedds}"
 BUILD_BASE="${ROS2_OHOS_COLCON_BUILD_BASE:-${ROOT_DIR}/build/ohos-colcon-rk3588a}"
 INSTALL_BASE="${ROS2_OHOS_COLCON_INSTALL_BASE:-${ROOT_DIR}/install/ohos-colcon-rk3588a}"
 PYDEPS_ROOT="${ROS2_OHOS_ROS2_PYDEPS_ROOT:-${ROOT_DIR}/build/ohos-ros2/pydeps}"
 BUILD_TYPE="${ROS2_OHOS_BUILD_TYPE:-Release}"
+BUILD_TESTING="${ROS2_OHOS_BUILD_TESTING:-OFF}"
 OHOS_ARCH="${ROS2_OHOS_ARCH:-arm64-v8a}"
 OHOS_OUT_ARCH="${ROS2_OHOS_OUT_ARCH:-arm64}"
 OHOS_STL="${ROS2_OHOS_STL:-c++_static}"
@@ -44,6 +52,10 @@ TARGET_NUMPY_INCLUDE_DIR="${ROS2_OHOS_TARGET_NUMPY_INCLUDE_DIR:-${TARGET_PYTHON_
 TARGET_PYTHON_EXTENSION_SUFFIX="${ROS2_OHOS_TARGET_PYTHON_EXTENSION_SUFFIX:-.cpython-312-aarch64-linux-ohos.so}"
 TARGET_PURELIB="${INSTALL_BASE}/lib/python${TARGET_PYTHON_VERSION}/site-packages"
 UNDERLAY_TARGET_PURELIB="${UNDERLAY_PREFIX}/lib/python${TARGET_PYTHON_VERSION}/site-packages"
+if [[ -z "${ROS2_OHOS_TARGET_NUMPY_INCLUDE_DIR:-}" && ! -d "${TARGET_NUMPY_INCLUDE_DIR}" &&
+    -d "${UNDERLAY_TARGET_PURELIB}/numpy/core/include" ]]; then
+  TARGET_NUMPY_INCLUDE_DIR="${UNDERLAY_TARGET_PURELIB}/numpy/core/include"
+fi
 TARGET_SCRIPTS="${INSTALL_BASE}/bin"
 TARGET_PYTHON_BIN="${ROS2_OHOS_TARGET_PYTHON_BIN:-/data/local/release/usr/bin/python3.12}"
 REMOTE_UNDERLAY_PREFIX="${ROS2_OHOS_REMOTE_UNDERLAY_PREFIX:-/data/local/tmp/ohos-prefix}"
@@ -51,6 +63,12 @@ REMOTE_FASTDDS_PREFIX="${ROS2_OHOS_REMOTE_FASTDDS_PREFIX:-/data/local/tmp/ohos-f
 REMOTE_PYDEPS_PREFIX="${ROS2_OHOS_REMOTE_PYDEPS_PREFIX:-}"
 TINYXML2_INCLUDE_DIR_HINT="${TINYXML2_INCLUDE_DIR:-${UNDERLAY_PREFIX}/include}"
 TINYXML2_LIBRARY_HINT="${TINYXML2_LIBRARY:-${UNDERLAY_PREFIX}/lib/libtinyxml2.so}"
+LZ4_INCLUDE_DIR_HINT="${ROS2_OHOS_LZ4_INCLUDE_DIR:-${UNDERLAY_PREFIX}/opt/liblz4_vendor/include}"
+LZ4_LIBRARY_HINT="${ROS2_OHOS_LZ4_LIBRARY:-${UNDERLAY_PREFIX}/opt/liblz4_vendor/lib/liblz4.so}"
+ZSTD_INCLUDE_DIR_HINT="${ROS2_OHOS_ZSTD_INCLUDE_DIR:-${UNDERLAY_PREFIX}/opt/zstd_vendor/include}"
+ZSTD_LIBRARY_HINT="${ROS2_OHOS_ZSTD_LIBRARY:-${UNDERLAY_PREFIX}/opt/zstd_vendor/lib/libzstd.so}"
+EIGEN3_INCLUDE_DIR_HINT="${ROS2_OHOS_EIGEN3_INCLUDE_DIR:-${EIGEN3_INCLUDE_DIR:-/usr/include/eigen3}}"
+EIGEN3_CMAKE_DIR_HINT="${ROS2_OHOS_EIGEN3_DIR:-${Eigen3_DIR:-}}"
 TARGET_OPENSSL_INCLUDE_DIR_HINT="${ROS2_OHOS_OPENSSL_INCLUDE_DIR:-}"
 TARGET_OPENSSL_CRYPTO_LIBRARY_HINT="${ROS2_OHOS_OPENSSL_CRYPTO_LIBRARY:-}"
 COLCON_EVENT_HANDLERS="${ROS2_OHOS_COLCON_EVENT_HANDLERS:-console_direct+}"
@@ -145,6 +163,25 @@ if [[ "${CLEAN_INSTALL}" != "0" ]]; then
   esac
 fi
 
+if [[ -z "${EIGEN3_CMAKE_DIR_HINT}" && -f "${EIGEN3_INCLUDE_DIR_HINT}/Eigen/Core" ]]; then
+  EIGEN3_CMAKE_DIR_HINT="${BUILD_BASE}/cmake/eigen3"
+  mkdir -p "${EIGEN3_CMAKE_DIR_HINT}"
+  cat > "${EIGEN3_CMAKE_DIR_HINT}/Eigen3Config.cmake" <<EOF
+if(NOT TARGET Eigen3::Eigen)
+  add_library(Eigen3::Eigen INTERFACE IMPORTED)
+  set_target_properties(Eigen3::Eigen PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR_HINT}")
+endif()
+set(Eigen3_FOUND TRUE)
+set(EIGEN3_FOUND TRUE)
+set(Eigen3_INCLUDE_DIRS "${EIGEN3_INCLUDE_DIR_HINT}")
+set(EIGEN3_INCLUDE_DIR "${EIGEN3_INCLUDE_DIR_HINT}")
+set(EIGEN3_INCLUDE_DIRS "${EIGEN3_INCLUDE_DIR_HINT}")
+set(Eigen3_VERSION "3.3.7")
+set(EIGEN3_VERSION_STRING "3.3.7")
+EOF
+fi
+
 PURELIB="$("${PYTHON_BIN}" - <<'PY' "${UNDERLAY_PREFIX}"
 import sys
 import sysconfig
@@ -157,6 +194,9 @@ PREFIX_PATH_ENTRIES=(
   "${UNDERLAY_PREFIX}"
   "${FASTDDS_PREFIX}"
 )
+if [[ -d "${CYCLONEDDS_PREFIX}" ]]; then
+  PREFIX_PATH_ENTRIES+=("${CYCLONEDDS_PREFIX}")
+fi
 if [[ -d "${UNDERLAY_PREFIX}/opt" ]]; then
   while IFS= read -r vendor_root; do
     PREFIX_PATH_ENTRIES+=("${vendor_root}")
@@ -222,6 +262,9 @@ if [[ -d "${TARGET_PYTHON_INCLUDE_DIR}" && -f "${TARGET_PYTHON_LIBRARY}" ]]; the
     "-DRCLPY_OHOS_TARGET_PYTHON_INCLUDE_DIR=${TARGET_PYTHON_INCLUDE_DIR}"
     "-DRCLPY_OHOS_TARGET_PYTHON_LIBRARY=${TARGET_PYTHON_LIBRARY}"
     "-DRCLPY_OHOS_TARGET_PYTHON_EXTENSION_SUFFIX=${TARGET_PYTHON_EXTENSION_SUFFIX}"
+    "-DROSBAG2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR=${TARGET_PYTHON_INCLUDE_DIR}"
+    "-DROSBAG2_PY_OHOS_TARGET_PYTHON_LIBRARY=${TARGET_PYTHON_LIBRARY}"
+    "-DROSBAG2_PY_OHOS_TARGET_EXTENSION_SUFFIX=.so"
     "-DTF2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR=${TARGET_PYTHON_INCLUDE_DIR}"
     "-DTF2_PY_OHOS_TARGET_PYTHON_LIBRARY=${TARGET_PYTHON_LIBRARY}"
     "-DTF2_PY_OHOS_TARGET_EXTENSION_SUFFIX=${TARGET_PYTHON_EXTENSION_SUFFIX}"
@@ -240,6 +283,24 @@ if [[ -d "${TINYXML2_INCLUDE_DIR_HINT}" && -f "${TINYXML2_LIBRARY_HINT}" ]]; the
     "-DTINYXML2_INCLUDE_DIR=${TINYXML2_INCLUDE_DIR_HINT}"
     "-DTINYXML2_LIBRARY=${TINYXML2_LIBRARY_HINT}"
   )
+fi
+if [[ -f "${LZ4_INCLUDE_DIR_HINT}/lz4.h" && -f "${LZ4_LIBRARY_HINT}" ]]; then
+  PACKAGE_DIR_ARGS+=(
+    "-Dlz4_INCLUDE_DIR=${LZ4_INCLUDE_DIR_HINT}"
+    "-Dlz4_LIBRARY=${LZ4_LIBRARY_HINT}"
+  )
+fi
+if [[ -f "${ZSTD_INCLUDE_DIR_HINT}/zstd.h" && -f "${ZSTD_LIBRARY_HINT}" ]]; then
+  PACKAGE_DIR_ARGS+=(
+    "-Dzstd_INCLUDE_DIR=${ZSTD_INCLUDE_DIR_HINT}"
+    "-Dzstd_LIBRARY=${ZSTD_LIBRARY_HINT}"
+  )
+fi
+if [[ -f "${EIGEN3_INCLUDE_DIR_HINT}/Eigen/Core" ]]; then
+  PACKAGE_DIR_ARGS+=("-DEIGEN3_INCLUDE_DIR=${EIGEN3_INCLUDE_DIR_HINT}")
+fi
+if [[ -n "${EIGEN3_CMAKE_DIR_HINT}" && -f "${EIGEN3_CMAKE_DIR_HINT}/Eigen3Config.cmake" ]]; then
+  PACKAGE_DIR_ARGS+=("-DEigen3_DIR=${EIGEN3_CMAKE_DIR_HINT}")
 fi
 if [[ -z "${TARGET_OPENSSL_INCLUDE_DIR_HINT}" ]]; then
   for openssl_include_candidate in \
@@ -271,6 +332,45 @@ if [[ -d "${TARGET_OPENSSL_INCLUDE_DIR_HINT}" && -f "${TARGET_OPENSSL_CRYPTO_LIB
   )
 fi
 OVERLAY_PACKAGE_DIR_OVERRIDES=(
+  rosidl_runtime_c
+  rosidl_runtime_cpp
+  rosidl_generator_cpp
+  rosidl_typesupport_fastrtps_cpp
+  rosidl_typesupport_introspection_cpp
+  rosidl_dynamic_typesupport_fastrtps
+  builtin_interfaces
+  unique_identifier_msgs
+  service_msgs
+  action_msgs
+  type_description_interfaces
+  std_msgs
+  std_srvs
+  example_interfaces
+  action_tutorials_interfaces
+  test_interface_files
+  test_msgs
+  osrf_testing_tools_cpp
+  ament_lint_auto
+  ament_lint_common
+  lifecycle_msgs
+  rcl_interfaces
+  composition_interfaces
+  statistics_msgs
+  rosgraph_msgs
+  geometry_msgs
+  sensor_msgs
+  nav_msgs
+  tf2_msgs
+  rosbag2_interfaces
+  rmw_dds_common
+  libstatistics_collector
+  tf2
+  tf2_ros
+  rosbag2_storage
+  rosbag2_storage_sqlite3
+  rosbag2_cpp
+  rosbag2_transport
+  rosbag2_py
   rmw_implementation
   rcl
   rcl_action
@@ -279,6 +379,10 @@ OVERLAY_PACKAGE_DIR_OVERRIDES=(
   rclcpp_action
   rclcpp_components
   rclcpp_lifecycle
+  rmw_fastrtps_shared_cpp
+  rmw_fastrtps_cpp
+  rmw_fastrtps_dynamic_cpp
+  rmw_cyclonedds_cpp
   rmw_mdds_cpp
   demo_nodes_cpp
   action_tutorials_cpp
@@ -641,11 +745,27 @@ postprocess_install_tree() {
   rewrite_pythonpath_hooks_for_target
   rewrite_generated_cmake_python_paths_for_target
   rewrite_console_scripts_for_ohos
+  if [[ -f "${INSTALL_BASE}/lib/librmw_cyclonedds_cpp.so" &&
+      -f "${CYCLONEDDS_PREFIX}/lib/libddsc.so.0.10.5" ]]; then
+    cp -a "${CYCLONEDDS_PREFIX}/lib/libddsc.so"* "${INSTALL_BASE}/lib/"
+  fi
+}
+
+append_package_cmake_args() {
+  local package_name="$1"
+  local -n args_ref="$2"
+
+  if [[ "${package_name}" == "test_rmw_implementation" ]]; then
+    args_ref+=("-DTEST_RMW_IMPLEMENTATION_ENABLE_LINT=OFF")
+  fi
 }
 
 build_colcon_package() {
   local package_name="$1"
   local package_path="$2"
+  local -a package_cmake_args=()
+
+  append_package_cmake_args "${package_name}" package_cmake_args
 
   rm -f "${BUILD_BASE}/${package_name}"/colcon_command_prefix_*.sh.env
   rm -f "${BUILD_BASE}/${package_name}/install.log"
@@ -672,7 +792,8 @@ build_colcon_package() {
       "-DOHOS_STL=${OHOS_STL}" \
       "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}" \
       "-DPython3_EXECUTABLE=${PYTHON_BIN}" \
-      "-DBUILD_TESTING=OFF" \
+      "-DBUILD_TESTING=${BUILD_TESTING}" \
+      "${package_cmake_args[@]}" \
       "${PACKAGE_DIR_ARGS[@]}"
 }
 
@@ -682,6 +803,12 @@ build_direct_cmake_package() {
   local package_build_base="${BUILD_BASE}/${package_name}"
   local direct_cmake_prefix_path="${INSTALL_BASE}"
   local direct_pythonpath="${PYTHONPATH:-}"
+  local overlay_cmake_dir
+  local overlay_package_name
+  local overlay_package_dir_args=()
+  local -a package_cmake_args=()
+
+  append_package_cmake_args "${package_name}" package_cmake_args
 
   if [[ -n "${CMAKE_PREFIX_PATH_CMAKE}" ]]; then
     direct_cmake_prefix_path="${direct_cmake_prefix_path};${CMAKE_PREFIX_PATH_CMAKE}"
@@ -689,6 +816,12 @@ build_direct_cmake_package() {
   if [[ -d "${TARGET_PURELIB}" ]]; then
     direct_pythonpath="${direct_pythonpath:+${direct_pythonpath}:}${TARGET_PURELIB}"
   fi
+  for overlay_package_name in "${PACKAGES[@]}"; do
+    overlay_cmake_dir="${INSTALL_BASE}/share/${overlay_package_name}/cmake"
+    if [[ -d "${overlay_cmake_dir}" ]]; then
+      overlay_package_dir_args+=("-D${overlay_package_name}_DIR=${overlay_cmake_dir}")
+    fi
+  done
 
   rm -rf "${package_build_base}"
   mkdir -p "${package_build_base}" "${TARGET_PURELIB}"
@@ -708,8 +841,10 @@ build_direct_cmake_package() {
       -DCMAKE_INSTALL_PREFIX="${INSTALL_BASE}" \
       "-DCMAKE_PREFIX_PATH=${direct_cmake_prefix_path}" \
       -DPython3_EXECUTABLE="${PYTHON_BIN}" \
-      -DBUILD_TESTING=OFF \
-      "${PACKAGE_DIR_ARGS[@]}"
+      -DBUILD_TESTING="${BUILD_TESTING}" \
+      "${package_cmake_args[@]}" \
+      "${PACKAGE_DIR_ARGS[@]}" \
+      "${overlay_package_dir_args[@]}"
 
   PYTHONPATH="${direct_pythonpath}" \
     "${CMAKE_BIN}" --build "${package_build_base}" --target install -- -j"$(nproc)"
@@ -719,12 +854,12 @@ REQUESTED_PACKAGE_PATHS=()
 for package_name in "${PACKAGES[@]}"; do
   package_path="$(
     colcon list \
-      --base-paths "${ROOT_DIR}/src" \
+      --base-paths "${PACKAGE_SEARCH_ROOTS[@]}" \
       --packages-select "${package_name}" \
       --paths-only | head -n 1
   )"
   if [[ -z "${package_path}" ]]; then
-    echo "package not found under ${ROOT_DIR}/src: ${package_name}" >&2
+    echo "package not found under configured package roots: ${package_name}" >&2
     exit 1
   fi
   REQUESTED_PACKAGE_PATHS+=("${package_path}")
@@ -749,7 +884,7 @@ while IFS= read -r package_path; do
   postprocess_install_tree
 done < <(
   colcon list \
-    --base-paths "${ROOT_DIR}/src" \
+    --base-paths "${PACKAGE_SEARCH_ROOTS[@]}" \
     --topological-order \
     --packages-select "${PACKAGES[@]}" \
     --paths-only

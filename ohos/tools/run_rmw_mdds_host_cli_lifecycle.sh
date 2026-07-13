@@ -28,6 +28,7 @@ DOMAIN_ID="${RMW_MDDS_HOST_CLI_LIFECYCLE_DOMAIN_ID:-$((($$ % 80) + 150))}"
 NODE_NAME="${RMW_MDDS_HOST_CLI_LIFECYCLE_NODE:-/lc_talker}"
 LOG_DIR="${TMPDIR:-/tmp}/rmw_mdds_host_cli_lifecycle_${DOMAIN_ID}_$$"
 TALKER_LOG="${LOG_DIR}/lifecycle_talker.log"
+NODES_LOG="${LOG_DIR}/lifecycle_nodes.log"
 GET_INITIAL_LOG="${LOG_DIR}/lifecycle_get_initial.log"
 CONFIGURE_LOG="${LOG_DIR}/lifecycle_configure.log"
 GET_CONFIGURED_LOG="${LOG_DIR}/lifecycle_get_configured.log"
@@ -43,6 +44,8 @@ require_path() {
 }
 
 dump_logs() {
+  echo "--- lifecycle nodes log ---" >&2
+  sed -n '1,120p' "${NODES_LOG}" >&2 || true
   echo "--- lifecycle get initial log ---" >&2
   sed -n '1,120p' "${GET_INITIAL_LOG}" >&2 || true
   echo "--- lifecycle configure log ---" >&2
@@ -55,6 +58,23 @@ dump_logs() {
   sed -n '1,120p' "${GET_ACTIVE_LOG}" >&2 || true
   echo "--- lifecycle_talker log ---" >&2
   sed -n '1,180p' "${TALKER_LOG}" >&2 || true
+}
+
+run_lifecycle_cli() {
+  local output_log="$1"
+  shift
+  local cli_rc
+
+  set +e
+  timeout 20s "$@" >"${output_log}" 2>&1
+  cli_rc=$?
+  set -e
+  if (( cli_rc >= 128 )); then
+    echo "lifecycle CLI terminated abnormally: rc=${cli_rc} command=$*" >&2
+    dump_logs
+    exit 1
+  fi
+  return "${cli_rc}"
 }
 
 require_path "${ROOT_DIR}/install/setup.bash"
@@ -86,13 +106,14 @@ wait_lifecycle_state() {
   local deadline=$((SECONDS + 30))
 
   while (( SECONDS < deadline )); do
-    if ! timeout 20s ros2 lifecycle nodes --no-daemon --spin-time 3 2>/dev/null |
-        grep -qx "${NODE_NAME}"; then
+    if ! run_lifecycle_cli "${NODES_LOG}" \
+        ros2 lifecycle nodes --no-daemon --spin-time 3 ||
+        ! grep -qx "${NODE_NAME}" "${NODES_LOG}"; then
       sleep 1
       continue
     fi
-    if timeout 20s ros2 lifecycle get --no-daemon --spin-time 3 \
-        "${NODE_NAME}" >"${output_log}" 2>&1 &&
+    if run_lifecycle_cli "${output_log}" \
+        ros2 lifecycle get --no-daemon --spin-time 3 "${NODE_NAME}" &&
         grep -Eq "^${expected_state}([[:space:]]|\\[)" "${output_log}"; then
       return 0
     fi
@@ -111,13 +132,14 @@ run_lifecycle_transition() {
   local deadline=$((SECONDS + 30))
 
   while (( SECONDS < deadline )); do
-    if ! timeout 20s ros2 lifecycle nodes --no-daemon --spin-time 3 2>/dev/null |
-        grep -qx "${NODE_NAME}"; then
+    if ! run_lifecycle_cli "${NODES_LOG}" \
+        ros2 lifecycle nodes --no-daemon --spin-time 3 ||
+        ! grep -qx "${NODE_NAME}" "${NODES_LOG}"; then
       sleep 1
       continue
     fi
-    if timeout 20s ros2 lifecycle set --no-daemon --spin-time 3 \
-        "${NODE_NAME}" "${transition}" >"${output_log}" 2>&1 &&
+    if run_lifecycle_cli "${output_log}" \
+        ros2 lifecycle set --no-daemon --spin-time 3 "${NODE_NAME}" "${transition}" &&
         grep -q 'Transitioning successful' "${output_log}"; then
       return 0
     fi
@@ -131,8 +153,9 @@ run_lifecycle_transition() {
 
 node_ready=0
 for _ in $(seq 1 100); do
-  if ros2 lifecycle nodes --no-daemon --spin-time 1 2>/dev/null |
-      grep -qx "${NODE_NAME}"; then
+  if run_lifecycle_cli "${NODES_LOG}" \
+      ros2 lifecycle nodes --no-daemon --spin-time 1 &&
+      grep -qx "${NODE_NAME}" "${NODES_LOG}"; then
     node_ready=1
     break
   fi

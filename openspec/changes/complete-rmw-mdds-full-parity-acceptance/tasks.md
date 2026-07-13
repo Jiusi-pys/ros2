@@ -743,6 +743,18 @@ domains 126/127 without a SoftBus restart. The broader conformance, stress, SROS
 performance, churn, and soak rows above remain tied to `e2c6a99c...`; they were not all repeated on `c3b614b2...`.
 Task 5.5 therefore remains unchecked.
 
+2026-07-13 current-source broad refresh: the same production RMW `4eb87ee4...` and bridge `c3b614b2...` now have
+fresh exact-artifact evidence for both-board POSIX direct-exec P0; P1 message/QoS 9/9; all three 50-way service
+models including ten 50/50 independent-process rounds; signed protected SROS2; three action-bag runs; 16 MiB
+topic/service repeat3; node/topic/service churn 1000/1000; action churn 100/100; both-board AArch64 conformance
+16/16; and full-stack performance 631/631. The old cross-RMW gateway `eb195e16...` failed current allocator-aware
+symbol relocation before startup. Rebuilding with the current overlay plus ROS 2 underlay produced gateway
+`a033582e...`; both board-role assignments passed the 8/8 String/Pose/BEST_EFFORT/TFMessage matrix, and the old
+binary negative control now fails before lane execution with an explicit startup marker. Current-hash full-stack
+ASAN/TSAN and the two-hour soak were not repeated in this refresh, and the measured 1 KiB gap versus Fast DDS
+(2.321 ms / 354.222 msg/s versus 0.390 ms / 2537.671 msg/s) still requires product disposition. Task 5.5 remains
+unchecked.
+
 2026-07-11 full-stack RMW performance follow-up:
 
 - A two-board rclpy RELIABLE probe reproduced the old rmw_mdds loss boundary at roughly 60 small messages while

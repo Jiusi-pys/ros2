@@ -19,12 +19,15 @@ echo verbs, but not by those commands on the target ROS 2 CLI.
 ## Preconditions
 
 1. Deploy the same current overlay to every board under test.
-2. Set the target setup path and, when required, the bridge library:
+2. On a board, load the deployed runtime environment. It supplies the Python
+   runtime, OHOS library paths, overlay, RMW selection, and bridge path:
 
    ```bash
-   export ROS2_SETUP=/data/local/tmp/ohos-colcon-rk3588a/setup.bash
-   export RMW_MDDS_BRIDGE_LIBRARY=/data/local/tmp/ohos-colcon-rk3588a/lib/libmdds_bridge_shared.z.so
+   . /data/local/tmp/rmw_mdds_env.sh
    ```
+
+   On a host, source the matching `install/setup.bash` instead and set
+   `RMW_MDDS_BRIDGE_LIBRARY` when the host test needs the production bridge.
 
 3. Select an unused domain. Cross-device runs need two distinct board IDs and
    a working DSoftBus/LNN connection.
@@ -38,13 +41,15 @@ broker mode by default, and validates topic graph, pub/sub, AddTwoInts service,
 and Fibonacci action:
 
 ```bash
-ROS_DOMAIN_ID=93 \
-ROS2_SETUP=/data/local/tmp/ohos-colcon-rk3588a/setup.bash \
-RMW_MDDS_BROKER=1 \
-/data/local/tmp/ohos-colcon-rk3588a/ohos/tools/rmw_mdds_cli_smoke.sh
+. /data/local/tmp/rmw_mdds_env.sh
+ROS_DOMAIN_ID=93 RMW_MDDS_BROKER=1 \
+  /data/local/tmp/ohos-colcon-rk3588a/ohos/tools/rmw_mdds_cli_smoke.sh
 ```
 
-For a host overlay, use its `install/setup.bash` instead. Required markers:
+The board script uses `#!/bin/sh` and must be invoked directly as shown; `sh script`
+is no longer a required workaround. `ROS2_SETUP` remains available for a POSIX
+setup script only when the surrounding environment already provides the target
+Python and OHOS runtime paths. Required markers:
 
 ```text
 RESULT|rmw_mdds_cli_topic_list|PASS

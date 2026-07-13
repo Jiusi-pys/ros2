@@ -1,5 +1,49 @@
 # RK3588A Test Results
 
+## Current-Source Gateway ABI And Broad Exact-Artifact Refresh (2026-07-13 host time)
+
+This refresh supersedes the narrower current-artifact statement in the next section. The persistent
+`all ROS 2 features / production-ready` goal remains **NOT COMPLETE**, and OpenSpec task 5.5 remains unchecked.
+
+Both RK3588A boards read back the same active artifacts:
+
+```text
+librmw_mdds_cpp.so=4eb87ee40ff80788444606757affe65b2fe69d9c6d8f487f07598f5af76ec65b
+libmdds_bridge_shared.z.so=c3b614b227521ea6f8c29fdf77b3875336facaaf4eeb1b088dbeb6c4605d8d60
+mdds_dds_gateway=a033582ef631619c05d71cd74775acf78240c78d4f58a4dd98ad52018fafed70
+```
+
+- The board CLI smoke script is now POSIX `/bin/sh` and performs bounded process-tree cleanup. Direct execution
+  through its shebang passed topic list, topic, AddTwoInts, and Fibonacci on both boards (domains 223 and 224),
+  with the final `RESULT|rmw_mdds_cli_smoke|PASS`, `BOARD_RC=0`, and `BROKER_COUNT=0` markers. The former
+  workaround `sh script` is no longer required.
+- The old gateway `eb195e16...` reproducibly failed before `main()` with allocator-aware generated-type relocation
+  errors. Rebuilding against the current overlay plus the ROS 2 underlay produced `a033582e...`; it loaded all four
+  mappings and emitted `gateway started`. The build also completed `ros2_to_mdds_cli` and `ros2_mdds_inproc` after
+  the allocator-aware String payload was copied explicitly at the CLI boundary.
+- The matrix runner now fails before any lane when the gateway exits during startup. An old-ABI negative control
+  returned `RESULT|gateway_start|FAIL` and nonzero status in 4.2 seconds. The current gateway then passed 8/8
+  String, PoseStamped, BEST_EFFORT, and TFMessage directions on domains 217/218, and another 8/8 after swapping
+  board roles on domains 219/220. Every lane advanced the expected `toDds` or `toMdds` counter.
+- Current `c3b614b2...` feature evidence also includes the 9/9 message/QoS matrix; all three 50-way service models,
+  including 10/10 independent-process rounds with 50/50 server-visible requests; signed protected SROS2; three
+  action-bag runs; 16 MiB topic and service repeat3; 1000 node/topic/service churn rounds; 100 action churn rounds;
+  and 16/16 AArch64 `test_rmw_implementation` programs on each board.
+- The current full-stack performance run delivered 631/631 rmw_mdds samples with no missing acknowledgement or
+  publish error. At 1 KiB, rmw_mdds measured p95 2.321 ms and 354.222 messages/s; Fast DDS measured 0.390 ms and
+  2537.671 messages/s. The technical 50 ms / 100 messages/s gate passes, but the approximately 5.95x latency and
+  14% throughput comparison remains a product-acceptance issue.
+- Fresh host regression after the fixes passed package CTest 24/24, the rmw_mdds upstream subset 16/16, every host
+  CLI lane, the script/security/zero-copy/action-bag/artifact contracts, and the seven full-stack performance tests.
+  Both OpenSpec strict validation commands also passed.
+- The matrix cleanup now removes stale test brokers and the default test socket. Final inspection found no related
+  gateway, broker, ROS CLI, service, or action process on either board. Host `hdc` exit 139 remains non-authoritative
+  when board markers and hashes are complete.
+
+Current-hash full-stack ASAN/TSAN and the two-hour soak were not repeated during this refresh. Their historical
+accepted artifacts remain documented below but are not relabeled as `c3b614b2...` evidence. Together with final
+P2/P3 audit and explicit disposition of the measured small-message performance gap, these keep task 5.5 open.
+
 ## Current-Source Rapid-Restart Refresh (2026-07-12 host time)
 
 This refresh supersedes only the exact-artifact/current wording in the next `e2c6a99c...` checkpoint. The

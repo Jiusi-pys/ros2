@@ -16,6 +16,17 @@ Do not pass `--no-daemon` to `ros2 topic pub`, `ros2 service call`,
 `ros2 action send_goal`, or `ros2 run`. It is accepted by graph/listing and
 echo verbs, but not by those commands on the target ROS 2 CLI.
 
+## Current Checkpoint (2026-07-13)
+
+The current scheme-A production artifacts pass P0/P1, all three 50-way service models for 30/30 rounds,
+cross-board QoS/types, action-bag, signed/protected SROS2, exact 16 MiB topic/service repeat10, graph churn,
+both-board conformance, and current-source ASAN/TSAN. The 1 KiB throughput improved from 362.415 to
+1774.141 msg/s, but Fast DDS in the same matrix is 2482.394 msg/s with lower latency.
+
+Overall status remains `INCOMPLETE`: the exact current hash has not repeated the two-hour service/concurrent-large
+soak, six conformance conditions are explicitly skipped, LeakSanitizer is unavailable, and the remaining
+performance gap has not been accepted for production.
+
 ## Preconditions
 
 1. Deploy the same current overlay to every board under test.
@@ -68,10 +79,14 @@ the script. Confirm `RMW=rmw_mdds_cpp` is printed before accepting output.
 Run the existing contracts and runners in this order:
 
 ```bash
-./ohos/test_rmw_mdds_delivery_contracts.sh
-./ohos/test_rmw_mdds_artifact_contracts.sh
-./ohos/test_rmw_mdds_action_bag_contracts.sh
+bash ./ohos/test_rmw_mdds_delivery_contracts.sh
+bash ./ohos/test_rmw_mdds_artifact_contracts.sh
+bash ./ohos/test_rmw_mdds_action_bag_contracts.sh
 ./ohos/tools/run_cross_board_rmw_mdds_m2m.sh <board-a> <board-b> 93
+./ohos/tools/run_cross_board_rmw_mdds_matrix.sh <board-a> <board-b> 101
+./ohos/tools/run_cross_board_rmw_mdds_action_bag.sh <board-a> <board-b> 103 104
+./ohos/tools/run_cross_board_rmw_mdds_sros2_policy.sh <board-a> <board-b> 105
+./ohos/tools/run_cross_board_rmw_mdds_sros2_protected.sh <board-a> <board-b> 106
 ```
 
 P1 requires independent markers for QoS behavior, service, action, rosbag
@@ -80,31 +95,93 @@ board result files and runner logs.
 
 ## P2: Stress And Runtime Evidence
 
-P2 is a hard gate, not a smoke extension. Run the service stress matrix across
-the supported concurrency models and retain structured counters:
+P2 is a hard gate, not a smoke extension. Run all supported service concurrency
+models with independent domains and retain structured counters:
 
 ```bash
-for n in 1 2 4 8 16 24 30 31 32 40 50 64; do
-  for round in $(seq 1 10); do
-    ./ohos/tools/run_rmw_mdds_service_stress.sh --clients "$n" --timeout 75 --round "$round"
-  done
+domain=110
+for mode in processes many_clients_one_process one_client_many_requests; do
+  python3 ./ohos/tools/run_rmw_mdds_service_stress_gate.py \
+    --mode "$mode" --clients 50 --rounds 10 --domain "$domain" \
+    --domain-stride --prestart-broker --round-timeout 75 \
+    <server-board> <client-board>
+  domain=$((domain + 10))
 done
 ```
 
-For the 50-way gate each round must report `CLIENT_CREATED=50`,
-`CLIENT_SENT=50`, `SERVER_REQ=50`, `OK=50`, `TIMEOUT=0`, and `ERROR=0`.
-Also run the independent soak, large-message, graph-churn, security,
-cross-device, and performance runners documented by the delivery contracts.
-Do not mark P2 passed from a single CLI smoke result.
+For every 50-request round, require `CLIENT_SENT=50`, `SERVER_REQ=50`,
+`CLIENT_OK=50`, `CLIENT_TIMEOUT=0`, `CLIENT_ERROR=0`, and
+`PROCESS_TIMEOUT=0`. `CLIENT_CREATED` must match the model: 50 for
+`processes`, 50 for `many_clients_one_process`, and 1 for
+`one_client_many_requests`.
+Run the large-message and graph gates separately:
+
+```bash
+RMW_MDDS_COVERAGE2_ONLY=large \
+RMW_MDDS_COVERAGE2_SKIP_DEFAULT_LARGE=1 \
+RMW_MDDS_COVERAGE2_LARGE_EXTRA_CASES=large16m_total:16777164:10 \
+RMW_MDDS_COVERAGE2_BIG_SUB_TIMEOUT=600 \
+RMW_MDDS_COVERAGE2_HDC_TIMEOUT=720 \
+  ./ohos/tools/run_cross_board_rmw_mdds_coverage2.sh <board-a> <board-b> 140
+
+RMW_MDDS_COVERAGE2_ONLY=service_large \
+RMW_MDDS_COVERAGE2_SKIP_DEFAULT_SERVICE_LARGE=1 \
+RMW_MDDS_COVERAGE2_SERVICE_EXTRA_CASES=service_large16m_wire:16777049:10 \
+RMW_MDDS_COVERAGE2_SERVICE_SERVER_TIMEOUT=1200 \
+RMW_MDDS_COVERAGE2_SERVICE_CLIENT_TIMEOUT=900 \
+RMW_MDDS_COVERAGE2_HDC_TIMEOUT=1300 \
+  ./ohos/tools/run_cross_board_rmw_mdds_coverage2.sh <board-a> <board-b> 141
+
+RMW_MDDS_GRAPH_CHURN_MODE=rclpy \
+RMW_MDDS_GRAPH_CHURN_PROGRESS_INTERVAL=100 \
+  ./ohos/tools/run_rmw_mdds_board_graph_churn.sh <board-a> 142 1000
+
+RMW_MDDS_GRAPH_CHURN_MODE=rclpy_action \
+RMW_MDDS_GRAPH_CHURN_PROGRESS_INTERVAL=20 \
+  ./ohos/tools/run_rmw_mdds_board_graph_churn.sh <board-a> 143 100
+```
+
+The two-hour sequential service soak is an independent exact-artifact gate:
+
+```bash
+RMW_MDDS_SERVICE_REQUESTS=36000 \
+RMW_MDDS_SERVICE_INTERVAL_SECONDS=0.2 \
+RMW_MDDS_SERVICE_PROGRESS_INTERVAL=1000 \
+RMW_MDDS_HDC_TIMEOUT_SECONDS=7800 \
+RMW_MDDS_SERVICE_COMMAND_TIMEOUT_SECONDS=7700 \
+  ./ohos/tools/run_cross_board_rmw_mdds_service.sh \
+  <server-board> <client-board> 144
+```
+
+Also run the protected-security and full-stack performance runners. Do not
+mark P2 passed from a single CLI smoke result or reuse a soak from another hash.
 
 ## P3: Conformance And Sanitizers
 
-Run host conformance before declaring broad parity:
+Run host and board conformance before declaring broad parity:
 
 ```bash
+. ./install/setup.bash
 ctest --test-dir build/test_rmw_implementation --output-on-failure
-./ohos/tools/run_rmw_mdds_fullstack_tsan_board.sh <board-a> <board-b>
+./ohos/tools/run_rmw_mdds_test_rmw_board.sh <board-a> <board-b>
 ```
+
+`ohos/tools/run_rmw_mdds_fullstack_tsan_board.sh` is a **board-side** runner,
+not a host deploy wrapper. Stage the matching instrumented RMW, broker, bridge,
+16 test binaries, and complete message-library closure first, then invoke it
+with the exact expected bridge hash:
+
+```bash
+hdc -t <board-a> shell \
+  'sh /data/local/tmp/rmw_mdds_tsan_current/run_fullstack.sh \
+    /data/local/tmp/rmw_mdds_tsan_current <expected-bridge-sha256>'
+```
+
+The accepted summary must contain 16 functional passes, zero test/broker
+sanitizer findings, a live broker, the expected bridge SHA, and `BOARD_RC=0`.
+ASAN uses the same acceptance fields with its separately instrumented artifact
+set. OHOS LeakSanitizer unavailability must be recorded rather than treated as
+leak-clean evidence.
 
 Record full `test_rmw_implementation`, ASAN, TSAN, and performance-baseline
 results separately. An unrun or failed P2/P3 lane keeps the overall status

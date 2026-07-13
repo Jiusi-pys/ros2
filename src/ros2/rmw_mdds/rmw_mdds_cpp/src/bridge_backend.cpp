@@ -149,6 +149,9 @@ bool BridgeBackend::Load() {
   publisher_unacked_count_ =
       reinterpret_cast<uint32_t (*)(MddsBridgePublisher *)>(
           Symbol("MddsBridgePublisherGetUnackedCount"));
+  publisher_send_heartbeat_now_ =
+      reinterpret_cast<int32_t (*)(MddsBridgePublisher *)>(
+          Symbol("MddsBridgePublisherSendHeartbeatNow"));
   publisher_set_on_matched_ = reinterpret_cast<int32_t (*)(
       MddsBridgePublisher *, void (*)(uint32_t, void *), void *)>(
       Symbol("MddsBridgePublisherSetOnMatchedCallback"));
@@ -411,6 +414,15 @@ bool BridgeBackend::PublisherUnackedCount(void *publisher, uint32_t *count) {
   return true;
 }
 
+bool BridgeBackend::PublisherSendHeartbeatNow(void *publisher) {
+  if (!Available() || publisher == nullptr ||
+      publisher_send_heartbeat_now_ == nullptr) {
+    return false;
+  }
+  return publisher_send_heartbeat_now_(
+             static_cast<MddsBridgePublisher *>(publisher)) == 0;
+}
+
 bool BridgeBackend::PublisherSetOnMatched(void *publisher,
                                           void (*callback)(uint32_t, void *),
                                           void *user_data) {
@@ -497,6 +509,7 @@ void BridgeBackend::ResetForTesting() {
   unsubscribe_ = nullptr;
   publisher_sub_count_ = nullptr;
   publisher_unacked_count_ = nullptr;
+  publisher_send_heartbeat_now_ = nullptr;
   publisher_set_on_matched_ = nullptr;
   subscriber_pub_count_ = nullptr;
   subscriber_set_on_matched_ = nullptr;

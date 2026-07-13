@@ -1,9 +1,29 @@
 # rmw_mdds Full Parity Acceptance Matrix
 
-Audit date: 2026-07-04; post-checkpoint status sync: 2026-07-06; live spot-check, MDDS bridge refresh, graph-churn, service-large, sanitizer, upstream-conformance, performance, Plan A, rosbag runtime-link, connection-recovery, endpoint-capacity, loan-lifecycle, matched-event, native action-bag, graph-guard, broker subscription shared-loan, allocator-aware generator/typesupport, and current AArch64 conformance rechecks: 2026-07-07/12
+Audit date: 2026-07-04; post-checkpoint status sync: 2026-07-06; live spot-check, MDDS bridge refresh, graph-churn, service-large, sanitizer, upstream-conformance, performance, Plan A, rosbag runtime-link, connection-recovery, endpoint-capacity, loan-lifecycle, matched-event, native action-bag, graph-guard, broker subscription shared-loan, allocator-aware generator/typesupport, current AArch64 conformance, and immediate-HEARTBEAT scheme-A rechecks: 2026-07-07/13
 Change: `complete-rmw-mdds-full-parity-acceptance`
 
 This matrix is the current acceptance boundary for the broad "perfect/all ROS 2 middleware features" goal. A `proven` row has current code, test, contract, or board evidence. An `incomplete` row blocks production/full-feature completion until it has a RED test/contract, implementation, runtime evidence, or explicit user acceptance as out of scope. This audit does not accept any unsupported row as out of scope yet.
+
+2026-07-13 immediate-HEARTBEAT scheme-A exact-artifact follow-up:
+
+- MDDS now supports a forced HEARTBEAT that bypasses cadence only; the ROS bridge exports it, and `rmw_mdds_cpp`
+  resolves it as an optional old-ABI-compatible symbol. The broker requests it once before a RELIABLE blocked wait,
+  not on every poll. The dedicated DSoftBus OpenSpec is strict-valid.
+- Both boards run production RMW `f8f74a1b...`, broker `4437466b...`, bridge `12d87b68...`, and SoftBus client
+  `e1771298...`. The complete MDDS reliability suite passes 49/49 per board; package CTest passes 24/24.
+- Native M2M is 3/3, the gateway matrix is 8/8, all three 50-way service models total 30/30 rounds and 1,500/1,500
+  requests, action-bag and signed/protected SROS2 pass, exact 16 MiB topic/service repeat10 passes, graph churn is
+  1000/1000 plus action 100/100, and both boards pass upstream conformance 16/16 programs.
+- Current-source ASAN (`30c0482b...` RMW, `e5fc197e...` broker, `562513dd...` bridge) and TSAN (`605e091f...`,
+  `ef16089f...`, `6b260a36...`) each pass 16/16 programs on both boards with zero test/broker finding and
+  `BOARD_RC=0`. LeakSanitizer is unavailable on the target.
+- The five-size matrix is lossless. At 1 KiB, rmw_mdds is p95 3.089 ms and 1774.141 msg/s versus Fast DDS at
+  0.399 ms and 2482.394 msg/s. The old approximately 320 msg/s ceiling is closed, but performance equivalence is
+  not proven; the 4 MiB p95 comparison is 56.767 ms versus 37.292 ms.
+- The broad goal remains incomplete: current-hash two-hour service/concurrent-large soak is not repeated, six
+  upstream conditional skips remain, OHOS leak cleanliness is untestable, and product acceptance of the remaining
+  performance gap is absent.
 
 2026-07-12 dynamic shared-arena and broker-lifecycle follow-up, plus current-source rapid-restart refresh:
 

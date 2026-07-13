@@ -102,6 +102,7 @@ public:
    * provider for a local client's rq/ publisher across boards. */
   uint32_t PublisherSubCount(void *publisher);
   bool PublisherUnackedCount(void *publisher, uint32_t *count);
+  bool PublisherSendHeartbeatNow(void *publisher);
   /* Register a matched-count change listener on a bridge publisher; false if
    * unsupported by the loaded library. */
   bool PublisherSetOnMatched(void *publisher,
@@ -170,6 +171,7 @@ private:
   /* Optional (newer bridge libs): matched-count query + listener. */
   uint32_t (*publisher_sub_count_)(MddsBridgePublisher *) = nullptr;
   uint32_t (*publisher_unacked_count_)(MddsBridgePublisher *) = nullptr;
+  int32_t (*publisher_send_heartbeat_now_)(MddsBridgePublisher *) = nullptr;
   int32_t (*publisher_set_on_matched_)(MddsBridgePublisher *,
                                        void (*)(uint32_t, void *),
                                        void *) = nullptr;

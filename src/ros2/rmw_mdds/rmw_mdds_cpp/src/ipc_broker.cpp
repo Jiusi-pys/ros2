@@ -803,6 +803,18 @@ void WaitForReliableBridgeBackpressure(const EndpointDescriptor &source,
     return;
   }
 
+  const bool heartbeat_sent =
+      backend.PublisherSendHeartbeatNow(bridge_publisher);
+  if (GraphDebugEnabled()) {
+    std::fprintf(stderr,
+                 "[rmw_mdds_graph] broker bridge_backpressure_heartbeat "
+                 "entity=%llu kind=%u seq=%llu unacked=%u max=%u sent=%d\n",
+                 static_cast<unsigned long long>(sample.entity_id),
+                 static_cast<unsigned>(source.kind),
+                 static_cast<unsigned long long>(sample.sequence_number),
+                 unacked, max_unacked, heartbeat_sent ? 1 : 0);
+  }
+
   const auto timeout = service_like ? ServiceBridgeBackpressureTimeout()
                                     : TopicBridgeBackpressureTimeout();
   const auto started = std::chrono::steady_clock::now();

@@ -45,6 +45,7 @@ struct MddsBridgePublisher {
   std::vector<uint8_t> last_payload;
   int publish_count = 0;
   uint32_t unacked_count = 0;
+  int heartbeat_now_count = 0;
   MddsBridgeOnMatchedCallback matched_callback = nullptr;
   void *matched_user_data = nullptr;
 };
@@ -424,6 +425,15 @@ void FakeMddsBridgeSetPublisherUnackedCount(const char *topicName,
   }
 }
 
+int FakeMddsBridgePublisherHeartbeatNowCount(const char *topicName,
+                                             const char *typeName) {
+  const std::string topic = topicName == nullptr ? "" : topicName;
+  const std::string type = typeName == nullptr ? "" : typeName;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  const auto *publisher = FindPublisherLocked(topic, type);
+  return publisher == nullptr ? 0 : publisher->heartbeat_now_count;
+}
+
 const uint8_t *FakeMddsBridgePublisherLastPayloadData(const char *topicName,
                                                       const char *typeName) {
   const std::string topic = topicName == nullptr ? "" : topicName;
@@ -753,6 +763,17 @@ uint32_t MddsBridgePublisherGetUnackedCount(MddsBridgePublisher *pub) {
   std::lock_guard<std::mutex> lock(g_mutex);
   return pub == nullptr ? 0u : pub->unacked_count;
 }
+
+#ifndef FAKE_MDDS_BRIDGE_LEGACY_ABI
+int32_t MddsBridgePublisherSendHeartbeatNow(MddsBridgePublisher *pub) {
+  if (pub == nullptr) {
+    return -1;
+  }
+  std::lock_guard<std::mutex> lock(g_mutex);
+  ++pub->heartbeat_now_count;
+  return 0;
+}
+#endif
 
 void MddsBridgeDestroyPublisher(MddsBridgePublisher *pub) {
   {

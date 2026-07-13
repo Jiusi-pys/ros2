@@ -1,5 +1,56 @@
 # RK3588A Test Results
 
+## RELIABLE Backpressure Immediate-HEARTBEAT Refresh (2026-07-13 host time)
+
+This section supersedes the current-artifact wording below. Scheme A is implemented and validated, but the
+persistent `all ROS 2 features / production-ready` goal remains **NOT COMPLETE** and OpenSpec task 5.5 remains
+unchecked.
+
+Production hashes on both boards:
+
+```text
+librmw_mdds_cpp.so=f8f74a1b61d61c73e25e6ed9a64cb1a898880a22d52f2ada3b1d2ef7da948c90
+rmw_mdds_broker=4437466b602db4c2f895b75b5d6e1697fbc72e17445d3f1d6040d6525600a009
+libmdds_bridge_shared.z.so=12d87b68ac5e1b46b3e2eb37cb8a4892e6a321bcfb26ded91afab6c4d017ef05
+libsoftbus_client.z.so=e1771298eeb820dac59f762ca586a96e2c538e70350bc1d021f4b3d3b76aff9d
+```
+
+- The broker requests the new optional bridge HEARTBEAT operation once when a RELIABLE unacknowledged window is
+  first full. MDDS bypasses cadence only and preserves active/cache/proxy/backend checks plus send-after-unlock.
+  A legacy bridge without the symbol still loads and uses periodic recovery.
+- Host verification passed `test_ipc_broker` 36/36, `test_bridge_backend` 5/5, `test_broker_mode` 17/17 plus one
+  disabled case, package CTest 24/24, upstream subset 16/16, OHOS cross-build, and all affected contracts.
+  Both boards passed the complete MDDS reliability suite 49/49.
+- P0 smoke passed. Native cross-board topic 40/40, service `sum=42`, and Fibonacci action produced
+  `M2M_SUMMARY pass=3 fail=0`. The cross-RMW String/Pose/BEST_EFFORT/TF2 matrix passed 8/8 with gateway counters.
+- The three 50-way service models each passed 10/10 rounds. All 1,500 requests were sent/taken/responded;
+  `CLIENT_CREATED` matched each model at 50, 50, and 1 respectively. Timeout, error, and process-timeout counters
+  stayed zero. The old 30/50 request-admission symptom is not current.
+- Action-bag passed with one action, send-goal 2, cancel-goal 1, and get-result 2. Signed policy and protected SROS2
+  passed signed-artifact validation, authenticated/encrypted activation on both boards, authorized 60/60 delivery,
+  and unauthorized denial.
+- Exact-total 16 MiB topic repeat10 passed 10/10, and exact-wire 16 MiB service repeat10 passed all five 10/10
+  counters. Graph churn passed 1000/1000 node/topic/service rounds and 100/100 action rounds. Both boards passed
+  AArch64 `test_rmw_implementation` 16/16 programs, 129 assertions, zero failure, and six classified skips.
+- Current-source full-stack ASAN and TSAN each passed 16/16 programs on both boards, with no test/broker sanitizer
+  report, a live instrumented broker, exact bridge SHA, and `BOARD_RC=0`. LeakSanitizer is unavailable on OHOS.
+
+Current five-size full-stack comparison:
+
+| payload | rmw_mdds p95 | rmw_mdds msg/s | Fast DDS p95 | Fast DDS msg/s |
+|---|---:|---:|---:|---:|
+| 128 B | 2.749 ms | 1723.065 | 0.355 ms | 2587.162 |
+| 1 KiB | 3.089 ms | 1774.141 | 0.399 ms | 2482.394 |
+| 64 KiB | 5.800 ms | 812.746 | 0.805 ms | 1399.034 |
+| 1 MiB | 14.310 ms | 62.810 | 6.717 ms | 81.052 |
+| 4 MiB | 56.767 ms | 16.447 | 37.292 ms | 16.838 |
+
+All lanes had complete delivery, zero missing ACK, and zero publish error. The 1 KiB full-matrix throughput rose
+from the prior 362.415 msg/s to 1774.141 msg/s, closing the periodic-heartbeat ceiling. The result still does not
+prove Fast DDS parity: current-hash two-hour service/concurrent-large soak is not repeated, six upstream conditions
+remain skipped, leak cleanliness cannot be tested, and the remaining latency/throughput gap lacks product
+acceptance. Host `hdc` status 139 after complete board output remains non-authoritative.
+
 ## Current-Source Gateway ABI And Broad Exact-Artifact Refresh (2026-07-13 host time)
 
 This refresh supersedes the narrower current-artifact statement in the next section. The persistent

@@ -719,6 +719,26 @@ as the exact 4MiB service blocker.
 - [x] 5.4 Decide whether accepted unsupported rows still satisfy the user's "perfect/all ROS 2 middleware features" objective.
 - [ ] 5.5 Mark the persistent goal complete only if every required row is proven or explicitly accepted out of scope and no required delivery work remains.
 
+2026-07-13 immediate-HEARTBEAT scheme-A refresh: the approved bounded-window design is implemented across MDDS,
+the optional bridge ABI, and `rmw_mdds_cpp`. Production artifacts are RMW `f8f74a1b...`, broker `4437466b...`,
+bridge `12d87b68...`, and SoftBus client `e1771298...` on both boards. Host package CTest is 24/24, focused broker
+and bridge suites are green, and both boards pass the complete 49-test MDDS reliability suite.
+
+Current-hash board evidence now covers P0; native topic 40/40, AddTwoInts, and Fibonacci 3/3; cross-RMW
+String/Pose/BEST_EFFORT/TF2 8/8; all three 50-way service models for 30/30 rounds and 1,500/1,500 requests;
+signed/protected SROS2 with authenticated/encrypted activation, authorized 60/60 delivery, and unauthorized
+denial; native action-bag; exact 16 MiB topic and service repeat10; node/topic/service graph churn 1000/1000;
+action churn 100/100; and both-board upstream conformance 16/16 programs with 129 assertions and six classified
+conditional skips. Current-source full-stack ASAN and TSAN each pass 16/16 programs on both boards with zero
+test/broker finding and exact instrumented bridge hashes; OHOS LeakSanitizer remains unavailable.
+
+The five-size current performance matrix has zero missing ACK/publish error. At 1 KiB, scheme A improves the
+full-matrix rmw_mdds result from the prior 362.415 msg/s to 1774.141 msg/s (p95 3.089 ms), versus Fast DDS at
+2482.394 msg/s and 0.399 ms. This closes the periodic-heartbeat throughput ceiling, not performance equivalence;
+4 MiB rmw_mdds p95 is 56.767 ms versus 37.292 ms. Task 5.5 remains unchecked because the exact current hash has
+not repeated the two-hour service/concurrent-large soak, the remaining Fast DDS gap has no product disposition,
+six upstream conditions remain skipped, and leak cleanliness cannot be certified on this OHOS runtime.
+
 2026-07-12 checkpoint: the approved dynamic shared-arena scope is complete. RMW `4eb87ee4...`, broker
 `d754adba...`, and historical production bridge `e2c6a99c...` pass both-board conformance (`16/16` programs,
 129 assertions, six classified conditional skips), 14 local dynamic cases plus six remote shape directions, and

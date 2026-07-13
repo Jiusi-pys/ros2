@@ -52,6 +52,8 @@ int FakeMddsBridgePublisherPublishCount(const char *topicName,
 void FakeMddsBridgeSetPublisherUnackedCount(const char *topicName,
                                             const char *typeName,
                                             uint32_t count);
+int FakeMddsBridgePublisherHeartbeatNowCount(const char *topicName,
+                                             const char *typeName);
 uint32_t FakeMddsBridgePublisherHistoryDepth(const char *topicName,
                                              const char *typeName);
 int FakeMddsBridgePublisherHistoryKind(const char *topicName,
@@ -1245,6 +1247,26 @@ TEST(RmwMddsIpcBroker, RejectsBridgeWithoutRemoteOnlyPublisherCapability) {
   }
 }
 
+TEST(RmwMddsIpcBroker, AllowsBridgeWithoutImmediateHeartbeatCapability) {
+  EnvVarGuard enabled_guard("RMW_MDDS_BRIDGE");
+  EnvVarGuard library_guard("RMW_MDDS_BRIDGE_LIBRARY");
+  auto &backend = rmw_mdds_cpp::BridgeBackend::Instance();
+  backend.ResetForTesting();
+  unsetenv("RMW_MDDS_BRIDGE");
+  ASSERT_EQ(0,
+            setenv("RMW_MDDS_BRIDGE_LIBRARY", FAKE_MDDS_BRIDGE_LEGACY_PATH, 1));
+  ASSERT_TRUE(backend.Available());
+
+  rmw_qos_profile_t qos = rmw_qos_profile_default;
+  qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+  void *publisher = backend.CreatePublisher("rt/legacy_heartbeat",
+                                            "std_msgs/msg/String", &qos);
+  ASSERT_NE(nullptr, publisher);
+  EXPECT_FALSE(backend.PublisherSendHeartbeatNow(publisher));
+  backend.DestroyPublisher(publisher);
+  backend.ResetForTesting();
+}
+
 TEST(RmwMddsIpcBroker, ActivatesProtectedTransportBeforeListening) {
   EnvVarGuard bridge_guard("RMW_MDDS_BRIDGE_LIBRARY");
   EnvVarGuard authenticated_guard("RMW_MDDS_PROTECTED_TRANSPORT_AUTHENTICATED");
@@ -1956,6 +1978,8 @@ TEST(RmwMddsIpcBroker, ServiceBridgePublishWaitsForReliableAckBackpressure) {
       << error;
 
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  EXPECT_EQ(1, FakeMddsBridgePublisherHeartbeatNowCount(response_topic,
+                                                        response_type));
   EXPECT_EQ(publish_count_before,
             FakeMddsBridgePublisherPublishCount(response_topic, response_type))
       << "service bridge publish must not bypass reliable backpressure when "
@@ -2005,7 +2029,6 @@ TEST(RmwMddsIpcBroker, ReliableTopicBridgePublishWaitsForAckBackpressure) {
   ASSERT_EQ(1, FakeMddsBridgeHasPublisher(topic_name, type_name));
   const int publish_count_before =
       FakeMddsBridgePublisherPublishCount(topic_name, type_name);
-  FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 1u);
 
   rmw_mdds_cpp::ipc::SampleMessage sample;
   sample.entity_id = publisher_endpoint.entity_id;
@@ -2020,14 +2043,32 @@ TEST(RmwMddsIpcBroker, ReliableTopicBridgePublishWaitsForAckBackpressure) {
       &error))
       << error;
 
+  EXPECT_TRUE(WaitForFakePublisherPublishCountAtLeast(topic_name, type_name,
+                                                      publish_count_before + 1,
+                                                      std::chrono::seconds(1)));
+  EXPECT_EQ(0, FakeMddsBridgePublisherHeartbeatNowCount(topic_name, type_name));
+
+  const int blocked_publish_count_before =
+      FakeMddsBridgePublisherPublishCount(topic_name, type_name);
+  FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 1u);
+  sample.sequence_number = 2u;
+  ASSERT_TRUE(rmw_mdds_cpp::ipc::WriteFrame(
+      publisher.get(),
+      rmw_mdds_cpp::ipc::Frame{rmw_mdds_cpp::ipc::MessageKind::kPublishSample,
+                               3u,
+                               rmw_mdds_cpp::ipc::EncodeSampleMessage(sample)},
+      &error))
+      << error;
+
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
-  EXPECT_EQ(publish_count_before,
+  EXPECT_EQ(1, FakeMddsBridgePublisherHeartbeatNowCount(topic_name, type_name));
+  EXPECT_EQ(blocked_publish_count_before,
             FakeMddsBridgePublisherPublishCount(topic_name, type_name))
       << "reliable topic bridge publish must wait for MDDS acknowledgements";
 
   FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 0u);
   EXPECT_TRUE(WaitForFakePublisherPublishCountAtLeast(
-      topic_name, type_name, publish_count_before + 1,
+      topic_name, type_name, blocked_publish_count_before + 1,
       std::chrono::seconds(1)));
   EXPECT_EQ(sample.payload.size(),
             FakeMddsBridgePublisherLastPayloadLen(topic_name, type_name));
@@ -2149,6 +2190,7 @@ TEST(RmwMddsIpcBroker, BestEffortTopicBridgePublishBypassesAckBackpressure) {
       topic_name, type_name, publish_count_before + 1,
       std::chrono::milliseconds(250)))
       << "best-effort topic bridge publish must not wait for acknowledgements";
+  EXPECT_EQ(0, FakeMddsBridgePublisherHeartbeatNowCount(topic_name, type_name));
   FakeMddsBridgeSetPublisherUnackedCount(topic_name, type_name, 0u);
 }
 

@@ -21,6 +21,17 @@ BROKER_BIN="${PREFIX}/lib/rmw_mdds_cpp/rmw_mdds_broker"
 SUITE_BROKER_SOCKET="${RESULT_DIR}/suite.sock"
 SUITE_BROKER_LOG="${RESULT_DIR}/suite.broker.log"
 SUITE_BROKER_PID=""
+UPSTREAM_EXPECTED_PROGRAMS=16
+UPSTREAM_EXPECTED_ASSERTIONS=129
+UPSTREAM_EXPECTED_SKIPS=6
+DIRECT_LOAN_FILTER="TestSubscriptionUseLoan.*"
+DIRECT_LOAN_LOG="${RESULT_DIR}/test_subscription.direct_loan.log"
+DIRECT_LOAN_EXPECTED_PASS=3
+DIRECT_LOAN_EXPECTED_SKIP=0
+CAPABILITY_FILTER="RmwMddsPubSub.InitializesPublisherAndSubscriptionAllocations:RmwMddsPubSub.AllocationInitRejectsUnsupportedTypeSupport:RmwMddsPubSub.SerializedSizeReports*"
+CAPABILITY_LOG="${RESULT_DIR}/test_pubsub_inproc.capability.log"
+CAPABILITY_EXPECTED_PASS=5
+CAPABILITY_EXPECTED_SKIP=0
 
 TESTS="
 test_client
@@ -219,14 +230,87 @@ stop_suite_broker
 cleanup_broker_state
 trap - EXIT
 
-summary="TEST_RMW_GREEN_SUMMARY PASS=${pass} FAIL=${fail} TOTAL=${total} TEST_ASSERTIONS_PASSED=${passed_tests} SKIP_TESTS=${skipped_tests} RMW=rmw_mdds_cpp"
+direct_loan_pass=0
+direct_loan_skip=0
+direct_loan_rc=127
+direct_loan_ok=0
+test_subscription_binary="${TEST_ROOT}/bin/test_subscription"
+if [ -x "${test_subscription_binary}" ]; then
+  kill_mdds_brokers
+  cleanup_broker_state
+  export ROS_DOMAIN_ID=$((DOMAIN_BASE + 17))
+  export RMW_MDDS_BROKER=0
+  unset RMW_MDDS_BROKER_SOCKET
+  unset RMW_MDDS_BROKER_LOG
+  timeout "${TIMEOUT_SECONDS}" "${test_subscription_binary}" \
+    --gtest_color=no --gtest_filter="${DIRECT_LOAN_FILTER}" \
+    >"${DIRECT_LOAN_LOG}" 2>&1
+  direct_loan_rc=$?
+  direct_loan_pass="$(
+    sed -n -E 's/^\[  PASSED  \] ([0-9]+) tests?\..*/\1/p' \
+      "${DIRECT_LOAN_LOG}" | tail -n 1
+  )"
+  direct_loan_skip="$(
+    sed -n -E 's/^\[  SKIPPED \] ([0-9]+) tests?.*/\1/p' \
+      "${DIRECT_LOAN_LOG}" | head -n 1
+  )"
+  direct_loan_pass="${direct_loan_pass:-0}"
+  direct_loan_skip="${direct_loan_skip:-0}"
+  if [ "${direct_loan_rc}" -eq 0 ] && \
+      [ "${direct_loan_pass}" -eq "${DIRECT_LOAN_EXPECTED_PASS}" ] && \
+      [ "${direct_loan_skip}" -eq "${DIRECT_LOAN_EXPECTED_SKIP}" ]; then
+    direct_loan_ok=1
+  else
+    tail -n 80 "${DIRECT_LOAN_LOG}" 2>/dev/null || true
+  fi
+fi
+echo "DIRECT_LOAN_SUMMARY DIRECT_LOAN_PASS=${direct_loan_pass} DIRECT_LOAN_SKIP=${direct_loan_skip} DIRECT_LOAN_RC=${direct_loan_rc} RMW_MDDS_BROKER=0"
+
+capability_pass=0
+capability_skip=0
+capability_rc=127
+capability_ok=0
+capability_binary="${TEST_ROOT}/bin/test_pubsub_inproc_capability"
+if [ -x "${capability_binary}" ]; then
+  export ROS_DOMAIN_ID=$((DOMAIN_BASE + 18))
+  timeout "${TIMEOUT_SECONDS}" "${capability_binary}" \
+    --gtest_color=no --gtest_filter="${CAPABILITY_FILTER}" \
+    >"${CAPABILITY_LOG}" 2>&1
+  capability_rc=$?
+  capability_pass="$(
+    sed -n -E 's/^\[  PASSED  \] ([0-9]+) tests?\..*/\1/p' \
+      "${CAPABILITY_LOG}" | tail -n 1
+  )"
+  capability_skip="$(
+    sed -n -E 's/^\[  SKIPPED \] ([0-9]+) tests?.*/\1/p' \
+      "${CAPABILITY_LOG}" | head -n 1
+  )"
+  capability_pass="${capability_pass:-0}"
+  capability_skip="${capability_skip:-0}"
+  if [ "${capability_rc}" -eq 0 ] && \
+      [ "${capability_pass}" -eq "${CAPABILITY_EXPECTED_PASS}" ] && \
+      [ "${capability_skip}" -eq "${CAPABILITY_EXPECTED_SKIP}" ]; then
+    capability_ok=1
+  else
+    tail -n 80 "${CAPABILITY_LOG}" 2>/dev/null || true
+  fi
+fi
+echo "CAPABILITY_SUMMARY CAPABILITY_PASS=${capability_pass} CAPABILITY_SKIP=${capability_skip} CAPABILITY_RC=${capability_rc} RMW_MDDS_BROKER=0"
+cleanup_broker_state
+
+summary="TEST_RMW_GREEN_SUMMARY PASS=${pass} FAIL=${fail} TOTAL=${total} TEST_ASSERTIONS_PASSED=${passed_tests} SKIP_TESTS=${skipped_tests} DIRECT_LOAN_PASS=${direct_loan_pass} DIRECT_LOAN_SKIP=${direct_loan_skip} CAPABILITY_PASS=${capability_pass} CAPABILITY_SKIP=${capability_skip} RMW=rmw_mdds_cpp"
 printf '%s\n' "${summary}" | tee "${RESULT_DIR}/summary.txt"
-if [ "${fail}" -eq 0 ] && [ "${pass}" -eq 16 ] && [ "${total}" -eq 16 ]; then
-  echo "RESULT|rmw_mdds_test_rmw_board|PASS|programs=16|failed=0|skipped_tests=${skipped_tests}|rmw=rmw_mdds_cpp"
+if [ "${fail}" -eq 0 ] && \
+    [ "${pass}" -eq "${UPSTREAM_EXPECTED_PROGRAMS}" ] && \
+    [ "${total}" -eq "${UPSTREAM_EXPECTED_PROGRAMS}" ] && \
+    [ "${passed_tests}" -eq "${UPSTREAM_EXPECTED_ASSERTIONS}" ] && \
+    [ "${skipped_tests}" -eq "${UPSTREAM_EXPECTED_SKIPS}" ] && \
+    [ "${direct_loan_ok}" -eq 1 ] && [ "${capability_ok}" -eq 1 ]; then
+  echo "RESULT|rmw_mdds_test_rmw_board|PASS|programs=${total}|failed=0|assertions=${passed_tests}|skipped_tests=${skipped_tests}|direct_loan_pass=${direct_loan_pass}|direct_loan_skip=${direct_loan_skip}|capability_pass=${capability_pass}|capability_skip=${capability_skip}|rmw=rmw_mdds_cpp"
   echo "BOARD_RC=0"
   exit 0
 fi
 
-echo "RESULT|rmw_mdds_test_rmw_board|FAIL|programs=${total}|passed=${pass}|failed=${fail}|skipped_tests=${skipped_tests}|rmw=rmw_mdds_cpp"
+echo "RESULT|rmw_mdds_test_rmw_board|FAIL|programs=${total}|passed=${pass}|failed=${fail}|assertions=${passed_tests}|skipped_tests=${skipped_tests}|direct_loan_pass=${direct_loan_pass}|direct_loan_skip=${direct_loan_skip}|direct_loan_rc=${direct_loan_rc}|capability_pass=${capability_pass}|capability_skip=${capability_skip}|capability_rc=${capability_rc}|rmw=rmw_mdds_cpp"
 echo "BOARD_RC=1"
 exit 1

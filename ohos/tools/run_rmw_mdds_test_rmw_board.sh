@@ -19,6 +19,7 @@ Environment:
   ROS2_OHOS_INSTALL_BASE          Current AArch64 overlay install prefix
   ROS2_OHOS_REMOTE_PREFIX         Board runtime prefix
   RMW_MDDS_REMOTE_TEST_ROOT       Board test root
+  RMW_MDDS_CAPABILITY_TEST_BINARY Current AArch64 test_pubsub_inproc binary
   RMW_MDDS_TEST_TIMEOUT_SECONDS   Per-program timeout, default: 240
   RMW_MDDS_HDC_TIMEOUT_SECONDS    Host shell timeout, default: 5400
 EOF
@@ -41,6 +42,10 @@ HDC_TIMEOUT_SECONDS="${RMW_MDDS_HDC_TIMEOUT_SECONDS:-5400}"
 HDC_SEND_TIMEOUT="${RMW_MDDS_HDC_SEND_TIMEOUT:-300s}"
 HDC_SEND_VERIFY="${ROOT_DIR}/ohos/tools/hdc_send_verify.sh"
 BOARD_RUNNER="${ROOT_DIR}/ohos/tools/rmw_mdds_test_rmw_board_runner.sh"
+CAPABILITY_TEST_BINARY="${RMW_MDDS_CAPABILITY_TEST_BINARY:-${BUILD_BASE}/rmw_mdds_cpp/test_pubsub_inproc}"
+CAPABILITY_BUILD_DIR="$(dirname "${CAPABILITY_TEST_BINARY}")"
+CAPABILITY_FAKE_BRIDGE="${RMW_MDDS_CAPABILITY_FAKE_BRIDGE:-${CAPABILITY_BUILD_DIR}/libfake_mdds_bridge.so}"
+CAPABILITY_GTEST_DIR="${RMW_MDDS_CAPABILITY_GTEST_DIR:-${CAPABILITY_BUILD_DIR}/lib}"
 
 TESTS=(
   test_client
@@ -100,6 +105,10 @@ require_local_file "${HDC_SEND_VERIFY}"
 require_local_file "${BOARD_RUNNER}"
 require_local_file "${INSTALL_BASE}/lib/librmw_mdds_cpp.so"
 require_local_file "${INSTALL_BASE}/lib/libmemory_tools.so"
+require_local_file "${CAPABILITY_TEST_BINARY}"
+require_local_file "${CAPABILITY_FAKE_BRIDGE}"
+require_local_file "${CAPABILITY_GTEST_DIR}/libgtest.so"
+require_local_file "${CAPABILITY_GTEST_DIR}/libgtest_main.so"
 
 TMP_STAGE="$(mktemp -d /tmp/rmw_mdds_test_rmw.XXXXXX)"
 TMP_TARBALL="$(mktemp /tmp/rmw_mdds_test_rmw.XXXXXX.tgz)"
@@ -118,6 +127,16 @@ for test_name in "${TESTS[@]}"; do
   cp "${test_binary}" "${TMP_STAGE}/bin/${test_name}"
   chmod 755 "${TMP_STAGE}/bin/${test_name}"
 done
+
+readelf -h "${CAPABILITY_TEST_BINARY}" | grep -qE 'Machine:[[:space:]]+AArch64' || {
+  echo "Not an AArch64 capability test binary: ${CAPABILITY_TEST_BINARY}" >&2
+  exit 1
+}
+cp "${CAPABILITY_TEST_BINARY}" "${TMP_STAGE}/bin/test_pubsub_inproc_capability"
+chmod 755 "${TMP_STAGE}/bin/test_pubsub_inproc_capability"
+cp "${CAPABILITY_FAKE_BRIDGE}" "${TMP_STAGE}/lib/libfake_mdds_bridge.so"
+cp "${CAPABILITY_GTEST_DIR}/libgtest.so" "${TMP_STAGE}/lib/libgtest.so"
+cp "${CAPABILITY_GTEST_DIR}/libgtest_main.so" "${TMP_STAGE}/lib/libgtest_main.so"
 
 mapfile -t TEST_LIBS < <(
   find "${INSTALL_BASE}/lib" -maxdepth 1 -type f \

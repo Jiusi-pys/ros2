@@ -10,6 +10,8 @@ BROKER_CTL_SCRIPT="${ROOT_DIR}/ohos/tools/rmw_mdds_broker_ctl.sh"
 CROSS_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_fastdds.sh"
 CROSS_MDDS_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds.sh"
 CROSS_MDDS_SERVICE_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_service.sh"
+LARGE_SERVICE_SOAK_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_large_service_soak.sh"
+LARGE_SERVICE_SOAK_WORKER="${ROOT_DIR}/ohos/tools/rmw_mdds_large_service_soak.py"
 MATRIX_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_matrix.sh"
 M2M_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_m2m.sh"
 GATEWAY_SERVICE_SCRIPT="${ROOT_DIR}/ohos/tools/run_cross_board_rmw_mdds_service_gw.sh"
@@ -30,6 +32,7 @@ SERVICE_STRESS_GATE_SCRIPT="${ROOT_DIR}/ohos/tools/run_rmw_mdds_service_stress_g
 STAGE_RUNTIME_SCRIPT="${ROOT_DIR}/ohos/stage_colcon_runtime_closure.sh"
 COLCON_RK3588A_SCRIPT="${ROOT_DIR}/ohos/colcon_rk3588a.sh"
 TEST_RMW_IMPLEMENTATION_CMAKE="${ROOT_DIR}/src/ros2/rmw_implementation/test_rmw_implementation/CMakeLists.txt"
+RMW_MDDS_CMAKE="${ROOT_DIR}/src/ros2/rmw_mdds/rmw_mdds_cpp/CMakeLists.txt"
 SINGLE_PACKAGE_BUILD_SCRIPT="${ROOT_DIR}/ohos/build_ros2_package.sh"
 ARTIFACT_CONTRACT_SCRIPT="${ROOT_DIR}/ohos/test_rmw_mdds_artifact_contracts.sh"
 PSUTIL_STUB="${ROOT_DIR}/ohos/python_stubs/psutil.py"
@@ -93,6 +96,26 @@ require_fail_path_exits_nonzero() {
   local file="$1"
   require_contains "${file}" "RESULT\\|.*\\|FAIL"
   require_contains "${file}" "exit 1"
+}
+
+require_usage_error() {
+  local file="$1"
+  local expected="$2"
+  shift 2
+  local output
+  local status
+  set +e
+  output="$(
+    HDC_BIN=/bin/false \
+      RMW_MDDS_HDC_TIMEOUT_SECONDS=1 \
+      RMW_MDDS_HDC_RETRY_ATTEMPTS=1 \
+      "${file}" "$@" 2>&1
+  )"
+  status=$?
+  set -e
+  [[ ${status} -eq 2 ]] || fail "${file} expected usage status 2, got ${status}"
+  grep -qF -- "${expected}" <<< "${output}" ||
+    fail "${file} missing usage error ${expected}"
 }
 
 require_absent() {
@@ -248,6 +271,9 @@ require_colcon_overlay_package_dir_override "ament_lint_common"
 require_contains "${CLI_SMOKE_SCRIPT}" '^[[:space:]]*set[[:space:]]+\+u$'
 require_contains "${CLI_SMOKE_SCRIPT}" '^[[:space:]]*set[[:space:]]+-u$'
 require_contains "${TEST_RMW_IMPLEMENTATION_CMAKE}" "option\(TEST_RMW_IMPLEMENTATION_ENABLE_LINT"
+require_contains "${RMW_MDDS_CMAKE}" "rosidl_typesupport_introspection_c::rosidl_typesupport_introspection_c"
+require_contains "${RMW_MDDS_CMAKE}" "rosidl_typesupport_introspection_cpp::rosidl_typesupport_introspection_cpp"
+require_absent "${RMW_MDDS_CMAKE}" "CMAKE_INSTALL_PREFIX.*/librosidl_typesupport_introspection_[a-z]+\\.so"
 require_contains "${COLCON_RK3588A_SCRIPT}" "TEST_RMW_IMPLEMENTATION_ENABLE_LINT=OFF"
 require_occurrences "${COLCON_RK3588A_SCRIPT}" "append_package_cmake_args" 3
 require_contains "${COLCON_RK3588A_SCRIPT}" "ROSBAG2_PY_OHOS_TARGET_PYTHON_INCLUDE_DIR"
@@ -262,6 +288,10 @@ require_contains "${COLCON_RK3588A_SCRIPT}" "ROS2_OHOS_ZSTD_LIBRARY"
 require_contains "${COLCON_RK3588A_SCRIPT}" "ROS2_OHOS_EIGEN3_INCLUDE_DIR"
 require_contains "${COLCON_RK3588A_SCRIPT}" "Eigen3Config.cmake"
 require_contains "${COLCON_RK3588A_SCRIPT}" "ROS2_OHOS_BUILD_TESTING"
+require_contains "${COLCON_RK3588A_SCRIPT}" "ROS2_OHOS_RMW_MDDS_TEST_DEPENDENCY_PREFIX"
+require_contains "${COLCON_RK3588A_SCRIPT}" "RMW_MDDS_STD_MSGS_INCLUDE_DIR"
+require_contains "${COLCON_RK3588A_SCRIPT}" "RMW_MDDS_TEST_MSGS_TYPESUPPORT_CPP"
+require_contains "${COLCON_RK3588A_SCRIPT}" "RMW_MDDS_TYPE_DESCRIPTION_INTERFACES_GENERATOR_C"
 require_contains "${COLCON_RK3588A_SCRIPT}" "ROSBAG2_PY_OHOS_TARGET_PYTHON_LIBRARY"
 require_contains "${COLCON_RK3588A_SCRIPT}" "ROSBAG2_PY_OHOS_TARGET_EXTENSION_SUFFIX"
 require_contains "${SINGLE_PACKAGE_BUILD_SCRIPT}" "ROS2_OHOS_OPENSSL_INCLUDE_DIR"
@@ -401,8 +431,56 @@ require_contains "${CROSS_MDDS_SERVICE_SCRIPT}" "RESULT\\|mdds_service_soak\\|PA
 require_contains "${CROSS_MDDS_SERVICE_SCRIPT}" "TRIGGER_RESPONSE success="
 require_contains "${CROSS_MDDS_SERVICE_SCRIPT}" "TRIGGER_CLIENT_DONE"
 require_contains "${CROSS_MDDS_SERVICE_SCRIPT}" "TRIGGER_SERVER_DONE"
+require_contains "${CROSS_MDDS_SERVICE_SCRIPT}" "server and client devices must be distinct"
+require_contains "${CROSS_MDDS_SERVICE_SCRIPT}" "DOMAIN_ID > 232"
+require_contains "${CROSS_MDDS_SERVICE_SCRIPT}" "RMW_MDDS_BROKER_SOCKET"
+require_contains "${CROSS_MDDS_SERVICE_SCRIPT}" "BROKER_SOCKET"
+require_usage_error "${CROSS_MDDS_SERVICE_SCRIPT}" \
+  "server and client devices must be distinct" board-a board-a 200
+require_usage_error "${CROSS_MDDS_SERVICE_SCRIPT}" \
+  "domain id must be an integer in the range 0..232" board-a board-b 233
 require_absent "${CROSS_MDDS_SERVICE_SCRIPT}" "&&[[:space:]]+nohup"
 require_absent "${CROSS_MDDS_SERVICE_SCRIPT}" "SERVICE_TIMEOUT_SECONDS \\+ WARMUP_SECONDS"
+
+require_file "${LARGE_SERVICE_SOAK_SCRIPT}"
+require_usage "${LARGE_SERVICE_SOAK_SCRIPT}"
+[[ -f "${LARGE_SERVICE_SOAK_WORKER}" ]] || fail "missing worker ${LARGE_SERVICE_SOAK_WORKER}"
+python3 -m py_compile "${LARGE_SERVICE_SOAK_WORKER}"
+grep -q '^rmw_mdds_large_service_soak_self_test_ok$' <(
+  python3 "${LARGE_SERVICE_SOAK_WORKER}" self-test
+) || fail "${LARGE_SERVICE_SOAK_WORKER} self-test did not pass"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "RMW_IMPLEMENTATION=rmw_mdds_cpp"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "RMW_MDDS_BROKER=1"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "RMW_MDDS_LARGE_SOAK_DURATION_SECONDS"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "RMW_MDDS_LARGE_SOAK_CLIENTS"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "RMW_MDDS_LARGE_SOAK_PAYLOAD_BODY_BYTES"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "RMW_MDDS_LARGE_SOAK_MIN_REQUESTS"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "RMW_MDDS_LARGE_SOAK_REQUEST_TIMEOUT_SECONDS"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "RMW_SHA="
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "BROKER_SHA="
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "BRIDGE_SHA="
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "SOFTBUS_SHA="
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "DOMAIN_ID > 232"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "status.*139"
+require_usage_error "${LARGE_SERVICE_SOAK_SCRIPT}" \
+  "client and server devices must be distinct" board-a board-a 200
+require_usage_error "${LARGE_SERVICE_SOAK_SCRIPT}" \
+  "domain id must be an integer in the range 0..232" board-a board-b 233
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "SOAK_CLIENT_DONE"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "SOAK_SERVER_DONE"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "snapshot_value"
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "kv\[1\] == wanted"
+require_absent "${LARGE_SERVICE_SOAK_SCRIPT}" "s/\.\*valid="
+require_contains "${LARGE_SERVICE_SOAK_SCRIPT}" "RESULT\\|mdds_large_service_soak\\|PASS"
+require_fail_path_exits_nonzero "${LARGE_SERVICE_SOAK_SCRIPT}"
+grep -Fq 'echo \$? > ${SERVER_RC_FILE}' "${LARGE_SERVICE_SOAK_SCRIPT}" ||
+  fail "${LARGE_SERVICE_SOAK_SCRIPT} must preserve the server worker exit status"
+grep -Fq 'echo \$? > ${client_rc}' "${LARGE_SERVICE_SOAK_SCRIPT}" ||
+  fail "${LARGE_SERVICE_SOAK_SCRIPT} must preserve each client worker exit status"
+require_contains "${LARGE_SERVICE_SOAK_WORKER}" "SOAK_CLIENT_PROGRESS"
+require_contains "${LARGE_SERVICE_SOAK_WORKER}" "SOAK_CLIENT_DONE"
+require_contains "${LARGE_SERVICE_SOAK_WORKER}" "SOAK_SERVER_DONE"
+require_contains "${LARGE_SERVICE_SOAK_WORKER}" "done_ack"
 
 require_contains "${M2M_SCRIPT}" "device A and B must be distinct"
 require_contains "${M2M_SCRIPT}" "RESULT\\|m2m_pubsub_std_msgs_string\\|PASS"
@@ -542,6 +620,10 @@ require_contains "${FULL_OVERLAY_DEPLOY_SCRIPT}" "backup"
 require_contains "${BOARD_TEST_RMW_SCRIPT}" "test_rmw_implementation"
 require_contains "${BOARD_TEST_RMW_SCRIPT}" "libtest_msgs"
 require_contains "${BOARD_TEST_RMW_SCRIPT}" "libmemory_tools"
+require_contains "${BOARD_TEST_RMW_SCRIPT}" "RMW_MDDS_CAPABILITY_TEST_BINARY"
+require_contains "${BOARD_TEST_RMW_SCRIPT}" "test_pubsub_inproc"
+require_contains "${BOARD_TEST_RMW_SCRIPT}" "libfake_mdds_bridge\.so"
+require_contains "${BOARD_TEST_RMW_SCRIPT}" "libgtest_main\.so"
 require_contains "${BOARD_TEST_RMW_SCRIPT}" "hdc_send_verify"
 require_contains "${BOARD_TEST_RMW_SCRIPT}" "RESULT\|rmw_mdds_test_rmw_board\|PASS"
 require_contains "${BOARD_TEST_RMW_RUNNER}" "RMW_IMPLEMENTATION=rmw_mdds_cpp"
@@ -552,6 +634,18 @@ require_contains "${BOARD_TEST_RMW_RUNNER}" "TEST_RMW_GREEN_SUMMARY"
 require_contains "${BOARD_TEST_RMW_RUNNER}" "BOARD_RC=0"
 require_contains "${BOARD_TEST_RMW_RUNNER}" "start_suite_broker"
 require_contains "${BOARD_TEST_RMW_RUNNER}" "suite\.broker\.log"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "DIRECT_LOAN_FILTER"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "RMW_MDDS_BROKER=0"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "DIRECT_LOAN_SUMMARY"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "DIRECT_LOAN_EXPECTED_PASS=3"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "DIRECT_LOAN_EXPECTED_SKIP=0"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "UPSTREAM_EXPECTED_PROGRAMS=16"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "UPSTREAM_EXPECTED_ASSERTIONS=129"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "UPSTREAM_EXPECTED_SKIPS=6"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "CAPABILITY_FILTER"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "CAPABILITY_SUMMARY"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "CAPABILITY_EXPECTED_PASS=5"
+require_contains "${BOARD_TEST_RMW_RUNNER}" "CAPABILITY_EXPECTED_SKIP=0"
 require_contains "${DYNAMIC_BROKER_LOAN_BOARD_SCRIPT}" "rmw_mdds_broker_dynamic_loan_probe"
 require_contains "${DYNAMIC_BROKER_LOAN_BOARD_SCRIPT}" "--self-test"
 require_contains "${DYNAMIC_BROKER_LOAN_BOARD_SCRIPT}" "--remote-subscriber"
@@ -571,6 +665,7 @@ require_absent "${BROKER_CTL_SCRIPT}" "awk"
 require_absent "${CROSS_SCRIPT}" "awk"
 require_absent "${CROSS_MDDS_SCRIPT}" "awk"
 require_absent "${CROSS_MDDS_SERVICE_SCRIPT}" "awk"
+require_absent "${LARGE_SERVICE_SOAK_SCRIPT}" "&&[[:space:]]+nohup"
 require_absent "${M2M_SCRIPT}" "awk"
 require_absent "${GATEWAY_SERVICE_SCRIPT}" "awk"
 require_absent "${GATEWAY_ACTION_SCRIPT}" "awk"
@@ -587,6 +682,8 @@ require_no_hardcoded_device_ids "${CROSS_SCRIPT}"
 require_no_hardcoded_device_ids "${MATRIX_SCRIPT}"
 require_no_hardcoded_device_ids "${CROSS_MDDS_SCRIPT}"
 require_no_hardcoded_device_ids "${CROSS_MDDS_SERVICE_SCRIPT}"
+require_no_hardcoded_device_ids "${LARGE_SERVICE_SOAK_SCRIPT}"
+require_no_hardcoded_device_ids "${LARGE_SERVICE_SOAK_WORKER}"
 require_no_hardcoded_device_ids "${M2M_SCRIPT}"
 require_no_hardcoded_device_ids "${GATEWAY_SERVICE_SCRIPT}"
 require_no_hardcoded_device_ids "${GATEWAY_ACTION_SCRIPT}"

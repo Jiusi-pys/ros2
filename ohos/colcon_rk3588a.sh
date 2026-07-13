@@ -751,12 +751,105 @@ postprocess_install_tree() {
   fi
 }
 
+append_rmw_mdds_test_dependency_args() {
+  local -n args_ref="$1"
+  local prefix="${ROS2_OHOS_RMW_MDDS_TEST_DEPENDENCY_PREFIX:-${INSTALL_BASE}}"
+  local include_root="${prefix}/include"
+  local lib_root="${prefix}/lib"
+  local required_path
+  local required_paths=(
+    "${include_root}/std_msgs/std_msgs/msg/string.hpp"
+    "${include_root}/geometry_msgs/geometry_msgs/msg/pose.hpp"
+    "${include_root}/std_srvs/std_srvs/srv/set_bool.hpp"
+    "${include_root}/service_msgs/service_msgs/msg/service_event_info.hpp"
+    "${include_root}/builtin_interfaces/builtin_interfaces/msg/time.hpp"
+    "${include_root}/example_interfaces/example_interfaces/srv/add_two_ints.hpp"
+    "${include_root}/test_msgs/test_msgs/msg/basic_types.hpp"
+    "${include_root}/type_description_interfaces/type_description_interfaces/msg/field_type.hpp"
+    "${lib_root}/libstd_msgs__rosidl_typesupport_c.so"
+    "${lib_root}/libstd_msgs__rosidl_typesupport_cpp.so"
+    "${lib_root}/libstd_msgs__rosidl_generator_c.so"
+    "${lib_root}/libstd_msgs__rosidl_typesupport_introspection_c.so"
+    "${lib_root}/libstd_msgs__rosidl_typesupport_introspection_cpp.so"
+    "${lib_root}/libstd_msgs__rosidl_typesupport_fastrtps_cpp.so"
+    "${lib_root}/libgeometry_msgs__rosidl_typesupport_cpp.so"
+    "${lib_root}/libgeometry_msgs__rosidl_typesupport_introspection_cpp.so"
+    "${lib_root}/libgeometry_msgs__rosidl_generator_c.so"
+    "${lib_root}/libstd_srvs__rosidl_typesupport_c.so"
+    "${lib_root}/libstd_srvs__rosidl_typesupport_cpp.so"
+    "${lib_root}/libstd_srvs__rosidl_typesupport_introspection_c.so"
+    "${lib_root}/libstd_srvs__rosidl_typesupport_introspection_cpp.so"
+    "${lib_root}/libstd_srvs__rosidl_generator_c.so"
+    "${lib_root}/libservice_msgs__rosidl_generator_c.so"
+    "${lib_root}/libbuiltin_interfaces__rosidl_generator_c.so"
+    "${lib_root}/libexample_interfaces__rosidl_typesupport_cpp.so"
+    "${lib_root}/libexample_interfaces__rosidl_typesupport_introspection_cpp.so"
+    "${lib_root}/libexample_interfaces__rosidl_generator_c.so"
+    "${lib_root}/libtest_msgs__rosidl_typesupport_cpp.so"
+    "${lib_root}/libtest_msgs__rosidl_typesupport_introspection_cpp.so"
+    "${lib_root}/libtest_msgs__rosidl_generator_c.so"
+    "${lib_root}/libtype_description_interfaces__rosidl_typesupport_cpp.so"
+    "${lib_root}/libtype_description_interfaces__rosidl_typesupport_introspection_cpp.so"
+    "${lib_root}/libtype_description_interfaces__rosidl_generator_c.so"
+  )
+
+  for required_path in "${required_paths[@]}"; do
+    if [[ ! -e "${required_path}" ]]; then
+      echo "rmw_mdds_cpp test dependency not found: ${required_path}" >&2
+      return 1
+    fi
+  done
+
+  args_ref+=(
+    "-Drosidl_runtime_c_DIR=${prefix}/share/rosidl_runtime_c/cmake"
+    "-Drosidl_runtime_cpp_DIR=${prefix}/share/rosidl_runtime_cpp/cmake"
+    "-Drosidl_typesupport_introspection_c_DIR=${UNDERLAY_PREFIX}/share/rosidl_typesupport_introspection_c/cmake"
+    "-Drosidl_typesupport_introspection_cpp_DIR=${prefix}/share/rosidl_typesupport_introspection_cpp/cmake"
+    "-DRMW_MDDS_STD_MSGS_INCLUDE_DIR=${include_root}/std_msgs"
+    "-DRMW_MDDS_STD_MSGS_TYPESUPPORT_C=${lib_root}/libstd_msgs__rosidl_typesupport_c.so"
+    "-DRMW_MDDS_STD_MSGS_TYPESUPPORT_CPP=${lib_root}/libstd_msgs__rosidl_typesupport_cpp.so"
+    "-DRMW_MDDS_STD_MSGS_GENERATOR_C=${lib_root}/libstd_msgs__rosidl_generator_c.so"
+    "-DRMW_MDDS_STD_MSGS_TYPESUPPORT_INTROSPECTION_C=${lib_root}/libstd_msgs__rosidl_typesupport_introspection_c.so"
+    "-DRMW_MDDS_STD_MSGS_TYPESUPPORT_INTROSPECTION_CPP=${lib_root}/libstd_msgs__rosidl_typesupport_introspection_cpp.so"
+    "-DRMW_MDDS_STD_MSGS_TYPESUPPORT_FASTRTPS_CPP=${lib_root}/libstd_msgs__rosidl_typesupport_fastrtps_cpp.so"
+    "-DRMW_MDDS_GEOMETRY_MSGS_INCLUDE_DIR=${include_root}/geometry_msgs"
+    "-DRMW_MDDS_GEOMETRY_MSGS_TYPESUPPORT_CPP=${lib_root}/libgeometry_msgs__rosidl_typesupport_cpp.so"
+    "-DRMW_MDDS_GEOMETRY_MSGS_TYPESUPPORT_INTROSPECTION_CPP=${lib_root}/libgeometry_msgs__rosidl_typesupport_introspection_cpp.so"
+    "-DRMW_MDDS_GEOMETRY_MSGS_GENERATOR_C=${lib_root}/libgeometry_msgs__rosidl_generator_c.so"
+    "-DRMW_MDDS_STD_SRVS_INCLUDE_DIR=${include_root}/std_srvs"
+    "-DRMW_MDDS_STD_SRVS_TYPESUPPORT_C=${lib_root}/libstd_srvs__rosidl_typesupport_c.so"
+    "-DRMW_MDDS_STD_SRVS_TYPESUPPORT_CPP=${lib_root}/libstd_srvs__rosidl_typesupport_cpp.so"
+    "-DRMW_MDDS_STD_SRVS_TYPESUPPORT_INTROSPECTION_C=${lib_root}/libstd_srvs__rosidl_typesupport_introspection_c.so"
+    "-DRMW_MDDS_STD_SRVS_TYPESUPPORT_INTROSPECTION_CPP=${lib_root}/libstd_srvs__rosidl_typesupport_introspection_cpp.so"
+    "-DRMW_MDDS_STD_SRVS_GENERATOR_C=${lib_root}/libstd_srvs__rosidl_generator_c.so"
+    "-DRMW_MDDS_SERVICE_MSGS_INCLUDE_DIR=${include_root}/service_msgs"
+    "-DRMW_MDDS_SERVICE_MSGS_GENERATOR_C=${lib_root}/libservice_msgs__rosidl_generator_c.so"
+    "-DRMW_MDDS_BUILTIN_INTERFACES_INCLUDE_DIR=${include_root}/builtin_interfaces"
+    "-DRMW_MDDS_BUILTIN_INTERFACES_GENERATOR_C=${lib_root}/libbuiltin_interfaces__rosidl_generator_c.so"
+    "-DRMW_MDDS_EXAMPLE_INTERFACES_INCLUDE_DIR=${include_root}/example_interfaces"
+    "-DRMW_MDDS_EXAMPLE_INTERFACES_TYPESUPPORT_CPP=${lib_root}/libexample_interfaces__rosidl_typesupport_cpp.so"
+    "-DRMW_MDDS_EXAMPLE_INTERFACES_TYPESUPPORT_INTROSPECTION_CPP=${lib_root}/libexample_interfaces__rosidl_typesupport_introspection_cpp.so"
+    "-DRMW_MDDS_EXAMPLE_INTERFACES_GENERATOR_C=${lib_root}/libexample_interfaces__rosidl_generator_c.so"
+    "-DRMW_MDDS_TEST_MSGS_INCLUDE_DIR=${include_root}/test_msgs"
+    "-DRMW_MDDS_TEST_MSGS_TYPESUPPORT_CPP=${lib_root}/libtest_msgs__rosidl_typesupport_cpp.so"
+    "-DRMW_MDDS_TEST_MSGS_TYPESUPPORT_INTROSPECTION_CPP=${lib_root}/libtest_msgs__rosidl_typesupport_introspection_cpp.so"
+    "-DRMW_MDDS_TEST_MSGS_GENERATOR_C=${lib_root}/libtest_msgs__rosidl_generator_c.so"
+    "-DRMW_MDDS_TYPE_DESCRIPTION_INTERFACES_INCLUDE_DIR=${include_root}/type_description_interfaces"
+    "-DRMW_MDDS_TYPE_DESCRIPTION_INTERFACES_TYPESUPPORT_CPP=${lib_root}/libtype_description_interfaces__rosidl_typesupport_cpp.so"
+    "-DRMW_MDDS_TYPE_DESCRIPTION_INTERFACES_TYPESUPPORT_INTROSPECTION_CPP=${lib_root}/libtype_description_interfaces__rosidl_typesupport_introspection_cpp.so"
+    "-DRMW_MDDS_TYPE_DESCRIPTION_INTERFACES_GENERATOR_C=${lib_root}/libtype_description_interfaces__rosidl_generator_c.so"
+  )
+}
+
 append_package_cmake_args() {
   local package_name="$1"
   local -n args_ref="$2"
 
   if [[ "${package_name}" == "test_rmw_implementation" ]]; then
     args_ref+=("-DTEST_RMW_IMPLEMENTATION_ENABLE_LINT=OFF")
+  fi
+  if [[ "${package_name}" == "rmw_mdds_cpp" && "${BUILD_TESTING^^}" == "ON" ]]; then
+    append_rmw_mdds_test_dependency_args "$2"
   fi
 }
 

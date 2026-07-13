@@ -391,8 +391,6 @@ if(BUILD_TESTING)
     rosidl_typesupport_cpp::rosidl_typesupport_cpp
     rosidl_typesupport_introspection_c::rosidl_typesupport_introspection_c
     rosidl_typesupport_introspection_cpp::rosidl_typesupport_introspection_cpp
-    ${CMAKE_INSTALL_PREFIX}/lib/librosidl_typesupport_introspection_c.so
-    ${CMAKE_INSTALL_PREFIX}/lib/librosidl_typesupport_introspection_cpp.so
     ${RMW_MDDS_STD_MSGS_TYPESUPPORT_CPP}
     ${RMW_MDDS_STD_MSGS_TYPESUPPORT_INTROSPECTION_CPP}
     ${RMW_MDDS_STD_MSGS_GENERATOR_C}

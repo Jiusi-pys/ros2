@@ -54,6 +54,18 @@ SERVER_SCRIPT_REMOTE="/data/local/tmp/rmw_mdds_trigger_server.py"
 CLIENT_SCRIPT_REMOTE="/data/local/tmp/rmw_mdds_trigger_client.py"
 SERVER_LOG="${LOG_DIR}/server.log"
 CLIENT_LOG="${LOG_DIR}/client.log"
+BROKER_SOCKET="${LOG_DIR}/broker.sock"
+BROKER_LOG="${LOG_DIR}/broker.log"
+BROKER_PID_FILE="${LOG_DIR}/broker.pid"
+
+if [[ "${SERVER_DEVICE_ID}" == "${CLIENT_DEVICE_ID}" ]]; then
+  echo "server and client devices must be distinct" >&2
+  exit 2
+fi
+if ! [[ "${DOMAIN_ID}" =~ ^[0-9]+$ ]] || ((DOMAIN_ID > 232)); then
+  echo "domain id must be an integer in the range 0..232" >&2
+  exit 2
+fi
 
 if ! [[ "${SERVICE_REQUESTS}" =~ ^[0-9]+$ ]] || [[ "${SERVICE_REQUESTS}" -le 0 ]]; then
   echo "RMW_MDDS_SERVICE_REQUESTS must be a positive integer" >&2
@@ -148,7 +160,7 @@ require_remote_file() {
 
 remote_env() {
   cat <<EOF
-PREFIX='${REMOTE_PREFIX}'; UNDERLAY_PREFIX='/data/local/tmp/ohos-prefix'; FASTDDS_PREFIX='/data/local/tmp/ohos-fastdds'; BR='${BRIDGE_LIBRARY}'; VENDOR_LIB_PATH=; for dir in \${PREFIX}/opt/*/lib; do [ -d \${dir} ] && VENDOR_LIB_PATH=\${VENDOR_LIB_PATH:+\${VENDOR_LIB_PATH}:}\${dir}; done; UNDERLAY_VENDOR_LIB_PATH=; for dir in \${UNDERLAY_PREFIX}/opt/*/lib; do [ -d \${dir} ] && UNDERLAY_VENDOR_LIB_PATH=\${UNDERLAY_VENDOR_LIB_PATH:+\${UNDERLAY_VENDOR_LIB_PATH}:}\${dir}; done; export LD_PRELOAD=/data/local/release/usr/lib/libpython3.12.so.1.0; export PYTHONHOME='/data/local/release/usr'; export HOME='/data/local/tmp'; export ROS_LOG_DIR='/data/local/tmp/roslogs'; export LD_LIBRARY_PATH=\${PREFIX}/lib:\${UNDERLAY_PREFIX}/lib:\${FASTDDS_PREFIX}/lib\${VENDOR_LIB_PATH:+:\${VENDOR_LIB_PATH}}\${UNDERLAY_VENDOR_LIB_PATH:+:\${UNDERLAY_VENDOR_LIB_PATH}}:/data/local/tmp:/data/local/release/usr/lib:/system/lib64/platformsdk:/system/lib64/chipset-pub-sdk:/system/lib64; export AMENT_PREFIX_PATH=\${PREFIX}:\${UNDERLAY_PREFIX}; export CMAKE_PREFIX_PATH=\${PREFIX}:\${UNDERLAY_PREFIX}:\${FASTDDS_PREFIX}; export COLCON_PREFIX_PATH=\${PREFIX}:\${UNDERLAY_PREFIX}; export PYTHONPATH=\${PREFIX}/lib/python3.12/site-packages:\${UNDERLAY_PREFIX}/lib/python3.12/site-packages:\${UNDERLAY_PREFIX}/lib/python3.11/site-packages; export ROS_DOMAIN_ID='${DOMAIN_ID}'; export RMW_IMPLEMENTATION='rmw_mdds_cpp'; export RMW_MDDS_BROKER=1; export RMW_MDDS_BRIDGE_LIBRARY=\${BR};
+PREFIX='${REMOTE_PREFIX}'; UNDERLAY_PREFIX='/data/local/tmp/ohos-prefix'; FASTDDS_PREFIX='/data/local/tmp/ohos-fastdds'; BR='${BRIDGE_LIBRARY}'; VENDOR_LIB_PATH=; for dir in \${PREFIX}/opt/*/lib; do [ -d \${dir} ] && VENDOR_LIB_PATH=\${VENDOR_LIB_PATH:+\${VENDOR_LIB_PATH}:}\${dir}; done; UNDERLAY_VENDOR_LIB_PATH=; for dir in \${UNDERLAY_PREFIX}/opt/*/lib; do [ -d \${dir} ] && UNDERLAY_VENDOR_LIB_PATH=\${UNDERLAY_VENDOR_LIB_PATH:+\${UNDERLAY_VENDOR_LIB_PATH}:}\${dir}; done; export LD_PRELOAD=/data/local/release/usr/lib/libpython3.12.so.1.0; export PYTHONHOME='/data/local/release/usr'; export HOME='/data/local/tmp'; export ROS_LOG_DIR='/data/local/tmp/roslogs'; export LD_LIBRARY_PATH=\${PREFIX}/lib:\${UNDERLAY_PREFIX}/lib:\${FASTDDS_PREFIX}/lib\${VENDOR_LIB_PATH:+:\${VENDOR_LIB_PATH}}\${UNDERLAY_VENDOR_LIB_PATH:+:\${UNDERLAY_VENDOR_LIB_PATH}}:/data/local/tmp:/data/local/release/usr/lib:/system/lib64/platformsdk:/system/lib64/chipset-pub-sdk:/system/lib64; export AMENT_PREFIX_PATH=\${PREFIX}:\${UNDERLAY_PREFIX}; export CMAKE_PREFIX_PATH=\${PREFIX}:\${UNDERLAY_PREFIX}:\${FASTDDS_PREFIX}; export COLCON_PREFIX_PATH=\${PREFIX}:\${UNDERLAY_PREFIX}; export PYTHONPATH=\${PREFIX}/lib/python3.12/site-packages:\${UNDERLAY_PREFIX}/lib/python3.12/site-packages:\${UNDERLAY_PREFIX}/lib/python3.11/site-packages; export ROS_DOMAIN_ID='${DOMAIN_ID}'; export RMW_IMPLEMENTATION='rmw_mdds_cpp'; export RMW_MDDS_BROKER=1; export RMW_MDDS_BRIDGE_LIBRARY=\${BR}; export RMW_MDDS_BROKER_SOCKET='${BROKER_SOCKET}'; export RMW_MDDS_BROKER_LOG='${BROKER_LOG}'; export RMW_MDDS_BROKER_PID_FILE='${BROKER_PID_FILE}';
 EOF
 }
 
@@ -156,12 +168,19 @@ kill_remote_pattern() {
   local device_id="$1"
   local pattern="$2"
   capture_hdc_shell "${device_id}" \
-    "ps -ef | grep '${pattern}' | grep -v grep | while read -r user pid rest; do [ -z \"\${pid}\" ] || kill -9 \"\${pid}\" 2>/dev/null || true; done" >/dev/null || true
+    "pids=\$(ps -ef | grep '${pattern}' | grep -v grep | sed -E 's/^ *[^ ]+ +([0-9]+).*/\\1/'); for pid in \${pids}; do kill -15 \"\${pid}\" 2>/dev/null || true; done; sleep 3; for pid in \${pids}; do kill -0 \"\${pid}\" 2>/dev/null && kill -9 \"\${pid}\" 2>/dev/null || true; done" >/dev/null || true
 }
 
 cleanup() {
   kill_remote_pattern "${SERVER_DEVICE_ID}" "rmw_mdds_trigger_server.py"
   kill_remote_pattern "${CLIENT_DEVICE_ID}" "rmw_mdds_trigger_client.py"
+  kill_remote_pattern "${SERVER_DEVICE_ID}" "${BROKER_SOCKET}"
+  kill_remote_pattern "${CLIENT_DEVICE_ID}" "${BROKER_SOCKET}"
+  for device_id in "${SERVER_DEVICE_ID}" "${CLIENT_DEVICE_ID}"; do
+    capture_hdc_shell "${device_id}" \
+      "rm -f '${BROKER_SOCKET}' '${BROKER_SOCKET}.autostart.lock' '${BROKER_SOCKET}.listener.lock' '${BROKER_PID_FILE}'; rm -rf '${BROKER_SOCKET}.lock' '${BROKER_SOCKET}.autostart.lockdir' '${BROKER_SOCKET}.listener.lockdir'" \
+      >/dev/null || true
+  done
 }
 trap cleanup EXIT
 

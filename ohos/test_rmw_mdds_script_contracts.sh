@@ -51,6 +51,17 @@ require_file() {
   bash -n "${file}"
 }
 
+require_posix_sh() {
+  local file="$1"
+  [[ "$(head -n 1 "${file}")" == '#!/bin/sh' ]] ||
+    fail "${file} must use the board-available /bin/sh interpreter"
+  sh -n "${file}"
+  require_absent "${file}" '\[\['
+  require_absent "${file}" '(^|[[:space:];])source[[:space:]]'
+  require_absent "${file}" 'pipefail'
+  require_absent "${file}" '(^|[[:space:];])local[[:space:]]'
+}
+
 require_usage() {
   local file="$1"
   local output
@@ -197,6 +208,13 @@ require_file "${ARTIFACT_CONTRACT_SCRIPT}"
 require_file "${FULLSTACK_TSAN_SCRIPT}"
 require_file "${TSAN_COMPAT_BUILD_SCRIPT}"
 require_file "${CLI_SMOKE_SCRIPT}"
+require_posix_sh "${CLI_SMOKE_SCRIPT}"
+require_contains "${CLI_SMOKE_SCRIPT}" "CHILD_PIDS"
+require_contains "${CLI_SMOKE_SCRIPT}" "ps -ef"
+require_contains "${CLI_SMOKE_SCRIPT}" "kill -9"
+require_contains "${CLI_SMOKE_SCRIPT}" "BROKER_SOCKET_OWNED"
+require_contains "${CLI_SMOKE_SCRIPT}" "RMW_MDDS_BROKER_SOCKET"
+require_contains "${CLI_SMOKE_SCRIPT}" "COLCON_CURRENT_PREFIX"
 [[ -f "${PSUTIL_STUB}" ]] || fail "missing psutil stub ${PSUTIL_STUB}"
 [[ -f "${TSAN_COMPAT_SOURCE}" ]] || fail "missing TSAN compatibility source ${TSAN_COMPAT_SOURCE}"
 [[ -f "${RMW_IMPLEMENTATION_QOS_PATCH}" ]] ||
@@ -356,6 +374,10 @@ require_contains "${MATRIX_SCRIPT}" "MDDS_GATEWAY_CONFIG_TEMPLATE"
 require_contains "${MATRIX_SCRIPT}" "GATEWAY_DOMAIN_RENDERER"
 require_contains "${MATRIX_SCRIPT}" 'OHOS_HDC_BIN="\$\{HDC_BIN\}"'
 require_contains "${MATRIX_SCRIPT}" 'gateway_topic\(\)'
+require_contains "${MATRIX_SCRIPT}" "GATEWAY_START_TIMEOUT_SECONDS"
+require_contains "${MATRIX_SCRIPT}" "RESULT\\|gateway_start\\|FAIL"
+require_contains "${MATRIX_SCRIPT}" "rmw_mdds_broker"
+require_absent "${MATRIX_SCRIPT}" "pidof mdds_dds_gateway"
 require_fail_path_exits_nonzero "${MATRIX_SCRIPT}"
 
 require_contains "${CROSS_MDDS_SCRIPT}" "RMW_IMPLEMENTATION=rmw_mdds_cpp"

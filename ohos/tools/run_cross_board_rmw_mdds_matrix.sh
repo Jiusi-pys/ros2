@@ -44,10 +44,16 @@ GATEWAY_CONFIG_TEMPLATE="${MDDS_GATEWAY_CONFIG_TEMPLATE:-${ROOT_DIR}/ohos/tools/
 GATEWAY_DOMAIN_RENDERER="${ROOT_DIR}/ohos/tools/render_rmw_mdds_gateway_config.py"
 HDC_SEND_VERIFY="${ROOT_DIR}/ohos/tools/hdc_send_verify.sh"
 POLL_TIMEOUT_SECONDS="${RMW_MDDS_POLL_TIMEOUT_SECONDS:-50}"
+GATEWAY_START_TIMEOUT_SECONDS="${RMW_MDDS_GATEWAY_START_TIMEOUT_SECONDS:-60}"
 LOG_DIR="${RMW_MDDS_LOG_DIR:-/data/local/tmp/rmw_mdds_matrix}"
 GATEWAY_LOG="${LOG_DIR}/gateway.log"
 BRIDGE_ENV="RMW_MDDS_BROKER=1 RMW_MDDS_BRIDGE_LIBRARY=${BRIDGE_LIBRARY}"
 LOCAL_RENDERED_GATEWAY_CONFIG=""
+
+[[ "${GATEWAY_START_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "gateway start timeout must be a positive integer" >&2
+  exit 2
+}
 
 capture_hdc_shell() {
   local device_id="$1" command="$2" output_file status
@@ -79,6 +85,11 @@ kill_ros2() {
   local dev="$1" pat="$2"
   capture_hdc_shell "${dev}" \
     "ps -ef | grep -E \"${pat}\" | grep -v grep | while read -r u pid rest; do kill -9 \"\${pid}\" 2>/dev/null; done; true" >/dev/null || true
+}
+kill_broker_state() {
+  local dev="$1"
+  kill_ros2 "${dev}" 'rmw_mdds_broker'
+  capture_hdc_shell "${dev}" "rm -f /data/local/tmp/rmw_mdds_cpp.sock; true" >/dev/null || true
 }
 kill_topic_clients() {  # kill all ros2 topic pub/echo on both boards (one lane at a time)
   kill_ros2 "${MDDS_DEVICE_ID}" 'topic pub|topic echo|ros2cli'
@@ -122,6 +133,8 @@ msg_for_type() {
 cleanup() {
   kill_ros2 "${FASTDDS_DEVICE_ID}" 'mdds_dds_gateway'
   kill_topic_clients
+  kill_broker_state "${MDDS_DEVICE_ID}"
+  kill_broker_state "${FASTDDS_DEVICE_ID}"
   if [[ -n "${LOCAL_RENDERED_GATEWAY_CONFIG}" ]]; then
     rm -f "${LOCAL_RENDERED_GATEWAY_CONFIG}"
   fi
@@ -196,15 +209,32 @@ echo "RESULT|gateway_domain_config|PASS|mdds_domain=${MDDS_DOMAIN}|sample_topic=
 # Clean slate on both boards (critical), then start gateway on the fastdds device.
 kill_ros2 "${MDDS_DEVICE_ID}" '/bin/ros2|ros2cli|topic pub|topic echo'
 kill_ros2 "${FASTDDS_DEVICE_ID}" '/bin/ros2|ros2cli|topic pub|topic echo|mdds_dds_gateway'
+kill_broker_state "${MDDS_DEVICE_ID}"
+kill_broker_state "${FASTDDS_DEVICE_ID}"
 sleep 2
 capture_hdc_shell "${FASTDDS_DEVICE_ID}" \
   "mkdir -p '${LOG_DIR}' && rm -f '${GATEWAY_LOG}'; nohup sh -c 'ROS_DOMAIN_ID=${DDS_DOMAIN} RMW_IMPLEMENTATION=rmw_fastrtps_cpp ${GATEWAY_ENV} ${GATEWAY_BIN} ${GATEWAY_CONFIG} > ${GATEWAY_LOG} 2>&1' >/dev/null 2>&1 &" >/dev/null
 gw_start="$(date +%s)"
-while (( $(date +%s) - gw_start < 60 )); do
+gateway_ready=0
+while (( $(date +%s) - gw_start < GATEWAY_START_TIMEOUT_SECONDS )); do
   out="$(capture_hdc_shell "${FASTDDS_DEVICE_ID}" "cat '${GATEWAY_LOG}' 2>/dev/null || true" || true)"
-  grep -q "gateway started" <<< "${out}" && break
+  if grep -q "gateway started" <<< "${out}"; then
+    gateway_ready=1
+    break
+  fi
+  if [[ -n "${out}" ]]; then
+    gateway_process="$(capture_hdc_shell "${FASTDDS_DEVICE_ID}" \
+      "ps -ef | grep -F '${GATEWAY_BIN}' | grep -v grep || true" || true)"
+    [[ -n "${gateway_process}" ]] || break
+  fi
   sleep 1
 done
+if (( gateway_ready == 0 )); then
+  echo "RESULT|gateway_start|FAIL|timeout=${GATEWAY_START_TIMEOUT_SECONDS}" >&2
+  capture_hdc_shell "${FASTDDS_DEVICE_ID}" "cat '${GATEWAY_LOG}' 2>/dev/null || true" >&2 || true
+  exit 1
+fi
+echo "RESULT|gateway_start|PASS"
 
 PASS=0; FAIL=0
 # spec: name|ros_type|mdds_node_topic|dds_node_topic|mdds_gw_topic

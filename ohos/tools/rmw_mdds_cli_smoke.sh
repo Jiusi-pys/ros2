@@ -1,9 +1,9 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # Local or board-side P0 smoke for rmw_mdds_cpp. Run after sourcing the target
-# overlay, or set ROS2_SETUP to the overlay setup.bash path.
+# overlay, or set ROS2_SETUP to the overlay setup.sh path.
 
-set -euo pipefail
+set -eu
 
 ROS2_SETUP="${ROS2_SETUP:-}"
 ROS2_BIN="${ROS2_BIN:-ros2}"
@@ -14,11 +14,23 @@ ACTION_NAME="${RMW_MDDS_SMOKE_ACTION:-/fibonacci}"
 WORK_DIR="${RMW_MDDS_SMOKE_WORK_DIR:-${TMPDIR:-/tmp}/rmw_mdds_cli_smoke.$$}"
 TIMEOUT_SECONDS="${RMW_MDDS_SMOKE_TIMEOUT_SECONDS:-45}"
 
-if [[ -n "${ROS2_SETUP}" ]]; then
+if [ -n "${ROS2_SETUP}" ]; then
+  COLCON_PREFIX_OWNED=0
+  if [ -z "${COLCON_CURRENT_PREFIX:-}" ]; then
+    COLCON_CURRENT_PREFIX="${ROS2_SETUP%/*}"
+    if [ "${COLCON_CURRENT_PREFIX}" = "${ROS2_SETUP}" ]; then
+      COLCON_CURRENT_PREFIX=.
+    fi
+    export COLCON_CURRENT_PREFIX
+    COLCON_PREFIX_OWNED=1
+  fi
   set +u
   # shellcheck disable=SC1090
-  source "${ROS2_SETUP}"
+  . "${ROS2_SETUP}"
   set -u
+  if [ "${COLCON_PREFIX_OWNED}" -eq 1 ]; then
+    unset COLCON_CURRENT_PREFIX
+  fi
 fi
 
 command -v "${ROS2_BIN}" >/dev/null || {
@@ -31,26 +43,63 @@ export RMW_IMPLEMENTATION="rmw_mdds_cpp"
 export RMW_MDDS_BROKER="${RMW_MDDS_BROKER:-1}"
 
 mkdir -p "${WORK_DIR}"
+BROKER_SOCKET_OWNED=0
+if [ -z "${RMW_MDDS_BROKER_SOCKET:-}" ]; then
+  export RMW_MDDS_BROKER_SOCKET="${WORK_DIR}/broker.sock"
+  BROKER_SOCKET_OWNED=1
+fi
 TOPIC_ECHO_PID=""
 SERVICE_PID=""
 ACTION_PID=""
+CHILD_PIDS=""
+OWNED_BROKER_PIDS=""
 
 cleanup() {
+  PARENT_PIDS=""
   for pid in "${TOPIC_ECHO_PID}" "${SERVICE_PID}" "${ACTION_PID}"; do
-    [[ -n "${pid}" ]] && kill "${pid}" 2>/dev/null || true
+    if [ -n "${pid}" ]; then
+      PARENT_PIDS="${PARENT_PIDS} ${pid}"
+    fi
   done
-  wait "${TOPIC_ECHO_PID}" "${SERVICE_PID}" "${ACTION_PID}" 2>/dev/null || true
+
+  CHILD_PIDS="$(
+    ps -ef 2>/dev/null | while read -r process_user process_pid process_ppid process_rest; do
+      case " ${PARENT_PIDS} " in
+        *" ${process_ppid} "*) printf '%s\n' "${process_pid}" ;;
+      esac
+    done
+  )"
+  if [ "${BROKER_SOCKET_OWNED}" -eq 1 ]; then
+    OWNED_BROKER_PIDS="$(
+      ps -ef 2>/dev/null | while read -r process_user process_pid process_ppid process_rest; do
+        case "${process_rest}" in
+          *rmw_mdds_broker*"${RMW_MDDS_BROKER_SOCKET}"*) printf '%s\n' "${process_pid}" ;;
+        esac
+      done
+    )"
+  fi
+  for pid in ${CHILD_PIDS} ${PARENT_PIDS} ${OWNED_BROKER_PIDS}; do
+    kill "${pid}" 2>/dev/null || true
+  done
+  if [ -n "${CHILD_PIDS}${PARENT_PIDS}${OWNED_BROKER_PIDS}" ]; then
+    sleep 1
+  fi
+  for pid in ${CHILD_PIDS} ${PARENT_PIDS} ${OWNED_BROKER_PIDS}; do
+    kill -9 "${pid}" 2>/dev/null || true
+  done
+  for pid in ${PARENT_PIDS}; do
+    wait "${pid}" 2>/dev/null || true
+  done
   rm -rf "${WORK_DIR}"
 }
 trap cleanup EXIT
 
 wait_for_text() {
-  local file="$1"
-  local expected="$2"
-  local started
-  started="$(date +%s)"
-  while (( $(date +%s) - started < TIMEOUT_SECONDS )); do
-    grep -Fq "${expected}" "${file}" 2>/dev/null && return 0
+  wait_file="$1"
+  wait_expected="$2"
+  wait_started="$(date +%s)"
+  while [ "$(( $(date +%s) - wait_started ))" -lt "${TIMEOUT_SECONDS}" ]; do
+    grep -Fq "${wait_expected}" "${wait_file}" 2>/dev/null && return 0
     sleep 1
   done
   return 1

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CycloneDDS fallback config for board A (192.168.77.201).
+     Use only if multicast discovery between the boards fails:
+     export CYCLONEDDS_URI=file:///data/local/tmp/ros2/cyclonedds.xml -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="0">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="eth1"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <Peers>
+        <Peer address="192.168.77.202"/>
+      </Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

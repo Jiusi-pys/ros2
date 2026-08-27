@@ -153,43 +153,95 @@ When modifying `pixi.toml`:
 
 If a downstream test fails, use `colcon test --packages-select <package> --event-handlers console_direct+` to see live output.
 
-## Cross-compiling for OpenHarmony (RK3588 / KaihongOS, aarch64)
+## Cross-compiling for OpenHarmony (RK3588A / KaihongOS, aarch64-linux-ohos)
 
-The workspace can cross-build the ROS 2 core C++ stack (both CycloneDDS and
-Fast-DDS RMWs) plus `demo_nodes_cpp` for OpenHarmony boards using the OHOS SDK
-NDK clang (`aarch64-linux-ohos`, musl libc). Prerequisites: `pixi install`
-done, OHOS command-line tools unpacked (NDK under
-`<cmdline-tools>/sdk/default/openharmony/native`).
+The workspace cross-builds the full ROS 2 stack (CycloneDDS and Fast-DDS RMWs,
+rclcpp + rclpy + ros2cli, demos — 275 packages) for OpenHarmony boards using
+the OHOS SDK NDK clang (musl libc) from the command-line tools package.
 
 ```bash
 # Git Bash, from the repository root:
-./scripts/build_ohos.sh     # colcon cross build -> install_ohos/
-./scripts/deploy_ohos.sh    # push to both boards (/data/local/tmp/ros2)
+./scripts/pull_python_target.sh          # one-time: pull board CPython headers/libs
+./scripts/build_target_deps.sh           # one-time: tinyxml2/console_bridge/Eigen
+./scripts/build_ohos.sh                  # colcon cross build -> install_ohos/
+./scripts/install_board_python_deps.sh   # one-time per board: numpy/pyyaml/psutil/...
+./scripts/deploy_ohos.sh                 # pack install_ohos/ and push to both boards
 ./scripts/smoke_loopback.sh [board_id]   # same-board talker/listener check
 ./scripts/run_bidirectional_test.sh 20   # board A <-> board B, both directions
 ```
 
-- Toolchain: `cmake/ohos-aarch64.toolchain.cmake`. Override the NDK path with
-  `OHOS_NATIVE_SDK=<.../native>`. It defines `OHOS_CROSS_BUILD=TRUE` for
-  packages needing OHOS/musl workarounds, and pins `CMAKE_FIND_ROOT_PATH` to
-  the sysroot + `install_ohos` so host conda/pixi libraries are never linked.
-- The build skips: Connext RMW, iceoryx, rclpy and Python/Rust generators,
-  launch_ros, mimick_vendor (aarch64 trampoline asm does not assemble with the
-  NDK). Several upstream `package.xml` files carry small OHOS-marked patches
-  (bloom-unrolled deps to skipped packages, musl fixes in rcutils and
-  osrf_testing_tools_cpp, `colcon.pkg` BUILD_IDLC=OFF in cyclonedds);
-  `git -C src/<repo> diff` shows them.
-- Runtime on the board: `. /data/local/tmp/ros2/env.sh`, then
-  `$ROS2_TALKER` / `$ROS2_LISTENER`. `RMW_IMPLEMENTATION` defaults to
-  `rmw_cyclonedds_cpp`; set it to `rmw_fastrtps_cpp` to use Fast-DDS
-  (Fast-DDS logs SHM warnings because OHOS lacks /dev/shm; harmless, it falls
-  back to UDP). Board-to-board discovery works over multicast on eth1
-  (192.168.77.0/24); if multicast is ever blocked, deploy
-  `config/cyclonedds_board_[ab].xml` and set `CYCLONEDDS_URI` accordingly.
+Key facts:
+
+- Toolchain: `cmake/ohos-aarch64.toolchain.cmake` (override the SDK location
+  with `OHOS_NATIVE_SDK`). It sets `OHOS_CROSS_BUILD`, defines `__MUSL__`,
+  restricts `CMAKE_FIND_ROOT_PATH` to the OHOS sysroot and `install_ohos/`,
+  and links executables with `-Wl,--export-dynamic`. The export-dynamic flag
+  is required: class_loader/pluginlib use cross-DSO `dynamic_cast` on weak
+  template typeinfo, which fails unless executables export their weak symbols
+  (otherwise "Could not create instance of type ...").
+- `build_ohos.sh` passes `--base-paths src` to colcon: the default scan root
+  is the workspace root, which would otherwise pick up `target_deps_src/*` as
+  plain cmake packages and install a non-PIC static tinyxml2 that breaks
+  rosbag2_storage/urdfdom. `target_deps_src/COLCON_IGNORE` is a fallback.
+- Skipped packages: Connext RMW, iceoryx, Rust generator, mimick_vendor
+  (aarch64 trampoline asm), all Qt/rqt/rviz GUI, gazebo vendors, sros2 (needs
+  Rust cryptography), tracetools Python parts, tf2_bullet, OpenCV demos, lint
+  and test-only packages. Packages that are only `test_depend`ed on by
+  in-scope packages must NOT be skipped (colcon needs their environment
+  hooks): rosbag2_test_common, rosbag2_test_msgdefs, rosbag2_tests,
+  ament_clang_format, ament_cmake_clang_format.
+- Fast-DDS (2.14.x) is built with `-DTHIRDPARTY=ON` (bundled asio/tinyxml2 from
+  git submodules - run `git submodule update --init thirdparty/asio
+  thirdparty/tinyxml2` in `src/eProsima/Fast-DDS` after `vcs import`) and
+  `-DENABLE_SSL=NO`. `foonathan_memory_vendor` propagates the toolchain file to
+  its ExternalProject.
+- The RMW is selected at runtime via `RMW_IMPLEMENTATION`: the build uses
+  `-DRMW_IMPLEMENTATION_DISABLE_RUNTIME_SELECTION=OFF`, so both
+  `rmw_cyclonedds_cpp` and `rmw_fastrtps_cpp` are always available.
+  `deploy_ohos.sh` does NOT pin the RMW in `env.sh` by default; use
+  `RMW=rmw_cyclonedds_cpp ./scripts/deploy_ohos.sh` to pin one. Never let
+  rmw_implementation's CMake cache decide this on its own: when only one RMW
+  is present at configure time the option defaults ON and bakes that RMW into
+  every binary - if in doubt, delete `build_ohos/rmw_implementation` and
+  rebuild.
+- Python stack: the boards run the CPython 3.12 port from
+  https://github.com/Jiusi-pys/python at `/data/python312-rk3588a`.
+  `pull_python_target.sh` copies its headers/`libpython3.12.so` into
+  `python_target/usr/` as the link-time sysroot; `build_ohos.sh` points
+  `Python3_INCLUDE_DIR`/`Python3_LIBRARY`/`Python3_SOABI` there while keeping
+  `Python3_EXECUTABLE` = host pixi python, and sets
+  `PYTHON_MODULE_EXTENSION=.cpython-312-aarch64-linux-ohos.so` because
+  pybind11 queries the HOST interpreter for EXT_SUFFIX.
+- Board-side Python deps (`install_board_python_deps.sh`, staging in
+  `python_target/sitepkgs/`): musllinux aarch64 wheels (numpy, PyYAML) work
+  after renaming the bundled `*.so` suffix to `-linux-ohos.so`; the board's
+  python launcher dlopen()s libpython with RTLD_LOCAL, so `env.sh` sets
+  `LD_PRELOAD=libpython3.12.so.1.0` to make Py* symbols global. psutil has no
+  musllinux wheel and is compiled by hand with the NDK clang.
+- Runtime on the board: `. /data/local/tmp/ros2/env.sh`, then `$ROS2_TALKER` /
+  `$ROS2_LISTENER` (C++) or `$ROS2_PY_TALKER` / `$ROS2_PY_LISTENER`
+  (demo_nodes_py; colcon on a Windows host writes setuptools `*-script.py`
+  entry scripts into `lib/<pkg>/`, the `.exe` launchers are unusable). `ros2`
+  is an env.sh shell function wrapping `ros2cli.cli:main`. Board-to-board
+  discovery works over multicast on eth1 (192.168.77.0/24); if multicast is
+  ever blocked, fallback configs exist in `config/` (`cyclonedds_board_*.xml`
+  via `CYCLONEDDS_URI`, `fastdds_board_*.xml` via
+  `FASTRTPS_DEFAULT_PROFILES_FILE`).
+- On the board: Windows host FS is case-insensitive, so the tar only contains
+  `Lib/`; the deploy script creates a `lib -> Lib` symlink for ament-index
+  plugin paths. `libc++_shared.so` from the NDK is shipped alongside.
+  `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` is set because OHOS has no `/dev/shm`
+  (Fast-DDS then logs harmless SHM warnings and falls back to UDP).
+- Several upstream sources carry small OHOS-marked patches (musl fixes in
+  rcutils / osrf_testing_tools_cpp / rttest / cbg_executor, vendor-package
+  extras for libcurl/yaml-cpp, `colcon.pkg` BUILD_IDLC=OFF in cyclonedds,
+  dependency unrolls in package.xml files, export-order fix in
+  rosbag2_storage); `git -C src/<repo> diff` shows them.
 - `hdc` caveats (Windows host): pass local paths via `cygpath -w`, set
   `MSYS2_ARG_CONV_EXCL='*'` so Git Bash does not rewrite remote `/data/...`
-  paths, and never rely on `hdc shell` exit codes or stdin - verify results
-  explicitly on the device.
+  paths, never rely on `hdc shell` exit codes or stdin - verify results
+  explicitly on the device, and never `pkill -f` a pattern that appears in
+  the invoking `hdc shell` command line itself.
 
 ## Continuous Integration
 
@@ -230,47 +282,6 @@ Edit `pixi.toml`, change the version constraint, and run `pixi install` to verif
 ### Switch ROS distributions
 
 Check out the corresponding branch (`jazzy`, `rolling`, `humble`, etc.) and use that branch's `ros2.repos`. Do not mix distribution branches in the same workspace.
-
-## Cross-compiling for OpenHarmony (RK3588, aarch64-linux-ohos)
-
-The workspace can cross-build the ROS 2 core C++ stack (CycloneDDS and Fast-DDS
-RMWs) plus `demo_nodes_cpp` for OpenHarmony boards, using the OHOS SDK NDK
-clang from the command-line tools package.
-
-```bash
-./scripts/build_ohos.sh      # colcon cross build into build_ohos/ + install_ohos/
-./scripts/deploy_ohos.sh     # pack install_ohos/ and push to both boards
-./scripts/smoke_loopback.sh  # same-board talker/listener smoke test
-./scripts/run_bidirectional_test.sh  # board-to-board talker/listener, both directions
-```
-
-Key facts:
-
-- Toolchain: `cmake/ohos-aarch64.toolchain.cmake` (override the SDK location
-  with `-DOHOS_NATIVE_SDK=` / `OHOS_NATIVE_SDK`). It sets `OHOS_CROSS_BUILD`,
-  defines `__MUSL__`, restricts `CMAKE_FIND_ROOT_PATH` to the OHOS sysroot and
-  `install_ohos/`, and links executables with `-Wl,--export-dynamic`.
-  The export-dynamic flag is required: class_loader/pluginlib use cross-DSO
-  `dynamic_cast` on weak template typeinfo, which fails unless executables
-  export their weak symbols (otherwise "Could not create instance of type ...").
-- Fast-DDS (2.14.x) is built with `-DTHIRDPARTY=ON` (bundled asio/tinyxml2 from
-  git submodules - run `git submodule update --init thirdparty/asio
-  thirdparty/tinyxml2` in `src/eProsima/Fast-DDS` after `vcs import`) and
-  `-DENABLE_SSL=NO`. `foonathan_memory_vendor` propagates the toolchain file to
-  its ExternalProject.
-- The RMW used on the boards is chosen at deploy time:
-  `RMW=rmw_fastrtps_cpp ./scripts/deploy_ohos.sh` (default `rmw_cyclonedds_cpp`).
-  `rmw_implementation` bakes the default RMW in at build time, so after adding
-  an RMW implementation, delete `build_ohos/rmw_implementation` (and the
-  interface packages' build dirs so they generate the new typesupport) and
-  rebuild.
-- On the board: Windows host FS is case-insensitive, so the tar only contains
-  `Lib/`; the deploy script creates a `lib -> Lib` symlink for ament-index
-  plugin paths. `libc++_shared.so` from the NDK is shipped alongside.
-  `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` is set because OHOS has no `/dev/shm`.
-- If multicast discovery between boards ever fails, fallback configs exist in
-  `config/` (`cyclonedds_board_*.xml` via `CYCLONEDDS_URI`,
-  `fastdds_board_*.xml` via `FASTRTPS_DEFAULT_PROFILES_FILE`).
 
 ## Useful References
 

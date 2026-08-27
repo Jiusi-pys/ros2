@@ -7,6 +7,7 @@
 # Logs are collected under ohos_test_logs/.
 # Run from the ros2/ workspace root inside Git Bash:
 #   ./scripts/run_bidirectional_test.sh [seconds_per_direction]
+# PROG=py selects the demo_nodes_py talker/listener (default: cpp).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -15,6 +16,7 @@ BOARD_A=3e01ff55454d202020104033bf453b00   # 192.168.77.201
 BOARD_B=3e01ff55454d202020104433991c3b00   # 192.168.77.202
 DEVICE_DIR=/data/local/tmp/ros2
 DURATION="${1:-20}"
+PROG="${PROG:-cpp}"
 LOGDIR=ohos_test_logs
 mkdir -p "$LOGDIR"
 
@@ -22,8 +24,9 @@ mkdir -p "$LOGDIR"
 
 remote_bg() {  # remote_bg <board> <logname> <talker|listener>
   local board=$1 logname=$2 prog=$3
-  local varname
-  varname=$(echo "ROS2_$prog" | tr 'a-z' 'A-Z')
+  local varname prefix=""
+  [ "$PROG" = py ] && prefix="PY_"
+  varname=$(echo "ROS2_${prefix}$prog" | tr 'a-z' 'A-Z')
   "$HDC" -t "$board" shell \
     ". $DEVICE_DIR/env.sh; nohup \$$varname > $DEVICE_DIR/$logname 2>&1 &" &
 }
@@ -43,6 +46,7 @@ collect() {  # collect <board> <logname> <localfile>
 
 run_direction() {  # run_direction <talker_board> <listener_board> <tag>
   local talker_board=$1 listener_board=$2 tag=$3
+  [ "$PROG" != cpp ] && tag="${PROG}_${tag}"
   echo "== direction: talker=$tag-talker listener=$tag-listener =="
   remote_stop_all
   remote_bg "$listener_board" "listener_$tag.log" listener

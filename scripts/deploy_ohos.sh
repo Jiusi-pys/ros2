@@ -7,8 +7,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 HDC="${HDC:-/c/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/command-line-tools/sdk/default/openharmony/toolchains/hdc.exe}"
-# RMW to activate on the boards: RMW=rmw_fastrtps_cpp ./scripts/deploy_ohos.sh
-RMW="${RMW:-rmw_cyclonedds_cpp}"
+# RMW to preselect on the boards (optional):
+#   RMW=rmw_fastrtps_cpp ./scripts/deploy_ohos.sh
+# When RMW is empty, env.sh does not set RMW_IMPLEMENTATION at all - both
+# rmw_cyclonedds_cpp and rmw_fastrtps_cpp are available and the RMW can be
+# switched freely at runtime via the RMW_IMPLEMENTATION environment variable.
+RMW="${RMW:-}"
 BOARDS=("$@")
 if [ ${#BOARDS[@]} -eq 0 ]; then
   BOARDS=(3e01ff55454d202020104033bf453b00 3e01ff55454d202020104433991c3b00)
@@ -49,7 +53,6 @@ cat > "$ENV_FILE" <<EOF
 export ROS2_HOME=/data/local/tmp/ros2
 export LD_LIBRARY_PATH=\$ROS2_HOME/lib:\$ROS2_HOME/Lib:\$LD_LIBRARY_PATH
 export AMENT_PREFIX_PATH=\$ROS2_HOME
-export RMW_IMPLEMENTATION=$RMW
 export RCUTILS_COLORIZED_OUTPUT=0
 export RCUTILS_CONSOLE_OUTPUT_FORMAT="[{severity}] [{name}]: {message}"
 export HOME=\$ROS2_HOME
@@ -59,7 +62,37 @@ export FASTDDS_BUILTIN_TRANSPORTS=UDPv4
 # demo executables (Windows-style layout from the cross build)
 export ROS2_TALKER=\$ROS2_HOME/Lib/demo_nodes_cpp/talker
 export ROS2_LISTENER=\$ROS2_HOME/Lib/demo_nodes_cpp/listener
+# python demos: colcon on a Windows host writes setuptools *-script.py entry
+# scripts into lib/<pkg>/ (on the board that is Lib/<pkg>/); the .exe
+# launchers next to them are unusable, so invoke python3.12 explicitly.
+export ROS2_PY_TALKER="python3.12 \$ROS2_HOME/Lib/demo_nodes_py/talker-script.py"
+export ROS2_PY_LISTENER="python3.12 \$ROS2_HOME/Lib/demo_nodes_py/listener-script.py"
+
+# --- Python stack (rclpy / ros2cli / demo_nodes_py) --------------------------
+# CPython 3.12 runtime from https://github.com/Jiusi-pys/python
+PY312=/data/python312-rk3588a/usr
+if [ -x "\$PY312/bin/python3.12" ]; then
+  PATH="\$PY312/bin:\$PATH"
+  LD_LIBRARY_PATH="\$PY312/lib:\$LD_LIBRARY_PATH"
+  # The python312 launcher dlopen()s libpython with RTLD_LOCAL, so extension
+  # modules that do not link libpython (musllinux numpy/pyyaml wheels, ROS 2
+  # typesupport .so) cannot resolve Py* symbols. Preload it globally.
+  export LD_PRELOAD="\$PY312/lib/libpython3.12.so.1.0\${LD_PRELOAD:+:\$LD_PRELOAD}"
+  # ROS 2 python packages installed by colcon on a Windows host land in
+  # Lib/site-packages; third-party deps live in the python312 site-packages.
+  export PYTHONPATH="\$ROS2_HOME/Lib/site-packages:\$PY312/lib/python3.12/site-packages\${PYTHONPATH:+:\$PYTHONPATH}"
+fi
+# ros2 entry-point wrapper (the .exe launchers colcon generates on a Windows
+# host cannot run on the board)
+ros2() {
+  python3.12 -c 'import sys; from ros2cli.cli import main; sys.exit(main())' "\$@"
+}
 EOF
+# Only pin the RMW when explicitly requested; otherwise both RMWs are
+# available and switchable at runtime via RMW_IMPLEMENTATION.
+if [ -n "$RMW" ]; then
+  echo "export RMW_IMPLEMENTATION=$RMW" >> "$ENV_FILE"
+fi
 
 for board in ${BOARDS[@]}; do
   echo "== deploy to $board =="

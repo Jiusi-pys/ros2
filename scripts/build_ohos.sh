@@ -71,24 +71,36 @@ PACKAGES_SKIP=(
   ros2cli_common_extensions
   # needs a target Bullet build; tf2_bullet is an optional conversion helper
   tf2_bullet
-  # host-side lint tooling (not useful on the board)
+  # OpenCV-dependent demos (no OpenCV for the target; cv_bridge is not in the
+  # ros2.repos workspace either)
+  image_tools intra_process_demo
+  # host-side lint tooling (not useful on the board). ament_clang_format /
+  # ament_cmake_clang_format stay: rosbag2_storage_mcap declares test_depends
+  # on them and colcon needs their environment hooks.
   uncrustify_vendor ament_uncrustify
-  ament_clang_format ament_clang_tidy ament_cmake_clang_format ament_cmake_clang_tidy
+  ament_clang_tidy ament_cmake_clang_tidy
   ament_cmake_mypy ament_cmake_pclint ament_cmake_pycodestyle ament_cmake_pyflakes
   ament_pclint ament_pyflakes
-  # test-only packages (BUILD_TESTING=OFF)
+  # test-only packages (BUILD_TESTING=OFF). rosbag2_test_common /
+  # rosbag2_test_msgdefs stay: other rosbag2 packages declare test_depends on
+  # them and colcon needs their environment hooks. Same for rosbag2_tests
+  # (test_depend of the rosbag2 meta package).
   test_cli test_cli_remapping test_communication test_launch_ros test_launch_testing
   test_osrf_testing_tools_cpp test_quality_of_service test_rclcpp test_rmw_implementation
   test_security test_tf2 test_tracetools test_tracetools_launch
   rosidl_generator_tests rosidl_typesupport_introspection_tests rosidl_typesupport_tests
-  launch_testing_examples rosbag2_tests rosbag2_test_common rosbag2_test_msgdefs
+  launch_testing_examples
   rosbag2_performance_benchmarking rosbag2_performance_benchmarking_msgs
 )
 
 # PYTHON_MODULE_EXTENSION: pybind11 queries the HOST interpreter for
 # EXT_SUFFIX (yielding a win_amd64 .pyd name); override with the target value.
+# --base-paths src: colcon's default scan root is the workspace root, which
+# would pick up target_deps_src/* as plain cmake packages (a static, non-PIC
+# tinyxml2 gets installed and poisons rosbag2_storage/urdfdom).
 exec pixi run colcon --log-base log_ohos build --merge-install \
   --build-base build_ohos --install-base install_ohos \
+  --base-paths src \
   --packages-skip "${PACKAGES_SKIP[@]}" \
   --event-handlers console_direct+ \
   --cmake-args \
@@ -103,6 +115,7 @@ exec pixi run colcon --log-base log_ohos build --merge-install \
     -DBUILD_IDLC=OFF \
     -DBUILD_DDSPERF=OFF \
     -DTRACETOOLS_DISABLED=ON \
+    -DRMW_IMPLEMENTATION_DISABLE_RUNTIME_SELECTION=OFF \
     -DPython3_EXECUTABLE="${HOST_PYTHON}" \
     -DPython3_INCLUDE_DIR="${PY_TARGET}/include/python3.12" \
     -DPython3_LIBRARY="${PY_TARGET}/lib/libpython3.12.so" \

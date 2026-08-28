@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec "/c/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/command-line-tools/sdk/default/openharmony/native/llvm/bin/clang++.exe" --target=aarch64-linux-ohos --sysroot="C:/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/command-line-tools/sdk/default/openharmony/native/sysroot" -D__MUSL__ "$@"

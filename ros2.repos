@@ -191,6 +191,10 @@ repositories:
     type: git
     url: https://github.com/ros/ros_tutorials.git
     version: jazzy
+  ros/urdf_parser_py:
+    type: git
+    url: https://github.com/ros/urdf_parser_py.git
+    version: ros2
   ros/urdfdom:
     type: git
     url: https://github.com/ros/urdfdom.git

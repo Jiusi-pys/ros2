@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CycloneDDS with iceoryx zero-copy shared memory enabled (same-host
+     endpoints exchange payloads through RouDi-managed /dev/shm segments).
+     Tracing category "shm" logs the iceoryx runtime handshake. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <SharedMemory>
+      <Enable>true</Enable>
+    </SharedMemory>
+    <Tracing>
+      <Category>shm</Category>
+      <OutputFile>stdout</OutputFile>
+    </Tracing>
+  </Domain>
+</CycloneDDS>

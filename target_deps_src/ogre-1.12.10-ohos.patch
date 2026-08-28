@@ -1,0 +1,567 @@
+diff --git a/CMake/Dependencies.cmake b/CMake/Dependencies.cmake
+index c80f4de..ee21bd3 100644
+--- a/CMake/Dependencies.cmake
++++ b/CMake/Dependencies.cmake
+@@ -244,7 +244,7 @@ find_package(Freetype)
+ macro_log_feature(FREETYPE_FOUND "freetype" "Portable font engine" "http://www.freetype.org" FALSE "" "")
+ 
+ # Find X11
+-if (UNIX AND NOT APPLE AND NOT ANDROID AND NOT EMSCRIPTEN)
++if (UNIX AND NOT APPLE AND NOT ANDROID AND NOT EMSCRIPTEN AND NOT OHOS_CROSS_BUILD)
+   find_package(X11)
+   macro_log_feature(X11_FOUND "X11" "X Window system" "http://www.x.org" TRUE "" "")
+ endif ()
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f4d8fd4..1bd2787 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -70,7 +70,10 @@ set(OGRE_VERSION_DASH_SEPARATED "${OGRE_VERSION_MAJOR}-${OGRE_VERSION_MINOR}-${O
+ 
+ 
+ # Include necessary submodules
++# OGRE_EXTRA_MODULE_PATH: prepended so hosts can shadow modules (e.g. a
++# FindPkgConfig stand-in where pkg-config binaries are blocked by policy).
+ set(CMAKE_MODULE_PATH
++  "${OGRE_EXTRA_MODULE_PATH}"
+   "${PROJECT_SOURCE_DIR}/CMake"
+   "${PROJECT_SOURCE_DIR}/CMake/Utils"
+   "${PROJECT_SOURCE_DIR}/CMake/Packages"
+diff --git a/RenderSystems/GLSupport/CMakeLists.txt b/RenderSystems/GLSupport/CMakeLists.txt
+index 31c7507..dee10f3 100644
+--- a/RenderSystems/GLSupport/CMakeLists.txt
++++ b/RenderSystems/GLSupport/CMakeLists.txt
+@@ -64,6 +64,15 @@ elseif (APPLE)
+     ${CMAKE_CURRENT_SOURCE_DIR}/include/OSX 
+     ${PROJECT_SOURCE_DIR}/OgreMain/include/OSX)
+   set(PLATFORM_LIBS "-framework CoreGraphics" "-framework Foundation" "-framework AppKit")
++elseif (OHOS_CROSS_BUILD)
++  # OpenHarmony: no X11/Wayland/fbdev/gbm - use pbuffer-based EGL contexts.
++  file(GLOB PLATFORM_HEADERS "include/EGL/OHOS/*.h" "include/EGL/*.h")
++  file(GLOB PLATFORM_SOURCES "src/EGL/OHOS/*.cpp" "src/EGL/*.cpp")
++
++  set(NATIVE_INCLUDES
++      ${CMAKE_CURRENT_SOURCE_DIR}/include/EGL
++      ${CMAKE_CURRENT_SOURCE_DIR}/include/EGL/OHOS)
++  set(PLATFORM_LIBS ${EGL_LIBRARIES})
+ elseif (UNIX)
+   if(OGRE_GLSUPPORT_USE_EGL)
+     file(GLOB PLATFORM_HEADERS "include/EGL/X11/*.h" "include/EGL/*.h")
+diff --git a/RenderSystems/GLSupport/include/EGL/OHOS/OgreOHOSEGLSupport.h b/RenderSystems/GLSupport/include/EGL/OHOS/OgreOHOSEGLSupport.h
+new file mode 100644
+index 0000000..70996b2
+--- /dev/null
++++ b/RenderSystems/GLSupport/include/EGL/OHOS/OgreOHOSEGLSupport.h
+@@ -0,0 +1,52 @@
++/*
++-----------------------------------------------------------------------------
++This source file is part of OGRE
++    (Object-oriented Graphics Rendering Engine)
++For the latest info, see http://www.ogre3d.org/
++
++Copyright (c) 2000-2014 Torus Knot Software Ltd
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in
++all copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++THE SOFTWARE.
++-----------------------------------------------------------------------------
++*/
++
++#ifndef __OHOSEGLSupport_H__
++#define __OHOSEGLSupport_H__
++
++#include "OgreEGLSupport.h"
++
++namespace Ogre {
++    // OHOS (OpenHarmony) EGL support. There is no window system on the board
++    // (no X11/Wayland/fbdev/gbm), so contexts are created on PBuffer surfaces.
++    class _OgrePrivate OHOSEGLSupport : public EGLSupport
++    {
++    public:
++        OHOSEGLSupport();
++        virtual ~OHOSEGLSupport();
++
++        virtual void switchMode(uint& width, uint& height, short& frequency);
++
++        virtual RenderWindow* newWindow(const String& name,
++                                        unsigned int width, unsigned int height,
++                                        bool fullScreen,
++                                        const NameValuePairList *miscParams = 0);
++    };
++}
++
++#endif
+diff --git a/RenderSystems/GLSupport/include/EGL/OHOS/OgreOHOSEGLWindow.h b/RenderSystems/GLSupport/include/EGL/OHOS/OgreOHOSEGLWindow.h
+new file mode 100644
+index 0000000..999fade
+--- /dev/null
++++ b/RenderSystems/GLSupport/include/EGL/OHOS/OgreOHOSEGLWindow.h
+@@ -0,0 +1,66 @@
++/*
++-----------------------------------------------------------------------------
++This source file is part of OGRE
++    (Object-oriented Graphics Rendering Engine)
++For the latest info, see http://www.ogre3d.org/
++
++Copyright (c) 2000-2014 Torus Knot Software Ltd
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in
++all copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++THE SOFTWARE.
++-----------------------------------------------------------------------------
++*/
++
++#ifndef __OHOSEGLWindow_H__
++#define __OHOSEGLWindow_H__
++
++#include "OgreEGLWindow.h"
++#include "OgreOHOSEGLSupport.h"
++
++namespace Ogre {
++    // Headless EGL "window" for OHOS: renders into an EGL PBuffer surface,
++    // no native windowing system involved.
++    class _OgrePrivate OHOSEGLWindow : public EGLWindow
++    {
++    private:
++        int mMaxBufferSize;
++        int mMinBufferSize;
++        int mMaxDepthSize;
++        int mMaxStencilSize;
++        int mMSAA;
++
++        void createPbufferSurface(uint width, uint height);
++
++    protected:
++        virtual void getLeftAndTopFromNativeWindow(int & left, int & top, uint width, uint height);
++        virtual void initNativeCreatedWindow(const NameValuePairList *miscParams);
++        virtual void createNativeWindow( int &left, int &top, uint &width, uint &height, String &title );
++        virtual void reposition(int left, int top);
++        virtual void resize(unsigned int width, unsigned int height);
++        virtual void windowMovedOrResized();
++        virtual void switchFullScreen(bool fullscreen);
++
++    public:
++        OHOSEGLWindow(OHOSEGLSupport* glsupport);
++        void create(const String& name, unsigned int width, unsigned int height,
++                    bool fullScreen, const NameValuePairList *miscParams);
++        void swapBuffers();
++    };
++}
++
++#endif
+diff --git a/RenderSystems/GLSupport/src/EGL/OHOS/OgreOHOSEGLSupport.cpp b/RenderSystems/GLSupport/src/EGL/OHOS/OgreOHOSEGLSupport.cpp
+new file mode 100644
+index 0000000..3d40cd7
+--- /dev/null
++++ b/RenderSystems/GLSupport/src/EGL/OHOS/OgreOHOSEGLSupport.cpp
+@@ -0,0 +1,73 @@
++/*
++-----------------------------------------------------------------------------
++This source file is part of OGRE
++    (Object-oriented Graphics Rendering Engine)
++For the latest info, see http://www.ogre3d.org/
++
++Copyright (c) 2000-2014 Torus Knot Software Ltd
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in
++all copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++THE SOFTWARE.
++-----------------------------------------------------------------------------
++*/
++
++#include "OgreException.h"
++#include "OgreLogManager.h"
++#include "OgreStringConverter.h"
++#include "OgreRoot.h"
++
++#include "OgreOHOSEGLSupport.h"
++#include "OgreOHOSEGLWindow.h"
++#include "OgreGLUtil.h"
++
++namespace Ogre {
++
++    GLNativeSupport* getGLSupport(int)
++    {
++        return new OHOSEGLSupport();
++    }
++
++    OHOSEGLSupport::OHOSEGLSupport() : EGLSupport(CONTEXT_ES)
++    {
++        mNativeDisplay = EGL_DEFAULT_DISPLAY;
++        mGLDisplay = getGLDisplay();
++
++        // No real display on OHOS boards; report one dummy mode.
++        mCurrentMode.width = 1280;
++        mCurrentMode.height = 800;
++        mCurrentMode.refreshRate = 0;
++        mOriginalMode = mCurrentMode;
++        mVideoModes.push_back(mCurrentMode);
++    }
++
++    OHOSEGLSupport::~OHOSEGLSupport()
++    {
++    }
++
++    void OHOSEGLSupport::switchMode( uint& width, uint& height, short& frequency )
++    {
++    }
++
++    RenderWindow* OHOSEGLSupport::newWindow( const String &name, unsigned int width, unsigned int height, bool fullScreen, const NameValuePairList *miscParams)
++    {
++        OHOSEGLWindow* window = new OHOSEGLWindow(this);
++        window->create(name, width, height, fullScreen, miscParams);
++
++        return window;
++    }
++}
+diff --git a/RenderSystems/GLSupport/src/EGL/OHOS/OgreOHOSEGLWindow.cpp b/RenderSystems/GLSupport/src/EGL/OHOS/OgreOHOSEGLWindow.cpp
+new file mode 100644
+index 0000000..72af1e0
+--- /dev/null
++++ b/RenderSystems/GLSupport/src/EGL/OHOS/OgreOHOSEGLWindow.cpp
+@@ -0,0 +1,304 @@
++/*
++-----------------------------------------------------------------------------
++This source file is part of OGRE
++    (Object-oriented Graphics Rendering Engine)
++For the latest info, see http://www.ogre3d.org/
++
++Copyright (c) 2000-2014 Torus Knot Software Ltd
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in
++all copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++THE SOFTWARE.
++-----------------------------------------------------------------------------
++*/
++
++#include "OgreRoot.h"
++#include "OgreException.h"
++#include "OgreLogManager.h"
++#include "OgreStringConverter.h"
++
++#include "OgreOHOSEGLSupport.h"
++#include "OgreOHOSEGLWindow.h"
++#include "OgreViewport.h"
++
++#include <iostream>
++#include <algorithm>
++#include <climits>
++
++namespace Ogre {
++    OHOSEGLWindow::OHOSEGLWindow(OHOSEGLSupport *glsupport)
++        : EGLWindow(glsupport),
++          mMaxBufferSize(32),
++          mMinBufferSize(16),
++          mMaxDepthSize(16),
++          mMaxStencilSize(0),
++          mMSAA(0)
++    {
++    }
++
++    void OHOSEGLWindow::getLeftAndTopFromNativeWindow( int & left, int & top, uint width, uint height )
++    {
++        // No native window system on OHOS.
++        left = top = 0;
++    }
++
++    void OHOSEGLWindow::initNativeCreatedWindow(const NameValuePairList *miscParams)
++    {
++    }
++
++    void OHOSEGLWindow::createNativeWindow( int &left, int &top, uint &width, uint &height, String &title )
++    {
++    }
++
++    void OHOSEGLWindow::reposition( int left, int top )
++    {
++    }
++
++    void OHOSEGLWindow::switchFullScreen(bool fullscreen)
++    {
++    }
++
++    void OHOSEGLWindow::createPbufferSurface(uint width, uint height)
++    {
++        if (mEglSurface)
++        {
++            eglDestroySurface(mEglDisplay, mEglSurface);
++            EGL_CHECK_ERROR
++        }
++
++        EGLint surfaceAttrs[] = {
++            EGL_WIDTH, (EGLint)width,
++            EGL_HEIGHT, (EGLint)height,
++            EGL_NONE
++        };
++
++        mEglSurface = eglCreatePbufferSurface(mEglDisplay, mEglConfig, surfaceAttrs);
++        EGL_CHECK_ERROR
++
++        if (mEglSurface == EGL_NO_SURFACE)
++        {
++            OGRE_EXCEPT(Exception::ERR_RENDERINGAPI_ERROR,
++                        "Fail to create EGL PBuffer surface");
++        }
++    }
++
++    void OHOSEGLWindow::resize(uint width, uint height)
++    {
++        if (!mActive || mIsExternal)
++        {
++            mWidth = width;
++            mHeight = height;
++            return;
++        }
++
++        mContext->setCurrent();
++        createPbufferSurface(width, height);
++        static_cast<EGLContext*>(mContext)->_destroyInternalResources();
++        static_cast<EGLContext*>(mContext)->_createInternalResources(mEglDisplay, mEglConfig, mEglSurface, NULL);
++        windowMovedOrResized();
++    }
++
++    void OHOSEGLWindow::swapBuffers()
++    {
++        // Pbuffer surfaces have no back buffer: eglSwapBuffers is a no-op per
++        // the EGL spec, and the Mali driver on OHOS returns EGL_FALSE for it
++        // (which EGLWindow::swapBuffers turns into an exception). Only swap
++        // when wrapping an externally-created surface.
++        if (mIsExternal)
++        {
++            EGLWindow::swapBuffers();
++        }
++    }
++
++    void OHOSEGLWindow::windowMovedOrResized()
++    {
++        if (mActive && mEglSurface)
++        {
++            mContext->setCurrent();
++
++            eglQuerySurface(mEglDisplay, mEglSurface, EGL_WIDTH, (EGLint*)&mWidth);
++            EGL_CHECK_ERROR
++            eglQuerySurface(mEglDisplay, mEglSurface, EGL_HEIGHT, (EGLint*)&mHeight);
++            EGL_CHECK_ERROR
++
++            // Notify viewports of resize
++            ViewportList::iterator it = mViewportList.begin();
++            while( it != mViewportList.end() )
++                (*it++).second->_updateDimensions();
++        }
++    }
++
++    void OHOSEGLWindow::create(const String& name, uint width, uint height,
++                           bool fullScreen, const NameValuePairList *miscParams)
++    {
++        mName = name;
++        mWidth = width;
++        mHeight = height;
++        mLeft = 0;
++        mTop = 0;
++        mIsFullScreen = fullScreen;
++        void* eglContext = NULL;
++
++        if (miscParams)
++        {
++            NameValuePairList::const_iterator opt;
++            NameValuePairList::const_iterator end = miscParams->end();
++
++            if ((opt = miscParams->find("currentGLContext")) != end &&
++                StringConverter::parseBool(opt->second))
++            {
++                eglContext = eglGetCurrentContext();
++                if (!eglContext)
++                {
++                    OGRE_EXCEPT(Exception::ERR_RENDERINGAPI_ERROR,
++                                "currentGLContext was specified with no current GL context",
++                                "OHOSEGLWindow::create");
++                }
++
++                mEglSurface = eglGetCurrentSurface(EGL_DRAW);
++                mEglDisplay = eglGetCurrentDisplay();
++            }
++
++            if((opt = miscParams->find("maxColourBufferSize")) != end)
++            {
++                mMaxBufferSize = Ogre::StringConverter::parseInt(opt->second);
++            }
++
++            if((opt = miscParams->find("maxDepthBufferSize")) != end)
++            {
++                mMaxDepthSize = Ogre::StringConverter::parseInt(opt->second);
++            }
++
++            if((opt = miscParams->find("maxStencilBufferSize")) != end)
++            {
++                mMaxStencilSize = Ogre::StringConverter::parseInt(opt->second);
++            }
++
++            if((opt = miscParams->find("minColourBufferSize")) != end)
++            {
++                mMinBufferSize = Ogre::StringConverter::parseInt(opt->second);
++                if (mMinBufferSize > mMaxBufferSize) mMinBufferSize = mMaxBufferSize;
++            }
++
++            if((opt = miscParams->find("FSAA")) != end)
++            {
++                mMSAA = Ogre::StringConverter::parseInt(opt->second);
++            }
++
++            if ((opt = miscParams->find("externalGLControl")) != end)
++            {
++                mIsExternalGLControl = StringConverter::parseBool(opt->second);
++            }
++        }
++
++        initNativeCreatedWindow(miscParams);
++
++        if (mEglSurface)
++        {
++            mEglConfig = mGLSupport->getGLConfigFromDrawable (mEglSurface, &width, &height);
++        }
++
++        if (!mEglConfig && eglContext)
++        {
++            mEglConfig = mGLSupport->getGLConfigFromContext(eglContext);
++
++            if (!mEglConfig)
++            {
++                // This should never happen.
++                OGRE_EXCEPT(Exception::ERR_RENDERINGAPI_ERROR,
++                            "Unexpected failure to determine a EGLFBConfig",
++                            "OHOSEGLWindow::create");
++            }
++        }
++
++        mIsExternal = (mEglSurface != 0);
++
++        if (!mEglConfig)
++        {
++            int minAttribs[] = {
++                EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
++                EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
++                EGL_BUFFER_SIZE, mMinBufferSize,
++                EGL_DEPTH_SIZE, 16,
++                EGL_NONE
++            };
++
++            int maxAttribs[] = {
++                EGL_BUFFER_SIZE, mMaxBufferSize,
++                EGL_DEPTH_SIZE, mMaxDepthSize,
++                EGL_STENCIL_SIZE, mMaxStencilSize,
++                EGL_NONE
++            };
++
++            mEglDisplay = mGLSupport->getGLDisplay();
++
++            bool bAASuccess = false;
++            if (mMSAA)
++            {
++                try
++                {
++                    int MSAAminAttribs[] = {
++                        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
++                        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
++                        EGL_BUFFER_SIZE, mMinBufferSize,
++                        EGL_DEPTH_SIZE, 16,
++                        EGL_SAMPLE_BUFFERS, 1,
++                        EGL_SAMPLES, mMSAA,
++                        EGL_NONE
++                    };
++                    int MSAAmaxAttribs[] = {
++                        EGL_BUFFER_SIZE, mMaxBufferSize,
++                        EGL_DEPTH_SIZE, mMaxDepthSize,
++                        EGL_STENCIL_SIZE, mMaxStencilSize,
++                        EGL_SAMPLE_BUFFERS, 1,
++                        EGL_SAMPLES, mMSAA,
++                        EGL_NONE
++                    };
++                    mEglConfig = mGLSupport->selectGLConfig(MSAAminAttribs, MSAAmaxAttribs);
++                    bAASuccess = true;
++                }
++                catch (Exception& e)
++                {
++                    LogManager::getSingleton().logMessage("OHOSEGLWindow::create: setting MSAA failed");
++                }
++            }
++
++            if (!bAASuccess) mEglConfig = mGLSupport->selectGLConfig(minAttribs, maxAttribs);
++
++            if (!mEglConfig)
++            {
++                OGRE_EXCEPT(Exception::ERR_RENDERINGAPI_ERROR,
++                            "Failed to select an EGLConfig with EGL_PBUFFER_BIT",
++                            "OHOSEGLWindow::create");
++            }
++
++            createPbufferSurface(mWidth, mHeight);
++            mHwGamma = false;
++        }
++
++        mContext = createEGLContext(eglContext);
++        mContext->setCurrent();
++
++        eglQuerySurface(mEglDisplay, mEglSurface, EGL_WIDTH, (EGLint*)&mWidth);
++        eglQuerySurface(mEglDisplay, mEglSurface, EGL_HEIGHT, (EGLint*)&mHeight);
++        EGL_CHECK_ERROR
++
++        mActive = true;
++        mVisible = true;
++        mClosed = false;
++    }
++}

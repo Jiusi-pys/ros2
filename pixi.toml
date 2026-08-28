@@ -33,6 +33,12 @@ colcon-ros-domain-id-coordinator = ">=0.2.1,<0.3"
 colcon-test-result = ">=0.3.8,<0.4"
 # Ninja generator is required for the OHOS cross build (see cmake/ohos-aarch64.toolchain.cmake).
 ninja = ">=1.11,<2"
+# GNU make + pkg-config are needed by build_target_deps.sh to cross-build the
+# autotools-based LTTng packages (userspace-rcu, lttng-ust) for OHOS.
+# NB: conda-forge's pkg-config.exe is blocked by the host WDAC policy (os
+# error 4551); pkgconf provides the same tool under a different binary.
+make = ">=4.3,<5"
+pkgconf = ">=2.1,<3"
 
 # The rest of the dependencies here are used by one or more ROS packages.  We aggressively
 # pin them to particular versions that are as close as possible to their counterparts in Ubuntu.

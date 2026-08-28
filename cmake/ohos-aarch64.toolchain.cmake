@@ -29,6 +29,10 @@ set(CMAKE_C_COMPILER "${OHOS_LLVM_BIN}/clang.exe")
 set(CMAKE_CXX_COMPILER "${OHOS_LLVM_BIN}/clang++.exe")
 set(CMAKE_C_COMPILER_TARGET ${OHOS_TARGET_TRIPLE})
 set(CMAKE_CXX_COMPILER_TARGET ${OHOS_TARGET_TRIPLE})
+# ASM sources (.S) are compiled with the same clang; without the target triple
+# they assemble for the Windows host (x86_64-w64) and fail (mimick_vendor).
+set(CMAKE_ASM_COMPILER "${OHOS_LLVM_BIN}/clang.exe")
+set(CMAKE_ASM_COMPILER_TARGET ${OHOS_TARGET_TRIPLE})
 set(CMAKE_SYSROOT "${OHOS_NATIVE_SDK}/sysroot")
 
 set(CMAKE_AR "${OHOS_LLVM_BIN}/llvm-ar.exe" CACHE FILEPATH "archiver")

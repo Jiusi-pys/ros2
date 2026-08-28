@@ -27,6 +27,6 @@ for board in "${BOARDS[@]}"; do
     "$HDC" -t "$board" file send "${SRC_WIN}\\\\${name}" "$SP/$name" > /dev/null
   done
   # verify
-  "$HDC" -t "$board" shell "LD_LIBRARY_PATH=/data/python312-rk3588a/usr/lib LD_PRELOAD=/data/python312-rk3588a/usr/lib/libpython3.12.so.1.0 /data/python312-rk3588a/usr/bin/python3.12 -c 'import numpy, yaml, psutil, lark, catkin_pkg, argcomplete, packaging, setuptools, pip, em; print(\"DEPS_OK\")'" \
+  "$HDC" -t "$board" shell "LD_LIBRARY_PATH=/data/python312-rk3588a/usr/lib LD_PRELOAD=/data/python312-rk3588a/usr/lib/libpython3.12.so.1.0 /data/python312-rk3588a/usr/bin/python3.12 -c 'import numpy, yaml, psutil, lark, catkin_pkg, argcomplete, packaging, setuptools, pip, em, lxml.etree, cryptography.fernet, cffi, pycparser, pytest, pytest_timeout, pytest_repeat, pytest_rerunfailures, pytest_mock, colcon_core, colcon_cmake, colcon_ros, colcon_test_result, colcon_python_setup_py; print(\"DEPS_OK\")'" \
     | grep -q DEPS_OK && echo "   deps verified" || { echo "   DEPS VERIFICATION FAILED" >&2; exit 1; }
 done

@@ -1,3 +1,72 @@
+# ROS 2 for OpenHarmony (RK3588A)
+
+This fork ports the full ROS 2 Jazzy Jalisco stack to OpenHarmony boards
+(aarch64-linux-ohos, musl libc) — tested on RK3588A / KaihongOS. Everything
+except the Connext RMW works on the board: CycloneDDS and Fast-DDS RMWs,
+rclcpp/rclpy, ros2cli, rosbag2, tf2, iceoryx zero-copy, LTTng tracing, and
+the Qt5 GUI stack (rqt, turtlesim, rviz with GLES2 OGRE). 364 packages
+cross-build cleanly; the package ctest suites run on the board.
+
+The OHOS work lives on the `jazzy_ohos` branch.
+
+## Quick start
+
+Prerequisites: Windows host with Git Bash, [Pixi](https://pixi.sh/), the
+OpenHarmony command-line-tools SDK (NDK), and `hdc` access to the board(s).
+
+```bash
+git clone -b jazzy_ohos git@github.com:Jiusi-pys/ros2.git
+cd ros2
+pixi install && pixi shell
+
+# fetch the upstream ROS 2 sources, then replay the OHOS port patches
+vcs import --input ros2.repos src/
+./scripts/apply_patches.sh
+
+# one-time target dependencies (CPython sysroot, tinyxml2, OGRE, Qt, ...)
+./scripts/pull_python_target.sh
+./scripts/build_target_deps.sh
+./target_deps_src/build_ogre_ohos.sh
+./target_deps_src/build_assimp_ohos.sh
+./target_deps_src/build_qtsvg_ohos.sh
+# Qt5 / PyQt5 cross builds: see target_deps_src/pyqt/ and AGENTS.md
+
+# cross-build everything, then deploy to the board(s) over hdc
+./scripts/build_ohos.sh
+./scripts/install_board_python_deps.sh
+./scripts/deploy_ohos.sh
+
+# verify
+./scripts/smoke_loopback.sh          # same-board talker/listener
+./scripts/run_bidirectional_test.sh  # board A <-> board B
+./scripts/run_board_tests.sh         # ctest suites on the board
+```
+
+On the board: `. /data/local/tmp/ros2/env.sh`, then `ros2`, `rqt`, `rviz2`,
+`$ROS2_TALKER`/`$ROS2_LISTENER`, `turtlesim_node`, ...
+
+See [AGENTS.md](AGENTS.md) for the full porting details (toolchain, musl
+quirks, Qt/OGRE recipes, board-test infrastructure, debugging tips).
+
+## How the port is maintained (no upstream push access)
+
+The `src/` subrepos are read-only upstream clones. Every OHOS modification
+is kept as local commits in the subrepo **and** as an exported patch series
+in `patches/` (one `.patch` + `.base` per repo):
+
+- `./scripts/export_patches.sh` — re-export `patches/` after committing or
+  amending anything in a subrepo (commit the result here).
+- `./scripts/apply_patches.sh` — replay `patches/` onto a fresh
+  `vcs import` checkout; idempotent, 3-way apply.
+
+Syncing with upstream ROS 2:
+
+```bash
+vcs pull src/                  # fetch upstream updates
+./scripts/apply_patches.sh     # re-apply the port (resolve 3-way conflicts)
+./scripts/export_patches.sh    # re-export and commit the updated series
+```
+
 # About 
 The Robot Operating System (ROS) is a set of software libraries and tools that help you build robot applications.
 From drivers to state-of-the-art algorithms, and with powerful developer tools, ROS has what you need for your next robotics project.

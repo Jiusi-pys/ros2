@@ -6,7 +6,7 @@ This repository is the **source distribution workspace for ROS 2**. It does not 
 
 - **Repository**: `https://github.com/ros2/ros2.git`
 - **Default upstream branch**: `rolling`
-- **Current workspace branch**: `jazzy` (ROS 2 Jazzy Jalisco)
+- **Current workspace branch**: `jazzy_ohos` (ROS 2 Jazzy Jalisco + OpenHarmony port)
 - **Platform focus**: Cross-platform, with the pinned dependency workspace (`pixi.toml`) targeting Windows (`win-64`)
 - **Language mix**: C++, Python, and small amounts of CMake, interface definition, and Rust tooling
 - **Build system**: CMake packages are built with [colcon](https://colcon.readthedocs.io/); package metadata is handled by [ament](https://github.com/ament)
@@ -186,9 +186,9 @@ vcs pull src/                     # or per-repo: git fetch origin && git reset -
 ./scripts/export_patches.sh       # re-export the (possibly rebased) series
 ```
 
-This meta repository itself is a fork candidate: keep `origin` pointing at
-your own GitHub fork and add `https://github.com/ros2/ros2.git` as `upstream`
-for syncing. If a subrepo's port grows too large for a patch series (many
+This meta repository lives at `git@github.com:Jiusi-pys/ros2.git` (`origin`,
+branch `jazzy_ohos`); `https://github.com/ros2/ros2.git` is `upstream` for
+syncing. If a subrepo's port grows too large for a patch series (many
 commits, heavy divergence), fork that one repo and point its `ros2.repos`
 entry at your fork instead - the rest stays patch-based.
 

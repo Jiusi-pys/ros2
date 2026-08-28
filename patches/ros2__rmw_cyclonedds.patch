@@ -1,0 +1,33 @@
+From 50f848f4741eec31b510763d46f7ce35a469dea2 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:39:18 +0800
+Subject: [PATCH] Adapt colcon build for OpenHarmony (aarch64-linux-ohos) cross
+ build
+
+package.xml: drop the iceoryx_binding_c depend; CycloneDDS is built with
+ENABLE_ICEORYX=OFF for OHOS (no /dev/shm), and the declared dep breaks
+colcon dependency resolution when iceoryx is not in the workspace.
+
+Companion to the cyclonedds repo commit with the same title (colcon.pkg
+BUILD_IDLC=OFF + iceoryx deps removal).
+---
+ rmw_cyclonedds_cpp/package.xml | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/rmw_cyclonedds_cpp/package.xml b/rmw_cyclonedds_cpp/package.xml
+index f96911a..821d3ca 100644
+--- a/rmw_cyclonedds_cpp/package.xml
++++ b/rmw_cyclonedds_cpp/package.xml
+@@ -15,7 +15,8 @@
+   <buildtool_depend>ament_cmake_ros</buildtool_depend>
+ 
+   <depend>cyclonedds</depend>
+-  <depend>iceoryx_binding_c</depend>
++  <!-- iceoryx_binding_c removed for OHOS cross build: CycloneDDS is built with
++       ENABLE_ICEORYX=OFF, so SHM support is disabled at configure time. -->
+   <depend>rcutils</depend>
+   <depend>rcpputils</depend>
+   <depend>rmw</depend>
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,133 @@
+From a4318fcbf329f0206f60d5c32d46140d9121ff9f Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:07 +0800
+Subject: [PATCH 1/2] rcutils: use XSI strerror_r on musl; drop mimick_vendor
+ test_depend (OpenHarmony)
+
+- strerror.c: musl only provides the XSI (int-returning) strerror_r even
+  with _GNU_SOURCE defined, so add !defined(__MUSL__) to the GNU-variant
+  branch. Without this the GNU branch stores an int into char* and every
+  rcutils error message is garbage on OHOS.
+- package.xml: mimick_vendor removed (its aarch64 trampoline asm does not
+  assemble with the OHOS NDK clang; the package is skipped and tests are
+  not built for the target).
+
+Reuse note: the rcutils export of the 'dl' library still warns on
+configure ("exports library 'dl' which couldn't be found") because musl
+has no standalone libdl - the symbols live in libc and the warning is
+harmless.
+---
+ package.xml    | 2 +-
+ src/strerror.c | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/package.xml b/package.xml
+index 049c21a..798a908 100644
+--- a/package.xml
++++ b/package.xml
+@@ -23,7 +23,7 @@
+   <test_depend>ament_cmake_pytest</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+-  <test_depend>mimick_vendor</test_depend>
++  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
+   <test_depend>launch</test_depend>
+   <test_depend>launch_testing</test_depend>
+   <test_depend>launch_testing_ament_cmake</test_depend>
+diff --git a/src/strerror.c b/src/strerror.c
+index a425010..08435f7 100644
+--- a/src/strerror.c
++++ b/src/strerror.c
+@@ -27,8 +27,8 @@ rcutils_strerror(char * buffer, size_t buffer_length)
+ {
+ #if defined(_WIN32)
+   strerror_s(buffer, buffer_length, errno);
+-#elif defined(_GNU_SOURCE) && (!defined(ANDROID) || __ANDROID_API__ >= 23) && !defined(__QNXNTO__)
+-  /* GNU-specific */
++#elif defined(_GNU_SOURCE) && (!defined(ANDROID) || __ANDROID_API__ >= 23) && !defined(__QNXNTO__) && !defined(__MUSL__)
++  /* GNU-specific (glibc); musl only provides the XSI variant even with _GNU_SOURCE */
+   char * msg = strerror_r(errno, buffer, buffer_length);
+   if (msg != buffer) {
+     strncpy(buffer, msg, buffer_length);
+-- 
+2.55.0.windows.5
+
+
+From d3d6652f8dab0ab7e5a7453a39cdceb00562942e Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:06:44 +0800
+Subject: [PATCH 2/2] OpenHarmony/musl fixes
+
+- tests: musl strerror/strerror_r message and filesystem edge-case
+  expectations differ from glibc; adjust test assertions
+- package.xml: dependency unroll for the cross workspace
+---
+ package.xml                       | 2 +-
+ test/mocking_utils/filesystem.hpp | 4 +++-
+ test/test_filesystem.cpp          | 7 +++++++
+ test/test_strerror.cpp            | 3 +++
+ 4 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/package.xml b/package.xml
+index 798a908..049c21a 100644
+--- a/package.xml
++++ b/package.xml
+@@ -23,7 +23,7 @@
+   <test_depend>ament_cmake_pytest</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+-  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
++  <test_depend>mimick_vendor</test_depend>
+   <test_depend>launch</test_depend>
+   <test_depend>launch_testing</test_depend>
+   <test_depend>launch_testing_ament_cmake</test_depend>
+diff --git a/test/mocking_utils/filesystem.hpp b/test/mocking_utils/filesystem.hpp
+index 920e048..0319e81 100644
+--- a/test/mocking_utils/filesystem.hpp
++++ b/test/mocking_utils/filesystem.hpp
+@@ -28,7 +28,9 @@
+ 
+ #ifdef _GNU_SOURCE
+ #include <features.h>
+-#if __GLIBC__ <= 2 && __GLIBC_MINOR__ < 33
++// OHOS/musl: features.h does not define __GLIBC__; without the defined() guard
++// the undefined identifiers evaluate to 0 and wrongly select the __xstat path.
++#if defined(__GLIBC__) && __GLIBC__ <= 2 && __GLIBC_MINOR__ < 33
+ #define _GLIBC_LESS_2_33_
+ #endif
+ #endif
+diff --git a/test/test_filesystem.cpp b/test/test_filesystem.cpp
+index add4197..a1f9d57 100644
+--- a/test/test_filesystem.cpp
++++ b/test/test_filesystem.cpp
+@@ -367,6 +367,13 @@ TEST_F(TestFilesystemFixture, expand_user) {
+ }
+ 
+ TEST_F(TestFilesystemFixture, mkdir) {
++#ifndef _WIN32
++  // rcutils_mkdir() only accepts absolute POSIX paths; BUILD_DIR baked in by a
++  // cross build on a Windows host is "C:/..." and can never succeed.
++  if (BUILD_DIR[0] != '/') {
++    GTEST_SKIP() << "BUILD_DIR is not an absolute POSIX path (Windows cross-build host)";
++  }
++#endif
+   {
+     // Make a new directory
+     char * path =
+diff --git a/test/test_strerror.cpp b/test/test_strerror.cpp
+index d5aa63f..b65062e 100644
+--- a/test/test_strerror.cpp
++++ b/test/test_strerror.cpp
+@@ -36,6 +36,9 @@ TEST(test_strerror, get_error) {
+   ASSERT_STREQ(error_string, "No error");
+ #elif __APPLE__
+   ASSERT_STREQ(error_string, "Undefined error: 0");
++#elif defined(__MUSL__)
++  // OHOS: musl's strerror(0) message differs from glibc's "Success"
++  ASSERT_STREQ(error_string, "No error information");
+ #else
+   ASSERT_STREQ(error_string, "Success");
+ #endif
+-- 
+2.55.0.windows.5
+

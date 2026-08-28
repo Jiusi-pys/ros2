@@ -1,0 +1,1550 @@
+From 0eafa2c5ebd4b2e837e4847bf5d8ba05736dc67e Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:06:44 +0800
+Subject: [PATCH] OpenHarmony port: rviz on GLES2/pbuffer-EGL OGRE
+
+- rviz_ogre_vendor/rviz_assimp_vendor: skip the ament_vendor ExternalProject
+  under OHOS_CROSS_BUILD, point extras at the prebuilt prefix install and
+  replace find_package(OpenGL/X11) with direct EGL/GLESv2 find_library
+- rviz_rendering: guard X11/GLX code with !defined(__OHOS__), load
+  RenderSystem_GLES2, integrate OgreRTShaderSystem (RVizRTSSListener,
+  ShaderGenerator init after the first dummy render window, RTShaderLib
+  resources in the internal resource group)
+- ogre_media/materials/glsles: GLSL ES 1.00 ports of the glsl120 shaders
+  (unchanged program names, attach-free includes inlined)
+---
+ rviz_assimp_vendor/CMakeLists.txt             |   6 +
+ .../rviz_assimp_vendor-extras.cmake.in        |   7 +-
+ rviz_ogre_vendor/CMakeLists.txt               |   7 +
+ .../rviz_ogre_vendor-extras.cmake.in          |  46 +++--
+ rviz_rendering/CMakeLists.txt                 |   5 +
+ .../include/rviz_rendering/render_system.hpp  |  43 ++++-
+ .../ogre_media/materials/glsles/black.frag    |   8 +
+ .../ogre_media/materials/glsles/depth.frag    |  33 ++++
+ .../ogre_media/materials/glsles/depth.vert    |  21 +++
+ .../materials/glsles/depth_circle.frag        |  39 ++++
+ .../materials/glsles/flat_color.frag          |  15 ++
+ .../materials/glsles/flat_color_circle.frag   |  25 +++
+ .../materials/glsles/glsles.program           | 158 ++++++++++++++++
+ .../materials/glsles/indexed_8bit_image.frag  |  19 ++
+ .../materials/glsles/indexed_8bit_image.vert  |  15 ++
+ .../materials/glsles/nogp/billboard.vert      |  60 ++++++
+ .../materials/glsles/nogp/billboard_tile.vert |  51 +++++
+ .../ogre_media/materials/glsles/nogp/box.frag |  74 ++++++++
+ .../ogre_media/materials/glsles/nogp/box.vert |  47 +++++
+ .../materials/glsles/nogp/nogp.program        |  89 +++++++++
+ .../materials/glsles/pass_color.frag          |  11 ++
+ .../materials/glsles/pass_color_circle.frag   |  21 +++
+ .../materials/glsles/pickcolor.frag           |  10 +
+ .../materials/glsles/pickcolor_circle.frag    |  22 +++
+ .../ogre_media/materials/glsles/point.vert    |  36 ++++
+ .../materials/glsles/shaded_circle.frag       |  25 +++
+ .../materials/glsles/smooth_square.frag       |  29 +++
+ .../ogre_render_window_impl.cpp               |   8 +
+ .../src/rviz_rendering/render_system.cpp      | 177 +++++++++++++++++-
+ 29 files changed, 1086 insertions(+), 21 deletions(-)
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/black.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/depth.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/depth.vert
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/depth_circle.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/flat_color.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/flat_color_circle.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/glsles.program
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/indexed_8bit_image.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/indexed_8bit_image.vert
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/nogp/billboard.vert
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/nogp/billboard_tile.vert
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/nogp/box.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/nogp/box.vert
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/nogp/nogp.program
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/pass_color.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/pass_color_circle.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/pickcolor.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/pickcolor_circle.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/point.vert
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/shaded_circle.frag
+ create mode 100644 rviz_rendering/ogre_media/materials/glsles/smooth_square.frag
+
+diff --git a/rviz_assimp_vendor/CMakeLists.txt b/rviz_assimp_vendor/CMakeLists.txt
+index 1b486ba8..6db30c8e 100644
+--- a/rviz_assimp_vendor/CMakeLists.txt
++++ b/rviz_assimp_vendor/CMakeLists.txt
+@@ -30,6 +30,11 @@ else()
+   set(ASSIMP_C_FLAGS "-Wno-deprecated-non-prototype ${CMAKE_C_FLAGS}")
+ endif()
+ 
++# OHOS: assimp is prebuilt into the install prefix by
++# target_deps_src/build_assimp_ohos.sh (FORCE_BUILD_VENDOR_PKG=ON would
++# override SATISFIED, and the Windows host's `vcs` downloader is broken by
++# the pkg_resources removal in newer setuptools anyway).
++if(NOT OHOS_CROSS_BUILD)
+ ament_vendor(assimp_vendor
+   SATISFIED ${assimp_FOUND}
+   VCS_URL https://github.com/assimp/assimp.git
+@@ -42,6 +47,7 @@ ament_vendor(assimp_vendor
+     "-DCMAKE_CXX_FLAGS=${ASSIMP_CXX_FLAGS}"
+     "-DCMAKE_C_FLAGS=${ASSIMP_C_FLAGS}"
+ )
++endif()  # NOT OHOS_CROSS_BUILD
+ 
+ if(BUILD_TESTING)
+   find_package(ament_lint_auto REQUIRED)
+diff --git a/rviz_assimp_vendor/rviz_assimp_vendor-extras.cmake.in b/rviz_assimp_vendor/rviz_assimp_vendor-extras.cmake.in
+index 9aa39d23..9ecd251b 100644
+--- a/rviz_assimp_vendor/rviz_assimp_vendor-extras.cmake.in
++++ b/rviz_assimp_vendor/rviz_assimp_vendor-extras.cmake.in
+@@ -7,7 +7,12 @@ set(ON 1)
+ # We always add the local Modules directory to the modules path, so if a vendored package was
+ # built, it is used.  If it was not built, find_package() will fall back to attempting to find the
+ # system package.
+-set(assimp_DIR "${@PROJECT_NAME@_DIR}/../../../opt/rviz_assimp_vendor/lib/cmake/assimp-5.3")
++if(OHOS_CROSS_BUILD)
++  # OHOS: assimp is prebuilt directly into the install prefix (see CMakeLists.txt)
++  set(assimp_DIR "${@PROJECT_NAME@_DIR}/../../../lib/cmake/assimp-5.3")
++else()
++  set(assimp_DIR "${@PROJECT_NAME@_DIR}/../../../opt/rviz_assimp_vendor/lib/cmake/assimp-5.3")
++endif()
+ message(STATUS "Setting assimp_DIR to: '${assimp_DIR}'")
+ 
+ find_package(assimp REQUIRED QUIET)
+diff --git a/rviz_ogre_vendor/CMakeLists.txt b/rviz_ogre_vendor/CMakeLists.txt
+index 7f60ad56..0a44cc08 100644
+--- a/rviz_ogre_vendor/CMakeLists.txt
++++ b/rviz_ogre_vendor/CMakeLists.txt
+@@ -81,6 +81,12 @@ if(APPLE)
+   list(APPEND OGRE_CMAKE_ARGS -DCMAKE_OSX_ARCHITECTURES=arm64;x86_64)
+ endif()
+ 
++# OHOS: OGRE (GLES2 render system, EGL/pbuffer GLSupport, no X11) is prebuilt
++# into the install prefix by target_deps_src/build_ogre_ohos.sh. The upstream
++# build defaults to a desktop GL/X11 stack that does not exist on OpenHarmony,
++# so skip the ExternalProject entirely (FORCE_BUILD_VENDOR_PKG=ON would
++# override SATISFIED) and consume the prebuilt install via the extras file.
++if(NOT OHOS_CROSS_BUILD)
+ ament_vendor(ogre_vendor
+   VCS_URL https://github.com/OGRECave/ogre.git
+   VCS_VERSION v1.12.10
+@@ -121,6 +127,7 @@ if(TARGET ogre_vendor)
+     ExternalProject_Add_StepDependencies(ogre_vendor configure zlib_vendor)
+   endif()
+ endif()
++endif()  # NOT OHOS_CROSS_BUILD
+ 
+ if(BUILD_TESTING)
+   find_package(ament_lint_auto REQUIRED)
+diff --git a/rviz_ogre_vendor/rviz_ogre_vendor-extras.cmake.in b/rviz_ogre_vendor/rviz_ogre_vendor-extras.cmake.in
+index cb60126a..667940db 100644
+--- a/rviz_ogre_vendor/rviz_ogre_vendor-extras.cmake.in
++++ b/rviz_ogre_vendor/rviz_ogre_vendor-extras.cmake.in
+@@ -6,13 +6,23 @@ if(WIN32)
+   message(STATUS "Prepending to CMAKE_MODULE_PATH: '${OGRE_CMAKE_MODULE_DIR}'")
+ elseif(APPLE)
+   set(OGRE_DIR "${@PROJECT_NAME@_DIR}/../../../opt/rviz_ogre_vendor/CMake")
++elseif(OHOS_CROSS_BUILD)
++  # OHOS: OGRE is prebuilt directly into the install prefix (see CMakeLists.txt)
++  set(OGRE_DIR "${@PROJECT_NAME@_DIR}/../../../lib/OGRE/cmake")
+ else()
+   set(OGRE_DIR "${@PROJECT_NAME@_DIR}/../../../opt/rviz_ogre_vendor/lib/OGRE/cmake")
+ endif()
+ message(STATUS "Setting OGRE_DIR to: '${OGRE_DIR}'")
+ 
+-set(FREETYPE_HOME "${rviz_ogre_vendor_DIR}/../../../opt/rviz_ogre_vendor")
+-set(ZLIB_HOME "${rviz_ogre_vendor_DIR}/../../../opt/rviz_ogre_vendor")
++if(OHOS_CROSS_BUILD)
++  # freetype/zlib live in the install prefix (freetype) and the OHOS sysroot
++  # (zlib); both are covered by the toolchain's CMAKE_FIND_ROOT_PATH.
++  set(FREETYPE_HOME "${rviz_ogre_vendor_DIR}/../../..")
++  set(ZLIB_HOME "${rviz_ogre_vendor_DIR}/../../..")
++else()
++  set(FREETYPE_HOME "${rviz_ogre_vendor_DIR}/../../../opt/rviz_ogre_vendor")
++  set(ZLIB_HOME "${rviz_ogre_vendor_DIR}/../../../opt/rviz_ogre_vendor")
++endif()
+ 
+ find_package(OGRE REQUIRED NO_SYSTEM_ENVIRONMENT_PATH)
+ message(STATUS "OGRE_LIBRARIES: ${OGRE_LIBRARIES}")
+@@ -121,17 +131,27 @@ foreach(_lib IN LISTS OGRE_LIBRARIES)
+     if (POLICY CMP0072)
+       cmake_policy(SET CMP0072 NEW)
+     endif()
+-    find_package(OpenGL REQUIRED)
+-    list(APPEND _extra_interface_link_libraries ${OPENGL_LIBRARIES})
+-    list(APPEND _extra_interface_link_libraries ${CMAKE_DL_LIBS})
+-    if(UNIX AND NOT APPLE)
+-      find_package(X11 REQUIRED)
+-      list(APPEND _extra_interface_link_libraries ${X11_LIBRARIES} ${X11_Xt_LIB} ${X11_Xrandr_LIB})
+-      find_library(XAW_LIBRARY NAMES Xaw Xaw7 PATHS ${DEP_LIB_SEARCH_DIR} ${X11_LIB_SEARCH_PATH})
+-      list(APPEND _extra_interface_link_libraries ${XAW_LIBRARY})
+-    endif()
+-    if(APPLE)
+-      list(APPEND _extra_interface_link_libraries "-framework Cocoa")
++    if(OHOS_CROSS_BUILD)
++      # No desktop OpenGL/X11 on OpenHarmony: link the GLES2/EGL stack from
++      # the OHOS sysroot (RenderSystem_GLES2 + EGL/pbuffer GLSupport).
++      find_library(OHOS_EGL_LIBRARY NAMES EGL REQUIRED)
++      find_library(OHOS_GLESV2_LIBRARY NAMES GLESv2 REQUIRED)
++      list(APPEND _extra_interface_link_libraries ${OHOS_EGL_LIBRARY})
++      list(APPEND _extra_interface_link_libraries ${OHOS_GLESV2_LIBRARY})
++      list(APPEND _extra_interface_link_libraries ${CMAKE_DL_LIBS})
++    else()
++      find_package(OpenGL REQUIRED)
++      list(APPEND _extra_interface_link_libraries ${OPENGL_LIBRARIES})
++      list(APPEND _extra_interface_link_libraries ${CMAKE_DL_LIBS})
++      if(UNIX AND NOT APPLE)
++        find_package(X11 REQUIRED)
++        list(APPEND _extra_interface_link_libraries ${X11_LIBRARIES} ${X11_Xt_LIB} ${X11_Xrandr_LIB})
++        find_library(XAW_LIBRARY NAMES Xaw Xaw7 PATHS ${DEP_LIB_SEARCH_DIR} ${X11_LIB_SEARCH_PATH})
++        list(APPEND _extra_interface_link_libraries ${XAW_LIBRARY})
++      endif()
++      if(APPLE)
++        list(APPEND _extra_interface_link_libraries "-framework Cocoa")
++      endif()
+     endif()
+     target_link_libraries(rviz_ogre_vendor::OgreMain
+       INTERFACE
+diff --git a/rviz_rendering/CMakeLists.txt b/rviz_rendering/CMakeLists.txt
+index fee1258b..cd9ba778 100644
+--- a/rviz_rendering/CMakeLists.txt
++++ b/rviz_rendering/CMakeLists.txt
+@@ -104,6 +104,11 @@ target_link_libraries(rviz_rendering PUBLIC
+   rviz_ogre_vendor::OgreMain
+   rviz_ogre_vendor::OgreOverlay
+ )
++if(OHOS_CROSS_BUILD)
++  # GLES2 has no fixed-function pipeline; the RTSS generates shaders for
++  # fixed-function materials (imported target from OGRE's OgreTargets.cmake)
++  target_link_libraries(rviz_rendering PUBLIC OgreRTShaderSystem)
++endif()
+ if(TARGET Eigen3::Eigen)
+   # TODO(sloretz) require target to exist when https://github.com/ros2/choco-packages/issues/19 is addressed
+   target_link_libraries(rviz_rendering PUBLIC Eigen3::Eigen)
+diff --git a/rviz_rendering/include/rviz_rendering/render_system.hpp b/rviz_rendering/include/rviz_rendering/render_system.hpp
+index b36168c6..b99ae3ce 100644
+--- a/rviz_rendering/include/rviz_rendering/render_system.hpp
++++ b/rviz_rendering/include/rviz_rendering/render_system.hpp
+@@ -37,11 +37,16 @@
+ 
+ #include <OgreRoot.h>
+ #include <Overlay/OgreOverlaySystem.h>  // NOLINT cpplint cannot handle include order here
++#if defined(__OHOS__)
++// OpenHarmony: OGRE is built with the GLES2 render system (no desktop GL)
++#include <RenderSystems/GLES2/OgreGLES2Plugin.h>  // NOLINT cpplint cannot handle include order here
++#else
+ #include <RenderSystems/GL/OgreGLPlugin.h>  // NOLINT cpplint cannot handle include order here
++#endif
+ 
+ #include <QDir>  // NOLINT cpplint cannot handle include order here
+ 
+-#if !defined(__APPLE__) && !defined(_WIN32)
++#if !defined(__APPLE__) && !defined(_WIN32) && !defined(__OHOS__)
+ 
+ #include <X11/Xutil.h>
+ #include <GL/glx.h>
+@@ -51,9 +56,26 @@
+ #include "rviz_rendering/visibility_control.hpp"
+ #include "rviz_rendering/ogre_logging.hpp"
+ 
++#if defined(__OHOS__)
++namespace Ogre
++{
++class Viewport;
++namespace RTShader
++{
++class ShaderGenerator;
++}
++}  // namespace Ogre
++#endif
++
+ namespace rviz_rendering
+ {
+ 
++#if defined(__OHOS__)
++// OHOS/GLES2: implemented in render_system.cpp (keeps the Ogre RTSS headers
++// out of this header)
++class RVizRTSSListener;
++#endif
++
+ class RVIZ_RENDERING_PUBLIC RenderSystem
+ {
+ public:
+@@ -86,6 +108,16 @@ public:
+   void
+   prepareOverlays(Ogre::SceneManager * scene_manager);
+ 
++#if defined(__OHOS__)
++  // GLES2 has no fixed-function pipeline: register scene managers / viewports
++  // with the RTSS shader generator so fixed-function materials get shaders.
++  void
++  addSceneManagerToShaderGenerator(Ogre::SceneManager * scene_manager);
++
++  void
++  setViewportShaderScheme(Ogre::Viewport * viewport);
++#endif
++
+   /// return OpenGl Version as integer, e.g. 320 for OpenGl 3.20
+   int
+   getGlVersion();
+@@ -160,11 +192,18 @@ private:
+   bool stereo_supported_;
+   static bool force_no_stereo_;
+   rviz_rendering::OgreLogging * ogre_logging;
+-#if !defined(__APPLE__) && !defined(_WIN32)
++#if !defined(__APPLE__) && !defined(_WIN32) && !defined(__OHOS__)
+   void * dummyDisplay = nullptr;
+   void * dummyContext = nullptr;
+   XVisualInfo * dummyVisual = nullptr;
+ #endif
++#if defined(__OHOS__)
++  void
++  destroyRTSS();
++
++  Ogre::RTShader::ShaderGenerator * shader_generator_ = nullptr;
++  RVizRTSSListener * rtss_listener_ = nullptr;
++#endif
+ };
+ 
+ }  // namespace rviz_rendering
+diff --git a/rviz_rendering/ogre_media/materials/glsles/black.frag b/rviz_rendering/ogre_media/materials/glsles/black.frag
+new file mode 100644
+index 00000000..931727ac
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/black.frag
+@@ -0,0 +1,8 @@
++precision highp float;
++
++// Returns black.
++
++void main()
++{
++  gl_FragColor = vec4( 0, 0, 0, 0 );
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/depth.frag b/rviz_rendering/ogre_media/materials/glsles/depth.frag
+new file mode 100644
+index 00000000..8c0a9c86
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/depth.frag
+@@ -0,0 +1,33 @@
++precision highp float;
++
++// Passes on the packed depth value
++// GLES2 port: pack_depth.frag inlined (glsles has no `attach`)
++
++// Splits up a normalized depth value in the range (0..1)
++// into the vertex RGB values.
++// Alpha values below 1/255 are rendered transparent.
++
++uniform float alpha;
++uniform float far_clip_distance;
++
++const float minimum_alpha = 1.0 / 255.0;
++
++varying float depth;
++
++vec4 packDepth()
++{
++  float normalized_depth = depth / far_clip_distance;
++
++  // split up float into rgb components
++  const vec3 shift = vec3(256.0 * 256.0, 256.0, 1.0);
++  const vec3 mask = vec3(0.0, 1.0 / 256.0, 1.0 / 256.0);
++  vec3 depth_packed = fract(normalized_depth * shift);
++  depth_packed -= depth_packed.xxy * mask;
++
++  return vec4( depth_packed.zyx, step( minimum_alpha, alpha ));
++}
++
++void main()
++{
++  gl_FragColor = packDepth();
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/depth.vert b/rviz_rendering/ogre_media/materials/glsles/depth.vert
+new file mode 100644
+index 00000000..78e0f720
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/depth.vert
+@@ -0,0 +1,21 @@
++// Minimal depth passthrough shader
++// GLES2 port: gl_Vertex -> vertex; pass_depth.vert inlined
++// (glsles has no `attach`)
++
++uniform mat4 worldviewproj_matrix;
++uniform mat4 worldview_matrix;
++
++attribute vec4 vertex;
++
++varying float depth;
++
++void passDepth( vec4 pos )
++{
++  vec4 pos_rel_view = worldview_matrix * pos;
++  depth = -pos_rel_view.z;
++}
++
++void main() {
++    gl_Position = worldviewproj_matrix * vertex;
++    passDepth( vertex );
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/depth_circle.frag b/rviz_rendering/ogre_media/materials/glsles/depth_circle.frag
+new file mode 100644
+index 00000000..31095710
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/depth_circle.frag
+@@ -0,0 +1,39 @@
++precision highp float;
++
++// Draws a circle with the packed depth value
++// GLES2 port: gl_TexCoord[0] -> texCoord0; pack_depth.frag and
++// circle_impl.frag inlined (glsles has no `attach`)
++
++uniform float alpha;
++uniform float far_clip_distance;
++
++const float minimum_alpha = 1.0 / 255.0;
++
++varying float depth;
++varying vec4 texCoord0;
++
++vec4 packDepth()
++{
++  float normalized_depth = depth / far_clip_distance;
++
++  // split up float into rgb components
++  const vec3 shift = vec3(256.0 * 256.0, 256.0, 1.0);
++  const vec3 mask = vec3(0.0, 1.0 / 256.0, 1.0 / 256.0);
++  vec3 depth_packed = fract(normalized_depth * shift);
++  depth_packed -= depth_packed.xxy * mask;
++
++  return vec4( depth_packed.zyx, step( minimum_alpha, alpha ));
++}
++
++// rasterizes a circle of radius 0.5
++void circleImpl( vec4 color, float ax, float ay )
++{
++  float rsquared = ax*ax+ay*ay;
++  float a = (0.25 - rsquared) * 4.0;
++  gl_FragColor = vec4(color.rgb, color.a * ceil(a));
++}
++
++void main()
++{
++  circleImpl( packDepth(), texCoord0.x-0.5, texCoord0.y-0.5 );
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/flat_color.frag b/rviz_rendering/ogre_media/materials/glsles/flat_color.frag
+new file mode 100644
+index 00000000..856f55bc
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/flat_color.frag
+@@ -0,0 +1,15 @@
++precision highp float;
++
++// Passes the fragment color, multiplying a with the alpha param
++// GLES2 port: gl_Color -> frontColour
++
++uniform vec4 highlight;
++uniform float alpha;
++
++varying vec4 frontColour;
++
++void main()
++{
++  vec3 col = frontColour.xyz + frontColour.xyz * highlight.xyz;
++  gl_FragColor = vec4(col, frontColour.a * alpha);
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/flat_color_circle.frag b/rviz_rendering/ogre_media/materials/glsles/flat_color_circle.frag
+new file mode 100644
+index 00000000..1ce9c7ea
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/flat_color_circle.frag
+@@ -0,0 +1,25 @@
++precision highp float;
++
++// Draws a circle in the fragment color, multiplying a with the alpha param
++// GLES2 port: gl_Color -> frontColour, gl_TexCoord[0] -> texCoord0;
++// circle_impl.frag inlined (glsles has no `attach`)
++
++uniform vec4 highlight;
++uniform float alpha;
++
++varying vec4 frontColour;
++varying vec4 texCoord0;
++
++// rasterizes a circle of radius 0.5
++void circleImpl( vec4 color, float ax, float ay )
++{
++  float rsquared = ax*ax+ay*ay;
++  float a = (0.25 - rsquared) * 4.0;
++  gl_FragColor = vec4(color.rgb, color.a * ceil(a));
++}
++
++void main()
++{
++  vec3 col = frontColour.xyz + frontColour.xyz * highlight.xyz;
++  circleImpl( vec4(col, alpha * frontColour.a), texCoord0.x-0.5, texCoord0.y-0.5 );
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/glsles.program b/rviz_rendering/ogre_media/materials/glsles/glsles.program
+new file mode 100644
+index 00000000..580ea623
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/glsles.program
+@@ -0,0 +1,158 @@
++// OHOS/GLES2 port of glsl120.program (GLSL ES 1.00).
++// Program names are kept identical to the glsl120 variants so the shared
++// .material scripts reference them unchanged; only the language differs.
++// On OHOS setupResources() adds this directory INSTEAD of glsl120/.
++// NB: glsles has no `attach` support (scripts are compiled as a single
++// source), so the glsl120 include files are inlined into the shaders.
++
++fragment_program rviz/glsl120/depth_circle.frag glsles
++{
++  source depth_circle.frag
++  default_params
++  {
++    param_named_auto alpha custom 1
++    param_named_auto far_clip_distance far_clip_distance
++  }
++}
++
++
++fragment_program rviz/glsl120/depth.frag glsles
++{
++  source depth.frag
++  default_params
++  {
++    param_named_auto alpha custom         1
++    param_named_auto far_clip_distance far_clip_distance
++  }
++}
++
++
++vertex_program rviz/glsl120/depth.vert glsles
++{
++  source depth.vert
++  default_params {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++    param_named_auto worldview_matrix     worldview_matrix
++  }
++}
++
++
++fragment_program rviz/glsl120/flat_color.frag glsles
++{
++  source flat_color.frag
++  default_params
++  {
++    param_named_auto highlight custom 5
++    param_named_auto alpha custom 1
++  }
++}
++
++
++fragment_program rviz/glsl120/flat_color_circle.frag glsles
++{
++  source flat_color_circle.frag
++  default_params
++  {
++    param_named_auto highlight custom 5
++    param_named_auto alpha custom 1
++  }
++}
++
++
++fragment_program rviz/glsl120/indexed_8bit_image.frag glsles
++{
++  source indexed_8bit_image.frag
++  default_params
++  {
++    param_named_auto alpha custom 1
++  }
++}
++
++vertex_program rviz/glsl120/indexed_8bit_image.vert glsles
++{
++  source indexed_8bit_image.vert
++  default_params
++  {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++  }
++}
++
++fragment_program rviz/glsl120/pass_color_circle.frag glsles
++{
++  source pass_color_circle.frag
++}
++
++
++fragment_program rviz/glsl120/pass_color.frag glsles
++{
++  source pass_color.frag
++}
++
++
++fragment_program rviz/glsl120/pickcolor_circle.frag glsles
++{
++  source pickcolor_circle.frag
++  default_params
++  {
++    param_named_auto pick_color custom    2
++  }
++}
++
++
++fragment_program rviz/glsl120/pickcolor.frag glsles
++{
++  source pickcolor.frag
++  default_params
++  {
++    param_named_auto pick_color custom    2
++  }
++}
++
++
++fragment_program rviz/glsl120/black.frag glsles
++{
++  source black.frag
++}
++
++
++vertex_program rviz/glsl120/point.vert glsles
++{
++  source point.vert
++  default_params {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++    param_named_auto size custom          0
++  }
++}
++vertex_program rviz/glsl120/point.vert(with_depth) glsles
++{
++  source point.vert
++  preprocessor_defines WITH_DEPTH=1
++  default_params {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++    param_named_auto worldview_matrix worldview_matrix
++    param_named_auto size custom          0
++  }
++}
++
++
++
++fragment_program rviz/glsl120/shaded_circle.frag glsles
++{
++  source shaded_circle.frag
++  default_params
++  {
++    param_named_auto highlight custom 5
++    param_named_auto alpha custom 1
++  }
++}
++
++
++fragment_program rviz/glsl120/smooth_square.frag glsles
++{
++  source smooth_square.frag
++  default_params
++  {
++    param_named_auto highlight custom 5
++    param_named_auto alpha custom 1
++  }
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/indexed_8bit_image.frag b/rviz_rendering/ogre_media/materials/glsles/indexed_8bit_image.frag
+new file mode 100644
+index 00000000..d8bbdf17
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/indexed_8bit_image.frag
+@@ -0,0 +1,19 @@
++precision highp float;
++
++// Draws an 8-bit image using RGB values from a 256x1 palette texture.
++// GLES2 port: sampler1D/texture1D do not exist in GLSL ES, sample the 256x1
++// palette as a 2D texture at v=0.5 instead.
++
++varying vec2 UV;
++uniform sampler2D eight_bit_image;
++uniform sampler2D palette;
++uniform float alpha;
++
++void main()
++{
++  // The 0.999 multiply is needed because brightness value 255 comes
++  // out of texture2D() as 1.0, which wraps around to 0.0 in the
++  // palette texture.
++  vec4 color = texture2D( palette, vec2(0.999 * texture2D( eight_bit_image, UV ).x, 0.5) );
++  gl_FragColor = vec4( color.rgb, color.a * alpha );
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/indexed_8bit_image.vert b/rviz_rendering/ogre_media/materials/glsles/indexed_8bit_image.vert
+new file mode 100644
+index 00000000..7525abd1
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/indexed_8bit_image.vert
+@@ -0,0 +1,15 @@
++// Draws an 8-bit image using RGB values from a 256x1 palette texture.
++// This vertex shader just passes through the UV texture coordinates.
++// GLES2 port: ftransform() -> worldviewproj_matrix * vertex
++
++uniform mat4 worldviewproj_matrix;
++
++attribute vec4 vertex;
++attribute vec4 uv0;
++varying vec2 UV;
++
++void main()
++{
++  gl_Position = worldviewproj_matrix * vertex;
++  UV = vec2(uv0);
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/nogp/billboard.vert b/rviz_rendering/ogre_media/materials/glsles/nogp/billboard.vert
+new file mode 100644
+index 00000000..31d4df8a
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/nogp/billboard.vert
+@@ -0,0 +1,60 @@
++// Computes the position of a billboard vertex so
++// the resulting quad will face the camera.
++// Texture coords are used to determine which corner
++// of the billboard we compute.
++// GLES2 port: gl_Vertex -> vertex, gl_Color -> colour,
++// gl_MultiTexCoord0 -> uv0, gl_TexCoord[0] -> texCoord0,
++// gl_FrontColor -> frontColour; pass_depth.vert inlined under WITH_DEPTH
++// (glsles has no `attach`)
++
++uniform mat4 worldviewproj_matrix;
++uniform vec4 camera_pos;
++uniform vec4 size;
++uniform vec4 auto_size;
++
++attribute vec4 vertex;
++attribute vec4 colour;
++attribute vec4 uv0;
++
++varying vec4 frontColour;
++varying vec4 texCoord0;
++
++#ifdef WITH_DEPTH
++uniform mat4 worldview_matrix;
++
++varying float depth;
++
++void passDepth( vec4 pos )
++{
++  vec4 pos_rel_view = worldview_matrix * pos;
++  depth = -pos_rel_view.z;
++}
++#endif
++
++void main()
++{
++  vec3 at = camera_pos.xyz - vertex.xyz;
++  at = normalize(at);
++  vec3 right = cross(vec3( 0.0, 1.0, 0.0 ), at);
++  vec3 up = cross(at, right);
++  right = normalize(right);
++  up = normalize(up);
++
++  // if auto_size == 1, then size_factor == size*vertex.z
++  // if auto_size == 0, then size_factor == size
++  vec4 size_factor = (1.0-auto_size.x+(auto_size.x*vertex.z))*size;
++
++  vec4 s = uv0 * (size_factor);
++  vec3 r = s.xxx * right;
++  vec3 u = s.yyy * up;
++
++  vec4 pos = vertex + vec4( r + u, 0.0 );
++
++  gl_Position = worldviewproj_matrix * pos;
++  texCoord0 = uv0 + vec4(0.5,0.5,0.0,0.0);
++  frontColour = colour;
++
++#ifdef WITH_DEPTH
++  passDepth( pos );
++#endif
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/nogp/billboard_tile.vert b/rviz_rendering/ogre_media/materials/glsles/nogp/billboard_tile.vert
+new file mode 100644
+index 00000000..b532643e
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/nogp/billboard_tile.vert
+@@ -0,0 +1,51 @@
++// Computes the position of a billboard vertex so
++// the resulting quad will face a given direction given by up & normal.
++// Texture coords are used to determine which corner
++// of the billboard we compute.
++// GLES2 port: gl_Vertex -> vertex, gl_Color -> colour,
++// gl_MultiTexCoord0 -> uv0, gl_TexCoord[0] -> texCoord0,
++// gl_FrontColor -> frontColour; pass_depth.vert inlined under WITH_DEPTH
++// (glsles has no `attach`)
++
++uniform mat4 worldviewproj_matrix;
++uniform vec4 size;
++uniform vec4 normal;
++uniform vec4 up;
++
++attribute vec4 vertex;
++attribute vec4 colour;
++attribute vec4 uv0;
++
++varying vec4 frontColour;
++varying vec4 texCoord0;
++
++#ifdef WITH_DEPTH
++uniform mat4 worldview_matrix;
++
++varying float depth;
++
++void passDepth( vec4 pos )
++{
++  vec4 pos_rel_view = worldview_matrix * pos;
++  depth = -pos_rel_view.z;
++}
++#endif
++
++void main()
++{
++  vec3 right = cross(up.xyz, normal.xyz);
++
++  vec4 s = uv0 * size;
++  vec3 r = s.xxx * right;
++  vec3 u = s.yyy * up.xyz;
++
++  vec4 pos = vertex + vec4( r + u, 0.0 );
++
++  gl_Position = worldviewproj_matrix * pos;
++  texCoord0 = uv0 + vec4(0.5,0.5,0.0,0.0);
++  frontColour = colour;
++
++#ifdef WITH_DEPTH
++  passDepth( pos );
++#endif
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/nogp/box.frag b/rviz_rendering/ogre_media/materials/glsles/nogp/box.frag
+new file mode 100644
+index 00000000..bda29832
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/nogp/box.frag
+@@ -0,0 +1,74 @@
++precision highp float;
++
++// rasterizes a smooth square on any face of a box
++// and creates a fake lighting effect
++// x,y,z texture coords must be in the interval (-0.5...0.5)
++// GLES2 port: gl_Color -> frontColour, gl_TexCoord[0] -> texCoord0;
++// the const float[] array constructor is desktop-only, use an if-chain.
++
++uniform vec4 highlight;
++uniform float alpha;
++
++varying vec4 frontColour;
++varying vec4 texCoord0;
++
++void main()
++{
++  float ax;
++  float ay;
++  float l;
++
++  if ( texCoord0.z > 0.4999 )
++  {
++    ax = texCoord0.x;
++    ay = texCoord0.y;
++    l = 0.9;
++  }
++  else if ( texCoord0.z < -0.4999 )
++  {
++    ax = texCoord0.x;
++    ay = texCoord0.y;
++    l = 0.5;
++  }
++  else if ( texCoord0.x > 0.4999 )
++  {
++    ax = texCoord0.y;
++    ay = texCoord0.z;
++    l = 0.6;
++  }
++  else if ( texCoord0.x < -0.4999 )
++  {
++    ax = texCoord0.y;
++    ay = texCoord0.z;
++    l = 0.6;
++  }
++  else if ( texCoord0.y > 0.4999 )
++  {
++    ax = texCoord0.x;
++    ay = texCoord0.z;
++    l = 1.0;
++  }
++  else
++  {
++    ax = texCoord0.x;
++    ay = texCoord0.z;
++    l = 0.4;
++  }
++
++  float blend = smoothstep(-0.48, -0.45, ay) * (1.0 - smoothstep(0.45, 0.48, ay)) *
++                smoothstep(-0.48, -0.45, ax) * (1.0 - smoothstep(0.45, 0.48, ax));
++
++  float inv_blend = 1.0 - blend;
++
++  //vec3 col = blend * frontColour.xyz + (sign(0.5 - length(vec3(frontColour.xyz))) * vec3(0.2, 0.2, 0.2) + frontColour.xyz) * inv_blend;
++
++  //alternative version: make color at edge darker
++  vec3 col = (0.5 + 0.5*blend) * frontColour.xyz;
++
++  col = col * l;
++
++  col = col + col * highlight.xyz;
++
++
++  gl_FragColor = vec4(col.r, col.g, col.b, alpha * frontColour.a );
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/nogp/box.vert b/rviz_rendering/ogre_media/materials/glsles/nogp/box.vert
+new file mode 100644
+index 00000000..9d34bca6
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/nogp/box.vert
+@@ -0,0 +1,47 @@
++// Computes the position of a box vertex from its texture coords.
++// Used in case that geometry shaders are not supported.
++// GLES2 port: gl_Vertex -> vertex, gl_Color -> colour,
++// gl_MultiTexCoord0 -> uv0, gl_TexCoord[0] -> texCoord0,
++// gl_FrontColor -> frontColour; pass_depth.vert inlined under WITH_DEPTH
++// (glsles has no `attach`)
++
++uniform mat4 worldviewproj_matrix;
++uniform vec4 camera_pos;
++uniform vec4 size;
++uniform vec4 auto_size;
++
++attribute vec4 vertex;
++attribute vec4 colour;
++attribute vec4 uv0;
++
++varying vec4 frontColour;
++varying vec4 texCoord0;
++
++#ifdef WITH_DEPTH
++uniform mat4 worldview_matrix;
++
++varying float depth;
++
++void passDepth( vec4 pos )
++{
++  vec4 pos_rel_view = worldview_matrix * pos;
++  depth = -pos_rel_view.z;
++}
++#endif
++
++void main()
++{
++  // if auto_size == 1, then size_factor == size*vertex.z
++  // if auto_size == 0, then size_factor == size
++  vec4 size_factor = (1.0-auto_size.x+(auto_size.x*vertex.z))*size;
++
++  vec4 s = uv0 * size_factor;
++  vec4 pos = vertex - s;
++  gl_Position = worldviewproj_matrix * pos;
++  texCoord0 = uv0;
++  frontColour = colour;
++
++#ifdef WITH_DEPTH
++  passDepth( pos );
++#endif
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/nogp/nogp.program b/rviz_rendering/ogre_media/materials/glsles/nogp/nogp.program
+new file mode 100644
+index 00000000..6df02e2d
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/nogp/nogp.program
+@@ -0,0 +1,89 @@
++// OHOS/GLES2 port of nogp.program (GLSL ES 1.00); program names unchanged.
++// These shaders are work-arounds in case geometry shaders
++// are not supported, so vertices can't be created on the graphics card.
++// Multiple vertices are passed in for each primitive,
++// and each one is offset according to its texture coords.
++// NB: glsles has no `attach` support; passDepth() is inlined under
++// #ifdef WITH_DEPTH in the sources.
++
++vertex_program rviz/glsl120/nogp/billboard_tile.vert glsles
++{
++  source billboard_tile.vert
++  default_params
++  {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++    param_named_auto size custom          0
++    param_named_auto normal custom 3
++    param_named_auto up custom 4
++  }
++}
++vertex_program rviz/glsl120/nogp/billboard_tile.vert(with_depth) glsles
++{
++  source billboard_tile.vert
++  preprocessor_defines WITH_DEPTH=1
++  default_params
++  {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++    param_named_auto worldview_matrix     worldview_matrix
++    param_named_auto size custom          0
++    param_named_auto normal custom 3
++    param_named_auto up custom 4
++  }
++}
++
++
++vertex_program rviz/glsl120/nogp/billboard.vert glsles
++{
++  source billboard.vert
++  default_params {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++    param_named_auto camera_pos           camera_position_object_space
++    param_named_auto size custom          0
++    param_named_auto auto_size custom     6
++  }
++}
++vertex_program rviz/glsl120/nogp/billboard.vert(with_depth) glsles
++{
++  source billboard.vert
++  preprocessor_defines WITH_DEPTH=1
++  default_params {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++    param_named_auto worldview_matrix     worldview_matrix
++    param_named_auto camera_pos           camera_position_object_space
++    param_named_auto size custom          0
++    param_named_auto auto_size custom     6
++  }
++}
++
++
++vertex_program rviz/glsl120/nogp/box.vert glsles
++{
++  source box.vert
++  default_params {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++    param_named_auto size custom          0
++    param_named_auto auto_size custom     6
++  }
++}
++vertex_program rviz/glsl120/nogp/box.vert(with_depth) glsles
++{
++  source box.vert
++  preprocessor_defines WITH_DEPTH=1
++  default_params {
++    param_named_auto worldviewproj_matrix worldviewproj_matrix
++    param_named_auto worldview_matrix     worldview_matrix
++    param_named_auto size custom          0
++    param_named_auto auto_size custom     6
++  }
++}
++
++
++fragment_program rviz/glsl120/nogp/box.frag glsles
++{
++  source box.frag
++  default_params
++  {
++    param_named_auto highlight custom 5
++    param_named_auto alpha custom 1
++  }
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/pass_color.frag b/rviz_rendering/ogre_media/materials/glsles/pass_color.frag
+new file mode 100644
+index 00000000..fbd22be1
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/pass_color.frag
+@@ -0,0 +1,11 @@
++precision highp float;
++
++// Passes the fragment color unchanged
++// GLES2 port: gl_Color -> frontColour
++
++varying vec4 frontColour;
++
++void main()
++{
++  gl_FragColor = frontColour;
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/pass_color_circle.frag b/rviz_rendering/ogre_media/materials/glsles/pass_color_circle.frag
+new file mode 100644
+index 00000000..f1bf34b9
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/pass_color_circle.frag
+@@ -0,0 +1,21 @@
++precision highp float;
++
++// Draws a circle in the fragment color
++// GLES2 port: gl_Color -> frontColour, gl_TexCoord[0] -> texCoord0;
++// circle_impl.frag inlined (glsles has no `attach`)
++
++varying vec4 frontColour;
++varying vec4 texCoord0;
++
++// rasterizes a circle of radius 0.5
++void circleImpl( vec4 color, float ax, float ay )
++{
++  float rsquared = ax*ax+ay*ay;
++  float a = (0.25 - rsquared) * 4.0;
++  gl_FragColor = vec4(color.rgb, color.a * ceil(a));
++}
++
++void main()
++{
++  circleImpl( frontColour, texCoord0.x-0.5, texCoord0.y-0.5 );
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/pickcolor.frag b/rviz_rendering/ogre_media/materials/glsles/pickcolor.frag
+new file mode 100644
+index 00000000..4a79bb8b
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/pickcolor.frag
+@@ -0,0 +1,10 @@
++precision highp float;
++
++// Passes the vertex pick color
++
++uniform vec4 pick_color;
++
++void main()
++{
++  gl_FragColor = pick_color;
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/pickcolor_circle.frag b/rviz_rendering/ogre_media/materials/glsles/pickcolor_circle.frag
+new file mode 100644
+index 00000000..5528b807
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/pickcolor_circle.frag
+@@ -0,0 +1,22 @@
++precision highp float;
++
++// Draws a circle in the pick color
++// GLES2 port: gl_TexCoord[0] -> texCoord0; circle_impl.frag inlined
++// (glsles has no `attach`)
++
++varying vec4 texCoord0;
++
++uniform vec4 pick_color;
++
++// rasterizes a circle of radius 0.5
++void circleImpl( vec4 color, float ax, float ay )
++{
++  float rsquared = ax*ax+ay*ay;
++  float a = (0.25 - rsquared) * 4.0;
++  gl_FragColor = vec4(color.rgb, color.a * ceil(a));
++}
++
++void main()
++{
++  circleImpl( pick_color, texCoord0.x-0.5, texCoord0.y-0.5 );
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/point.vert b/rviz_rendering/ogre_media/materials/glsles/point.vert
+new file mode 100644
+index 00000000..697521d2
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/point.vert
+@@ -0,0 +1,36 @@
++// Generic vertex shader for point sprites (GLES2 port:
++// gl_Vertex -> vertex, gl_Color -> colour, gl_FrontColor -> frontColour;
++// pass_depth.vert inlined under WITH_DEPTH - glsles has no `attach`)
++// sets position and point size.
++// Works for perspective and orthographic projection.
++
++uniform mat4 worldviewproj_matrix;
++uniform vec4 size;
++
++attribute vec4 vertex;
++attribute vec4 colour;
++
++varying vec4 frontColour;
++
++#ifdef WITH_DEPTH
++uniform mat4 worldview_matrix;
++
++varying float depth;
++
++void passDepth( vec4 pos )
++{
++  vec4 pos_rel_view = worldview_matrix * pos;
++  depth = -pos_rel_view.z;
++}
++#endif
++
++void main()
++{
++  gl_Position = worldviewproj_matrix * vertex;
++  frontColour = colour;
++  gl_PointSize = size.x;
++
++#ifdef WITH_DEPTH
++  passDepth( vertex );
++#endif
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/shaded_circle.frag b/rviz_rendering/ogre_media/materials/glsles/shaded_circle.frag
+new file mode 100644
+index 00000000..1e14f41f
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/shaded_circle.frag
+@@ -0,0 +1,25 @@
++precision highp float;
++
++// rasterizes a circle that is darker at the borders than in the center
++// GLES2 port: gl_Color -> frontColour, gl_TexCoord[0] -> texCoord0
++
++uniform vec4 highlight;
++uniform float alpha;
++
++varying vec4 frontColour;
++varying vec4 texCoord0;
++
++void main()
++{
++  float ax = texCoord0.x-0.5;
++  float ay = texCoord0.y-0.5;
++
++  float rsquared = ax*ax+ay*ay;
++  float a = (0.25 - rsquared) * 4.0;
++
++  vec3 col = mix(vec3(0.8, 0.8, 0.8) * frontColour.xyz, frontColour.xyz, a);
++
++  col = col + col * highlight.xyz;
++
++  gl_FragColor = vec4(col, alpha * ceil(a) * frontColour.a);
++}
+diff --git a/rviz_rendering/ogre_media/materials/glsles/smooth_square.frag b/rviz_rendering/ogre_media/materials/glsles/smooth_square.frag
+new file mode 100644
+index 00000000..ccec0a93
+--- /dev/null
++++ b/rviz_rendering/ogre_media/materials/glsles/smooth_square.frag
+@@ -0,0 +1,29 @@
++precision highp float;
++
++// rasterizes a smooth square with ax,ay in [-0.5..0.5]
++// GLES2 port: gl_Color -> frontColour, gl_TexCoord[0] -> texCoord0
++
++uniform vec4 highlight;
++uniform float alpha;
++
++varying vec4 frontColour;
++varying vec4 texCoord0;
++
++void main()
++{
++  float ax = texCoord0.x-0.5;
++  float ay = texCoord0.y-0.5;
++
++  float blend = smoothstep(-0.48, -0.45, ay) * (1.0 - smoothstep(0.45, 0.48, ay)) *
++                smoothstep(-0.48, -0.45, ax) * (1.0 - smoothstep(0.45, 0.48, ax));
++
++  float inv_blend = 1.0 - blend;
++  vec3 col = blend * frontColour.xyz + (sign(0.5 - length(vec3(frontColour.xyz))) * vec3(0.2, 0.2, 0.2) + frontColour.xyz) * inv_blend;
++
++  //alternative version: make color at edge darker
++  //vec3 col = (0.5 + 0.5*blend) * frontColour.xyz;
++
++  col = col + col * highlight.xyz;
++
++  gl_FragColor = vec4(col.r, col.g, col.b, alpha * frontColour.a );
++}
+diff --git a/rviz_rendering/src/rviz_rendering/ogre_render_window_impl.cpp b/rviz_rendering/src/rviz_rendering/ogre_render_window_impl.cpp
+index c40f82cd..5a65aa99 100644
+--- a/rviz_rendering/src/rviz_rendering/ogre_render_window_impl.cpp
++++ b/rviz_rendering/src/rviz_rendering/ogre_render_window_impl.cpp
+@@ -221,6 +221,10 @@ RenderWindowImpl::initialize()
+ 
+   if (!ogre_scene_manager_) {
+     ogre_scene_manager_ = ogre_root->createSceneManager();
++#if defined(__OHOS__)
++    // GLES2: register with the RTSS so lights/materials get generated shaders
++    render_system_->addSceneManagerToShaderGenerator(ogre_scene_manager_);
++#endif
+ 
+     ogre_directional_light_ = ogre_scene_manager_->createLight("MainDirectional");
+     ogre_directional_light_->setType(Ogre::Light::LT_DIRECTIONAL);
+@@ -242,6 +246,10 @@ RenderWindowImpl::initialize()
+ 
+   if (ogre_camera_) {
+     ogre_viewport_ = ogre_render_window_->addViewport(ogre_camera_);
++#if defined(__OHOS__)
++    // GLES2: render through the RTSS-generated shader scheme
++    render_system_->setViewportShaderScheme(ogre_viewport_);
++#endif
+     auto bg_color = Ogre::ColourValue(0.937254902f, 0.921568627f, 0.905882353f);  // Qt background
+     ogre_viewport_->setBackgroundColour(bg_color);
+ 
+diff --git a/rviz_rendering/src/rviz_rendering/render_system.cpp b/rviz_rendering/src/rviz_rendering/render_system.cpp
+index 24a20c63..d6b9ca2c 100644
+--- a/rviz_rendering/src/rviz_rendering/render_system.cpp
++++ b/rviz_rendering/src/rviz_rendering/render_system.cpp
+@@ -41,6 +41,15 @@
+ #include <OgreLogManager.h>
+ #include <OgreMeshManager.h>
+ 
++#if defined(__OHOS__)
++// GLES2 has no fixed-function pipeline; the RTSS generates shaders for
++// fixed-function materials (Bites' SGTechniqueResolverListener pattern).
++#include <OgreMaterialManager.h>
++#include <OgreTechnique.h>
++#include <OgreViewport.h>
++#include <RTShaderSystem/OgreRTShaderSystem.h>
++#endif
++
+ #include "ament_index_cpp/get_resource.hpp"
+ #include "ament_index_cpp/get_resources.hpp"
+ #include "rviz_rendering/material_manager.hpp"
+@@ -52,10 +61,91 @@
+ namespace rviz_rendering
+ {
+ 
++#if defined(__OHOS__)
++// MaterialManager::Listener that asks the RTSS ShaderGenerator to create a
++// shader-based technique when a material has none for the RTSS scheme
++// (mirrors OgreBites::SGTechniqueResolverListener, which is not built here).
++class RVizRTSSListener : public Ogre::MaterialManager::Listener
++{
++public:
++  explicit RVizRTSSListener(Ogre::RTShader::ShaderGenerator * shader_generator)
++  : shader_generator_(shader_generator) {}
++
++  Ogre::Technique * handleSchemeNotFound(
++    unsigned short scheme_index, const Ogre::String & scheme_name,
++    Ogre::Material * original_material, unsigned short lod_index,
++    const Ogre::Renderable * rend) override
++  {
++    (void)scheme_index;
++    (void)lod_index;
++    (void)rend;
++    if (!shader_generator_->hasRenderState(scheme_name)) {
++      return nullptr;
++    }
++    bool technique_created = shader_generator_->createShaderBasedTechnique(
++      *original_material,
++      Ogre::MaterialManager::DEFAULT_SCHEME_NAME,
++      scheme_name);
++    if (!technique_created) {
++      return nullptr;
++    }
++    shader_generator_->validateMaterial(
++      scheme_name, original_material->getName(), original_material->getGroup());
++    for (auto * technique : original_material->getTechniques()) {
++      if (technique->getSchemeName() == scheme_name) {
++        return technique;
++      }
++    }
++    return nullptr;
++  }
++
++  bool afterIlluminationPassesCreated(Ogre::Technique * tech) override
++  {
++    if (shader_generator_->hasRenderState(tech->getSchemeName())) {
++      Ogre::Material * mat = tech->getParent();
++      shader_generator_->validateMaterialIlluminationPasses(
++        tech->getSchemeName(), mat->getName(), mat->getGroup());
++      return true;
++    }
++    return false;
++  }
++
++  bool beforeIlluminationPassesCleared(Ogre::Technique * tech) override
++  {
++    if (shader_generator_->hasRenderState(tech->getSchemeName())) {
++      Ogre::Material * mat = tech->getParent();
++      shader_generator_->invalidateMaterialIlluminationPasses(
++        tech->getSchemeName(), mat->getName(), mat->getGroup());
++      return true;
++    }
++    return false;
++  }
++
++private:
++  Ogre::RTShader::ShaderGenerator * shader_generator_;
++};
++#endif  // __OHOS__
++
+ RenderSystem * RenderSystem::instance_ = nullptr;
+ int RenderSystem::force_gl_version_ = 0;
+ bool RenderSystem::force_no_stereo_ = false;
+ 
++#if defined(__OHOS__)
++void
++RenderSystem::destroyRTSS()
++{
++  if (rtss_listener_) {
++    Ogre::MaterialManager::getSingleton().removeListener(rtss_listener_);
++    delete rtss_listener_;
++    rtss_listener_ = nullptr;
++  }
++  if (shader_generator_) {
++    Ogre::RTShader::ShaderGenerator::destroy();
++    shader_generator_ = nullptr;
++  }
++}
++#endif
++
+ // Disable anti aliasing on Windows for now,
+ // since it breaks rendering as soon as two render windows are visible
+ // TODO(greimela): Investigate why anti aliasing breaks rendering on Windows
+@@ -74,6 +164,22 @@ RenderSystem::get()
+   return instance_;
+ }
+ 
++#if defined(__OHOS__)
++void
++RenderSystem::addSceneManagerToShaderGenerator(Ogre::SceneManager * scene_manager)
++{
++  if (shader_generator_) {
++    shader_generator_->addSceneManager(scene_manager);
++  }
++}
++
++void
++RenderSystem::setViewportShaderScheme(Ogre::Viewport * viewport)
++{
++  viewport->setMaterialScheme(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
++}
++#endif
++
+ Ogre::Root *
+ RenderSystem::getOgreRoot()
+ {
+@@ -82,6 +188,9 @@ RenderSystem::getOgreRoot()
+ 
+ void RenderSystem::Destroy()
+ {
++#if defined(__OHOS__)
++  destroyRTSS();
++#endif
+   OGRE_DELETE this->ogre_overlay_system_;
+   this->ogre_overlay_system_ = nullptr;
+   if (this->ogre_root_) {
+@@ -94,7 +203,7 @@ void RenderSystem::Destroy()
+   }
+   delete this->ogre_logging;
+ 
+-#if __linux__
++#if __linux__ && !defined(__OHOS__)
+   if (this->dummyDisplay) {
+     Display * x11Display = static_cast<Display *>(this->dummyDisplay);
+     GLXContext x11Context = static_cast<GLXContext>(this->dummyContext);
+@@ -168,6 +277,41 @@ RenderSystem::RenderSystem()
+   setupRenderSystem();
+   ogre_root_->initialise(false);
+   makeRenderWindow(dummy_window_id_, 1, 1);
++#if defined(__OHOS__)
++  // GLES2: enable the RTSS so fixed-function materials get generated shaders.
++  // Must happen AFTER the first render window is created: the GLES2 render
++  // system creates the GpuProgramManager only in
++  // initialiseFromRenderSystemCapabilities().
++  if (Ogre::RTShader::ShaderGenerator::initialize()) {
++    shader_generator_ = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
++    rtss_listener_ = new RVizRTSSListener(shader_generator_);
++    Ogre::MaterialManager::getSingleton().addListener(rtss_listener_);
++    // The RTSS #includes OgreUnifiedShader.h and the FFPLib/SGXLib sources;
++    // they ship with OGRE's Media dir and must be in the internal group.
++    // get_ogre_plugin_directory() is "<prefix>/lib/OGRE/" on OHOS.
++    std::string ogre_prefix = get_ogre_plugin_directory();
++    std::string suffix = "lib/OGRE/";
++    if (ogre_prefix.size() > suffix.size() &&
++      ogre_prefix.compare(ogre_prefix.size() - suffix.size(), suffix.size(), suffix) == 0)
++    {
++      ogre_prefix.erase(ogre_prefix.size() - suffix.size());
++      Ogre::ResourceGroupManager & rgm = Ogre::ResourceGroupManager::getSingleton();
++      rgm.addResourceLocation(
++        ogre_prefix + "share/OGRE/Media/RTShaderLib/materials", "FileSystem",
++        Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
++      rgm.addResourceLocation(
++        ogre_prefix + "share/OGRE/Media/RTShaderLib/GLSL", "FileSystem",
++        Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
++      rgm.addResourceLocation(
++        ogre_prefix + "share/OGRE/Media/ShadowVolume", "FileSystem",
++        Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
++    } else {
++      RVIZ_RENDERING_LOG_ERROR("Could not derive the OGRE prefix for the RTSS shader library");
++    }
++  } else {
++    RVIZ_RENDERING_LOG_ERROR("Failed to initialize the Ogre RTShaderSystem");
++  }
++#endif
+   detectGlVersion();
+   setupResources();
+   Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+@@ -185,7 +329,7 @@ void
+ RenderSystem::setupDummyWindowId()
+ {
+   this->dummy_window_id_ = 0;
+-#ifdef __linux__
++#if defined(__linux__) && !defined(__OHOS__)
+   this->dummyDisplay = XOpenDisplay(0);
+   if (!this->dummyDisplay) {
+     std::cerr << "Unable to open display: " << XDisplayName(0) << std::endl;
+@@ -222,7 +366,10 @@ void
+ RenderSystem::loadOgrePlugins()
+ {
+   std::string plugin_prefix = get_ogre_plugin_directory();
+-#if defined _WIN32 && !NDEBUG
++#if defined(__OHOS__)
++  // OpenHarmony: OGRE is built with the GLES2 render system only
++  ogre_root_->loadPlugin(plugin_prefix + "RenderSystem_GLES2");
++#elif defined _WIN32 && !NDEBUG
+   ogre_root_->loadPlugin(plugin_prefix + "RenderSystem_GL_d");
+ #else
+   ogre_root_->loadPlugin(plugin_prefix + "RenderSystem_GL");
+@@ -269,6 +416,14 @@ RenderSystem::detectGlVersion()
+       }
+       break;
+   }
++#if defined(__OHOS__)
++  // OHOS: GLES2's GLSL ES 1.00 covers the glsl120 subset rviz uses (ported
++  // shaders); claim 120 so the scripts120 materials are loaded instead of
++  // erroring out with "graphics driver does not support OpenGL 2.1".
++  if (gl_version_ >= 200 && glsl_version_ < 120) {
++    glsl_version_ = 120;
++  }
++#endif
+   RVIZ_RENDERING_LOG_INFO_STREAM(
+     "OpenGl version: " << gl_version_ / 100.0 << " (GLSL " << glsl_version_ / 100.0 << ")"
+   );
+@@ -332,6 +487,9 @@ RenderSystem::setPluginDirectory()
+   ament_index_cpp::get_resource("packages", "rviz_ogre_vendor", content, &prefix_path);
+ #ifdef _WIN32
+   set_ogre_plugin_directory(prefix_path + "\\opt\\rviz_ogre_vendor\\bin\\");
++#elif defined(__OHOS__)
++  // OHOS: OGRE is prebuilt into the install prefix itself, no opt/ subdir
++  set_ogre_plugin_directory(prefix_path + "/lib/OGRE/");
+ #else
+   set_ogre_plugin_directory(prefix_path + "/opt/rviz_ogre_vendor/lib/OGRE/");
+ #endif
+@@ -355,12 +513,21 @@ RenderSystem::setupResources()
+     rviz_path + "/ogre_media/materials", "FileSystem", "rviz_rendering");
+   Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+     rviz_path + "/ogre_media/materials/scripts", "FileSystem", "rviz_rendering");
++#if defined(__OHOS__)
++  // GLES2: load the GLSL ES ports of the rviz shaders (same program names,
++  // glsles language) instead of the desktop glsl120 variants.
++  Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
++    rviz_path + "/ogre_media/materials/glsles", "FileSystem", "rviz_rendering");
++  Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
++    rviz_path + "/ogre_media/materials/glsles/nogp", "FileSystem", "rviz_rendering");
++#else
+   Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+     rviz_path + "/ogre_media/materials/glsl120", "FileSystem", "rviz_rendering");
+   Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+     rviz_path + "/ogre_media/materials/glsl120/include", "FileSystem", "rviz_rendering");
+   Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+     rviz_path + "/ogre_media/materials/glsl120/nogp", "FileSystem", "rviz_rendering");
++#endif
+   // Add resources that depend on a specific glsl version.
+   // Unfortunately, Ogre doesn't have a notion of glsl versions so we can't go
+   // the 'official' way of defining multiple schemes per material and let Ogre
+@@ -416,7 +583,7 @@ void RenderSystem::addAdditionalResourcesFromAmentIndex() const
+ // over and over again until it works (or until 100 failures, which
+ // makes it seem like it is a different bug).
+ static bool x_baddrawable_error = false;
+-#ifdef __linux__
++#if defined(__linux__) && !defined(__OHOS__)
+ static int (* old_error_handler)(Display *, XErrorEvent *);
+ int checkBadDrawable(Display * display, XErrorEvent * error)
+ {
+@@ -432,7 +599,7 @@ int checkBadDrawable(Display * display, XErrorEvent * error)
+     return old_error_handler(display, error);
+   }
+ }
+-#endif  // __linux__
++#endif  // __linux__ && !__OHOS__
+ 
+ Ogre::RenderWindow *
+ RenderSystem::makeRenderWindow(
+-- 
+2.55.0.windows.5
+

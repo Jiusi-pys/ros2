@@ -1,0 +1,108 @@
+From 7be4c3fcb4e50ac97cff2cf0ae71da471e65dced Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:06:44 +0800
+Subject: [PATCH] OpenHarmony cross build fixes
+
+- tracetools/test_tracetools: LTTng include-dir and libatomic guards for the
+  cross sysroot
+- lttngpy: force the target extension suffix (pybind11's classic
+  FindPythonLibsNew path force-caches the host .pyd suffix)
+---
+ lttngpy/CMakeLists.txt         | 17 ++++++++++++++++-
+ test_tracetools/CMakeLists.txt |  5 +++++
+ tracetools/CMakeLists.txt      |  7 +++++++
+ 3 files changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/lttngpy/CMakeLists.txt b/lttngpy/CMakeLists.txt
+index deacf8f..e81e04b 100644
+--- a/lttngpy/CMakeLists.txt
++++ b/lttngpy/CMakeLists.txt
+@@ -86,7 +86,16 @@ endif()
+ 
+ pybind11_add_module(_lttngpy_pybind11 SHARED ${SOURCES})
+ 
+-if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE)
++if(OHOS_CROSS_BUILD)
++  # OHOS: pybind11's classic FindPythonLibsNew queries the HOST interpreter
++  # for PYTHON_MODULE_EXTENSION, yielding a win_amd64 .pyd suffix that the
++  # board interpreter cannot import; force the target SOABI suffix.
++  set_target_properties(_lttngpy_pybind11 PROPERTIES
++    SUFFIX ".cpython-312-aarch64-linux-ohos.so")
++endif()
++
++if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE AND NOT OHOS_CROSS_BUILD)
++  # OHOS: the NDK has no libatomic (aarch64 atomics are native)
+   target_link_libraries(_lttngpy_pybind11 PRIVATE atomic)
+ endif()
+ 
+@@ -95,6 +104,9 @@ target_include_directories(_lttngpy_pybind11 PRIVATE
+   "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/src>"
+ )
+ if(NOT LTTNGPY_DISABLED)
++  # Cross builds: lttng/lttng.h (lttng-ctl) lives outside the toolchain's
++  # default search path.
++  target_include_directories(_lttngpy_pybind11 PRIVATE ${LTTNG_CTL_INCLUDE_DIRS})
+   target_link_libraries(_lttngpy_pybind11 PRIVATE ${LTTNG_CTL_LIBRARIES})
+ endif()
+ 
+@@ -117,6 +129,7 @@ if(BUILD_TESTING)
+       target_include_directories(test_context_app PRIVATE
+         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+         "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/src>"
++        ${LTTNG_CTL_INCLUDE_DIRS}
+       )
+     endif()
+ 
+@@ -126,6 +139,7 @@ if(BUILD_TESTING)
+       target_include_directories(test_context_lttng PRIVATE
+         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+         "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/src>"
++        ${LTTNG_CTL_INCLUDE_DIRS}
+       )
+     endif()
+ 
+@@ -135,6 +149,7 @@ if(BUILD_TESTING)
+       target_include_directories(test_context_perf PRIVATE
+         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+         "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/src>"
++        ${LTTNG_CTL_INCLUDE_DIRS}
+       )
+     endif()
+ 
+diff --git a/test_tracetools/CMakeLists.txt b/test_tracetools/CMakeLists.txt
+index 9d8ebb4..29b4e02 100644
+--- a/test_tracetools/CMakeLists.txt
++++ b/test_tracetools/CMakeLists.txt
+@@ -53,6 +53,11 @@ if(BUILD_TESTING)
+   target_include_directories(${PROJECT_NAME}_mark_process PUBLIC
+     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+   )
++  if(NOT TRACETOOLS_DISABLED)
++    # Cross builds: lttng/tracef.h lives outside the toolchain's default
++    # search path.
++    target_include_directories(${PROJECT_NAME}_mark_process PRIVATE ${LTTNG_INCLUDE_DIRS})
++  endif()
+   if(TRACETOOLS_DISABLED)
+     target_compile_definitions(${PROJECT_NAME}_mark_process PRIVATE TRACETOOLS_DISABLED)
+   endif()
+diff --git a/tracetools/CMakeLists.txt b/tracetools/CMakeLists.txt
+index d9784c6..fa23541 100644
+--- a/tracetools/CMakeLists.txt
++++ b/tracetools/CMakeLists.txt
+@@ -98,6 +98,13 @@ else()
+   )
+ endif()
+ 
++if(NOT TRACETOOLS_TRACEPOINTS_EXCLUDED)
++  # Cross builds: the LTTng-UST headers live outside the toolchain's default
++  # search path. PUBLIC because downstream targets include tracetools headers
++  # that pull in <lttng/tracepoint.h>.
++  target_include_directories(${PROJECT_NAME} PUBLIC ${LTTNG_INCLUDE_DIRS})
++endif()
++
+ set(export_target_options)
+ if(NOT TRACETOOLS_DISABLED)
+   set(export_target_options "HAS_LIBRARY_TARGET")
+-- 
+2.55.0.windows.5
+

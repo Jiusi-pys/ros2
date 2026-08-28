@@ -1,0 +1,120 @@
+From 03596361b99a04c6cd804e2524c56096d7c339d1 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:06 +0800
+Subject: [PATCH] Fix memory_tools build against musl libc (OpenHarmony cross
+ build)
+
+Two independent musl problems, both gated on OHOS_CROSS_BUILD / __MUSL__:
+
+- CMakeLists.txt: backward-cpp auto-detection enables backtrace_symbol
+  (execinfo.h / Dl_info), which the OHOS musl sysroot cannot provide.
+  memory_tools only needs allocation hooking, so force all backward-cpp
+  stack walking / symbolization backends off. Additionally force-include
+  <dlfcn.h>: backward.hpp's TraceResolverLinuxBase still references
+  Dl_info with all backends off, and OHOS musl only declares it in
+  <dlfcn.h>, which backward.hpp then never includes.
+- impl/linux.cpp: musl declares malloc/realloc/calloc/free without the
+  noexcept (glibc __THROW) specification, so the interposed definitions
+  must match the platform headers or the build fails.
+
+Reuse note: only needed when the new libc lacks execinfo/Dl_info in the
+default include set; the OHOS_CROSS_BUILD guard comes from the workspace
+toolchain file cmake/ohos-aarch64.toolchain.cmake.
+---
+ .../src/memory_tools/CMakeLists.txt             | 16 ++++++++++++++++
+ .../src/memory_tools/impl/linux.cpp             | 17 +++++++++++++----
+ 2 files changed, 29 insertions(+), 4 deletions(-)
+
+diff --git a/osrf_testing_tools_cpp/src/memory_tools/CMakeLists.txt b/osrf_testing_tools_cpp/src/memory_tools/CMakeLists.txt
+index af256e4..915c2c9 100644
+--- a/osrf_testing_tools_cpp/src/memory_tools/CMakeLists.txt
++++ b/osrf_testing_tools_cpp/src/memory_tools/CMakeLists.txt
+@@ -8,6 +8,15 @@ set(FPHSA_NAME_MISMATCHED TRUE)
+ find_package(Backward REQUIRED)
+ unset(FPHSA_NAME_MISMATCHED)
+ 
++# OHOS cross build: backward-cpp's auto-detection enables backtrace_symbol
++# (execinfo.h / Dl_info) which is not usable with the OHOS musl sysroot.
++# memory_tools only needs allocation hooking, so force all backward-cpp
++# stack walking / symbolization backends off.
++if(OHOS_CROSS_BUILD)
++  set_target_properties(Backward::Backward PROPERTIES
++    INTERFACE_COMPILE_DEFINITIONS "BACKWARD_HAS_UNWIND=1;BACKWARD_HAS_LIBUNWIND=0;BACKWARD_HAS_BACKTRACE=0;BACKWARD_HAS_BACKTRACE_SYMBOL=0;BACKWARD_HAS_DW=0;BACKWARD_HAS_BFD=0;BACKWARD_HAS_DWARF=0")
++endif()
++
+ add_library(memory_tools SHARED
+   custom_memory_functions.cpp
+   implementation_monitoring_override.cpp
+@@ -28,6 +37,13 @@ target_include_directories(memory_tools
+ )
+ target_link_libraries(memory_tools PRIVATE Backward::Backward)
+ 
++if(OHOS_CROSS_BUILD)
++  # backward.hpp's TraceResolverLinuxBase references Dl_info even with all
++  # symbolization backends off; OHOS musl only declares it in <dlfcn.h>,
++  # which backward.hpp then never includes. Force-include it.
++  target_compile_options(memory_tools PRIVATE -include dlfcn.h)
++endif()
++
+ if(CMAKE_DL_LIBS)
+   target_link_libraries(memory_tools PUBLIC ${CMAKE_DL_LIBS})
+ endif()
+diff --git a/osrf_testing_tools_cpp/src/memory_tools/impl/linux.cpp b/osrf_testing_tools_cpp/src/memory_tools/impl/linux.cpp
+index cf69e73..dacf79c 100644
+--- a/osrf_testing_tools_cpp/src/memory_tools/impl/linux.cpp
++++ b/osrf_testing_tools_cpp/src/memory_tools/impl/linux.cpp
+@@ -21,6 +21,15 @@
+ #include "./static_allocator.hpp"
+ #include "./unix_common.hpp"
+ 
++// OHOS (musl libc) declares malloc/realloc/calloc/free without a noexcept
++// exception specification, unlike glibc (__THROW). Match the platform headers
++// so the interposed definitions below compile.
++#if defined(__MUSL__)
++#define OSRF_TESTING_TOOLS_CPP_INTERPOSE_NOEXCEPT
++#else
++#define OSRF_TESTING_TOOLS_CPP_INTERPOSE_NOEXCEPT noexcept
++#endif
++
+ template<typename FunctionPointerT>
+ FunctionPointerT
+ find_original_function(const char * name)
+@@ -85,7 +94,7 @@ extern "C"
+ {
+ 
+ void *
+-malloc(size_t size) noexcept
++malloc(size_t size) OSRF_TESTING_TOOLS_CPP_INTERPOSE_NOEXCEPT
+ {
+   if (!get_static_initialization_complete()) {
+     return get_static_allocator()->allocate(size);
+@@ -94,7 +103,7 @@ malloc(size_t size) noexcept
+ }
+ 
+ void *
+-realloc(void * pointer, size_t size) noexcept
++realloc(void * pointer, size_t size) OSRF_TESTING_TOOLS_CPP_INTERPOSE_NOEXCEPT
+ {
+   if (!get_static_initialization_complete()) {
+     return get_static_allocator()->reallocate(pointer, size);
+@@ -103,7 +112,7 @@ realloc(void * pointer, size_t size) noexcept
+ }
+ 
+ void *
+-calloc(size_t count, size_t size) noexcept
++calloc(size_t count, size_t size) OSRF_TESTING_TOOLS_CPP_INTERPOSE_NOEXCEPT
+ {
+   if (!get_static_initialization_complete()) {
+     return get_static_allocator()->zero_allocate(count, size);
+@@ -112,7 +121,7 @@ calloc(size_t count, size_t size) noexcept
+ }
+ 
+ void
+-free(void * pointer) noexcept
++free(void * pointer) OSRF_TESTING_TOOLS_CPP_INTERPOSE_NOEXCEPT
+ {
+   if (nullptr == pointer || get_static_allocator()->deallocate(pointer)) {
+     // free of nullptr or,
+-- 
+2.55.0.windows.5
+

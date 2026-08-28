@@ -1,0 +1,32 @@
+From 20f2daebabe8c3e4595fbc86cf14e2efaf169a91 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:07:12 +0800
+Subject: [PATCH] ament_cmake_vendor_package: skip self-tests when cross
+ compiling for OHOS
+
+The test fixtures run nested vendored ExternalProject builds which depend on
+CMAKE_PREFIX_PATH env propagation that colcon on the Windows host does not
+forward.
+---
+ ament_cmake_vendor_package/CMakeLists.txt | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/ament_cmake_vendor_package/CMakeLists.txt b/ament_cmake_vendor_package/CMakeLists.txt
+index a33f1a1..334f5dc 100644
+--- a/ament_cmake_vendor_package/CMakeLists.txt
++++ b/ament_cmake_vendor_package/CMakeLists.txt
+@@ -13,7 +13,10 @@ ament_package(
+ )
+ 
+ include(CTest)
+-if(BUILD_TESTING)
++# OHOS cross build: the test fixtures run nested vendored ExternalProject
++# builds which depend on CMAKE_PREFIX_PATH env propagation that colcon on the
++# Windows host does not forward; skip the self-tests when cross compiling.
++if(BUILD_TESTING AND NOT OHOS_CROSS_BUILD)
+   add_subdirectory(test)
+ endif()
+ 
+-- 
+2.55.0.windows.5
+

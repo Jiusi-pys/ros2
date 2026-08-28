@@ -1,0 +1,61 @@
+From 650ed577f1ca23d4cca85c7bbb8601972630a9fc Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:07:11 +0800
+Subject: [PATCH] OpenHarmony/musl: patch Mimick's glibc-only ElfAddr/ElfOff
+ typedefs
+
+---
+ CMakeLists.txt                    |  3 +++
+ patches/0001-musl-elf-types.patch | 26 ++++++++++++++++++++++++++
+ 2 files changed, 29 insertions(+)
+ create mode 100644 patches/0001-musl-elf-types.patch
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 110b4c9..b9aeb2f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -7,6 +7,9 @@ find_package(ament_cmake_vendor_package REQUIRED)
+ ament_vendor(mimick_vendor
+   VCS_URL https://github.com/ros2/Mimick.git
+   VCS_VERSION 4dbd495e9f3d87a83c3201ef9d851e85f7133db7
++  # OHOS/musl: plt-elf.c uses glibc-only ElfAddr/ElfOff typedefs on the
++  # no-_r_debug fallback path; replace them with ElfW() types.
++  PATCHES patches
+ )
+ 
+ ament_export_dependencies(mimick)
+diff --git a/patches/0001-musl-elf-types.patch b/patches/0001-musl-elf-types.patch
+new file mode 100644
+index 0000000..6c2f874
+--- /dev/null
++++ b/patches/0001-musl-elf-types.patch
+@@ -0,0 +1,26 @@
++diff --git a/src/plt-elf.c b/src/plt-elf.c
++index 953f820..d89502e 100644
++--- a/src/plt-elf.c
+++++ b/src/plt-elf.c
++@@ -94,9 +94,10 @@ static ElfWord lib_dt_lookup_val(plt_lib lib, ElfSWord tag)
++ #if !defined HAVE__R_DEBUG
++ static int find_dynamic(struct dl_phdr_info *info, size_t size, void *data)
++ {
++-    ElfAddr *ctx = data;
+++    ElfW(Addr) *ctx = data;  /* OHOS/musl: no bare ElfAddr typedef */
++ 
++-    for (ElfOff i = 0; i < info->dlpi_phnum; ++i) {
+++    /* OHOS/musl: no bare ElfOff typedef */
+++    for (int i = 0; i < (int) info->dlpi_phnum; ++i) {
++         if (info->dlpi_phdr[i].p_type == PT_DYNAMIC) {
++             *ctx = info->dlpi_addr + info->dlpi_phdr[i].p_vaddr;
++             return 1;
++@@ -132,7 +133,7 @@ static struct r_debug *get_r_debug(void)
++ # if defined HAVE__DYNAMIC
++     if (!dbg) {
++ # endif
++-        ElfAddr dynamic;
+++        ElfW(Addr) dynamic;  /* OHOS/musl: no bare ElfAddr typedef */
++         if (dl_iterate_phdr(find_dynamic, &dynamic) > 0)
++             dbg = r_debug_from_dynamic((void *) dynamic);
++ # if defined HAVE__DYNAMIC
+-- 
+2.55.0.windows.5
+

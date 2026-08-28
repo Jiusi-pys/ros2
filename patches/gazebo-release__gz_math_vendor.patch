@@ -1,0 +1,51 @@
+From 06a86013cc442df4e4f140646ff0fe39349abfd0 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:07:12 +0800
+Subject: [PATCH] OHOS: prepend opt/gz_math_vendor to CMAKE_PREFIX_PATH in
+ extras
+
+---
+ CMakeLists.txt                 | 14 ++++++++++++++
+ gz_math_vendor-extras.cmake.in |  6 ++++++
+ 2 files changed, 20 insertions(+)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index fc9fa2f..30d0899 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -34,6 +34,20 @@ find_package(ament_cmake_export_dependencies REQUIRED)
+ find_package(gz_cmake_vendor REQUIRED)
+ find_package(gz_utils_vendor REQUIRED)
+ 
++# OHOS cross build: the vendor package GLOBAL_HOOK relies on CMAKE_PREFIX_PATH
++# env propagation into the vendored ExternalProject, which is not forwarded by
++# colcon's hook chain on the Windows host. Derive the vendor install prefixes
++# from the extra_cmake paths their extras added, so the vendored project can
++# find gz-cmake3 and gz-utils2.
++if(OHOS_CROSS_BUILD)
++  foreach(_prefix IN LISTS CMAKE_PREFIX_PATH)
++    if(_prefix MATCHES "/opt/(gz_cmake_vendor|gz_utils_vendor)/extra_cmake$")
++      get_filename_component(_gz_vendor_prefix "${_prefix}" DIRECTORY)
++      list(APPEND CMAKE_PREFIX_PATH "${_gz_vendor_prefix}")
++    endif()
++  endforeach()
++endif()
++
+ # Set the VERSION_MATCH to "EXACT" by default, but relax the requirement
+ # if we are users are building from source (determined by the
+ # GZ_BUILD_FROM_SOURCE environment variable) or if explicitly told to do so
+diff --git a/gz_math_vendor-extras.cmake.in b/gz_math_vendor-extras.cmake.in
+index d490202..743e6da 100644
+--- a/gz_math_vendor-extras.cmake.in
++++ b/gz_math_vendor-extras.cmake.in
+@@ -1 +1,7 @@
+ list(PREPEND CMAKE_PREFIX_PATH "@CMAKE_INSTALL_PREFIX@/opt/@PROJECT_NAME@/extra_cmake")
++if(OHOS_CROSS_BUILD)
++  # The GLOBAL_HOOK CMAKE_PREFIX_PATH env propagation is unreliable from the
++  # Windows host; without this the inner find_package(gz-math7) in
++  # gz-math-config.cmake fails for downstream consumers.
++  list(PREPEND CMAKE_PREFIX_PATH "@CMAKE_INSTALL_PREFIX@/opt/@PROJECT_NAME@")
++endif()
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,39 @@
+From 211dfdfacd6f96f7214d69a9fe88b8f891cf4dd9 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:06 +0800
+Subject: [PATCH] cbg_executor: skip pthread_setaffinity_np on musl (__MUSL__,
+ OpenHarmony)
+
+The OHOS NDK musl libc does not provide pthread_setaffinity_np, so CPU
+pinning in the cbg_executor demo is skipped under __MUSL__. Thread-priority
+setting (pthread_setschedparam/SCHED_FIFO) still works and is kept.
+---
+ .../src/examples_rclcpp_cbg_executor/utilities.hpp          | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/rclcpp/executors/cbg_executor/src/examples_rclcpp_cbg_executor/utilities.hpp b/rclcpp/executors/cbg_executor/src/examples_rclcpp_cbg_executor/utilities.hpp
+index 272295b..093dc4c 100644
+--- a/rclcpp/executors/cbg_executor/src/examples_rclcpp_cbg_executor/utilities.hpp
++++ b/rclcpp/executors/cbg_executor/src/examples_rclcpp_cbg_executor/utilities.hpp
+@@ -166,12 +166,18 @@ bool configure_native_thread(T native_handle, ThreadPriority priority, int cpu_i
+     params.sched_priority = sched_get_priority_min(SCHED_FIFO);
+   }
+   success &= (pthread_setschedparam(native_handle, SCHED_FIFO, &params) == 0);
++#if defined(__MUSL__)
++  // OHOS: the musl libc of the OHOS NDK does not provide pthread_setaffinity_np;
++  // skip CPU pinning in the demo.
++  (void)cpu_id;
++#else
+   if (cpu_id >= 0) {
+     cpu_set_t cpuset;
+     CPU_ZERO(&cpuset);
+     CPU_SET(cpu_id, &cpuset);
+     success &= (pthread_setaffinity_np(native_handle, sizeof(cpu_set_t), &cpuset) == 0);
+   }
++#endif
+ #endif
+   return success;
+ }
+-- 
+2.55.0.windows.5
+

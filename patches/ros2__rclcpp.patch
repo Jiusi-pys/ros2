@@ -1,0 +1,114 @@
+From ea48d021ba6cdc03344dab5d8d59aeb9650acfb4 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:07 +0800
+Subject: [PATCH 1/2] rclcpp: drop mimick_vendor test_depends (aarch64
+ trampoline asm not portable to OHOS NDK)
+
+mimick_vendor's aarch64 trampoline assembly does not assemble with the
+OHOS NDK clang, so mimick_vendor is skipped in scripts/build_ohos.sh and
+the test_depends in rclcpp / rclcpp_action / rclcpp_lifecycle must go with
+it. Tests are not built for the target (BUILD_TESTING=OFF); this only
+keeps colcon dependency resolution happy.
+---
+ rclcpp/package.xml           | 2 +-
+ rclcpp_action/package.xml    | 2 +-
+ rclcpp_lifecycle/package.xml | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/rclcpp/package.xml b/rclcpp/package.xml
+index 0581c0f0..b6abb03f 100644
+--- a/rclcpp/package.xml
++++ b/rclcpp/package.xml
+@@ -51,7 +51,7 @@
+   <test_depend>ament_cmake_gtest</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+-  <test_depend>mimick_vendor</test_depend>
++  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
+   <test_depend>performance_test_fixture</test_depend>
+   <test_depend>rmw</test_depend>
+   <test_depend>rmw_implementation_cmake</test_depend>
+diff --git a/rclcpp_action/package.xml b/rclcpp_action/package.xml
+index ccdfaf21..1556228c 100644
+--- a/rclcpp_action/package.xml
++++ b/rclcpp_action/package.xml
+@@ -31,7 +31,7 @@
+   <test_depend>ament_cmake_gtest</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+-  <test_depend>mimick_vendor</test_depend>
++  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm does not assemble with the NDK) -->
+   <test_depend>performance_test_fixture</test_depend>
+   <test_depend>test_msgs</test_depend>
+ 
+diff --git a/rclcpp_lifecycle/package.xml b/rclcpp_lifecycle/package.xml
+index 845c93d8..628ba160 100644
+--- a/rclcpp_lifecycle/package.xml
++++ b/rclcpp_lifecycle/package.xml
+@@ -37,7 +37,7 @@
+   <test_depend>ament_cmake_gtest</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+-  <test_depend>mimick_vendor</test_depend>
++  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm does not assemble with the NDK) -->
+   <test_depend>performance_test_fixture</test_depend>
+   <test_depend>rcpputils</test_depend>
+   <test_depend>test_msgs</test_depend>
+-- 
+2.55.0.windows.5
+
+
+From bf8c5fd331f8ee8bd2c32f77d9917650b4af7492 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:07:11 +0800
+Subject: [PATCH 2/2] package.xml: dependency unrolls for the OHOS cross
+ workspace
+
+---
+ rclcpp/package.xml           | 2 +-
+ rclcpp_action/package.xml    | 2 +-
+ rclcpp_lifecycle/package.xml | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/rclcpp/package.xml b/rclcpp/package.xml
+index b6abb03f..0581c0f0 100644
+--- a/rclcpp/package.xml
++++ b/rclcpp/package.xml
+@@ -51,7 +51,7 @@
+   <test_depend>ament_cmake_gtest</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+-  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
++  <test_depend>mimick_vendor</test_depend>
+   <test_depend>performance_test_fixture</test_depend>
+   <test_depend>rmw</test_depend>
+   <test_depend>rmw_implementation_cmake</test_depend>
+diff --git a/rclcpp_action/package.xml b/rclcpp_action/package.xml
+index 1556228c..ccdfaf21 100644
+--- a/rclcpp_action/package.xml
++++ b/rclcpp_action/package.xml
+@@ -31,7 +31,7 @@
+   <test_depend>ament_cmake_gtest</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+-  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm does not assemble with the NDK) -->
++  <test_depend>mimick_vendor</test_depend>
+   <test_depend>performance_test_fixture</test_depend>
+   <test_depend>test_msgs</test_depend>
+ 
+diff --git a/rclcpp_lifecycle/package.xml b/rclcpp_lifecycle/package.xml
+index 628ba160..845c93d8 100644
+--- a/rclcpp_lifecycle/package.xml
++++ b/rclcpp_lifecycle/package.xml
+@@ -37,7 +37,7 @@
+   <test_depend>ament_cmake_gtest</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+-  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm does not assemble with the NDK) -->
++  <test_depend>mimick_vendor</test_depend>
+   <test_depend>performance_test_fixture</test_depend>
+   <test_depend>rcpputils</test_depend>
+   <test_depend>test_msgs</test_depend>
+-- 
+2.55.0.windows.5
+

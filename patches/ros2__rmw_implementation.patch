@@ -1,0 +1,54 @@
+From e375deaf27980ad9f43065194cb3c30b614a0256 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:07 +0800
+Subject: [PATCH] rmw_implementation: drop rmw_connextdds build_depend and
+ group_depend (OpenHarmony build)
+
+rmw_connextdds is not ported to OHOS, and the group_depend on
+rmw_implementation_packages would pull skipped RMW packages back into
+colcon's dependency check. rmw_cyclonedds_cpp and rmw_fastrtps_* are
+ported and kept.
+
+Reuse notes:
+- These build_depends also guarantee rmw_implementation is configured
+  AFTER the RMW packages, so it detects both and its default for
+  RMW_IMPLEMENTATION_DISABLE_RUNTIME_SELECTION stays OFF (the workspace
+  build also passes it explicitly). If only one RMW is present at
+  configure time, the option defaults ON and bakes that RMW into every
+  binary; runtime switching then fails the rcl identifier check. If in
+  doubt, delete build_ohos/rmw_implementation and rebuild.
+- deploy_ohos.sh does not pin RMW_IMPLEMENTATION in env.sh; use
+  RMW=rmw_cyclonedds_cpp ./scripts/deploy_ohos.sh to pin one.
+---
+ rmw_implementation/package.xml | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/rmw_implementation/package.xml b/rmw_implementation/package.xml
+index 7b805e9..5f261fd 100644
+--- a/rmw_implementation/package.xml
++++ b/rmw_implementation/package.xml
+@@ -24,8 +24,10 @@
+   <!--
+   Bloom does not support group_depend so entries below duplicate the group rmw_implementation_packages.
+   This ensures that binary packages have support for all of these rmw impl. enabled.
++  OHOS cross build: rmw_connextdds removed (not ported); rmw_cyclonedds_cpp and
++  rmw_fastrtps_* are ported. These build_depends also guarantee rmw_implementation
++  is configured AFTER the RMW packages, so it bakes in support for both.
+   -->
+-  <build_depend>rmw_connextdds</build_depend>
+   <build_depend>rmw_cyclonedds_cpp</build_depend>
+   <build_depend>rmw_fastrtps_cpp</build_depend>
+   <build_depend>rmw_fastrtps_dynamic_cpp</build_depend>
+@@ -38,7 +40,8 @@
+   <test_depend>ament_lint_common</test_depend>
+   <test_depend>performance_test_fixture</test_depend>
+ 
+-  <group_depend>rmw_implementation_packages</group_depend>
++  <!-- OHOS cross build: group_depend removed; skipped RMW packages are group
++       members and would be pulled back into the dependency check. -->
+ 
+   <export>
+     <build_type>ament_cmake</build_type>
+-- 
+2.55.0.windows.5
+

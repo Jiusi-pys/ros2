@@ -1,0 +1,70 @@
+From 6c435cfb83289a65df419ab6383824c8b79c6f08 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:06 +0800
+Subject: [PATCH] Adapt libcurl_vendor for OpenHarmony cross build
+
+- CMakeLists.txt: with OHOS_CROSS_BUILD, build the vendored curl with
+  CURL_ENABLE_SSL=OFF / CURL_USE_LIBPSL=OFF / BUILD_CURL_EXE=OFF. The OHOS
+  NDK sysroot has no OpenSSL for the target; resource_retriever on the
+  board only needs file:// and plain http://.
+- libcurl_vendor-extras.cmake.in: add an OHOS_CROSS_BUILD branch that
+  points CURL_DIR straight at the vendored CURLConfig.cmake under
+  opt/libcurl_vendor/lib/cmake/CURL. The default branch uses pkg-config,
+  which does not exist on the Windows build host.
+
+Reuse note: if a future production image ships a target OpenSSL, drop the
+CURL_ENABLE_SSL=OFF override instead of adding a new branch.
+---
+ libcurl_vendor/CMakeLists.txt                 | 8 ++++++++
+ libcurl_vendor/libcurl_vendor-extras.cmake.in | 9 +++++++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/libcurl_vendor/CMakeLists.txt b/libcurl_vendor/CMakeLists.txt
+index 10edd42..db2cc3d 100644
+--- a/libcurl_vendor/CMakeLists.txt
++++ b/libcurl_vendor/CMakeLists.txt
+@@ -6,6 +6,13 @@ find_package(ament_cmake_vendor_package REQUIRED)
+ 
+ find_package(CURL QUIET)
+ 
++# OHOS cross build: no target OpenSSL in the NDK sysroot, build curl without TLS
++# (resource_retriever on the board only needs file:// and plain http://).
++set(LIBCURL_EXTRA_CMAKE_ARGS "")
++if(OHOS_CROSS_BUILD)
++  set(LIBCURL_EXTRA_CMAKE_ARGS -DCURL_ENABLE_SSL:BOOL=OFF -DCURL_USE_LIBPSL:BOOL=OFF -DBUILD_CURL_EXE:BOOL=OFF)
++endif()
++
+ ament_vendor(libcurl_vendor
+   SATISFIED ${CURL_FOUND}
+   VCS_URL https://github.com/curl/curl.git
+@@ -14,6 +21,7 @@ ament_vendor(libcurl_vendor
+     -DENABLE_MANUAL:BOOL=OFF
+     -DCURL_ENABLE_SSL:BOOL=ON  # default, but just to make clear
+     -DUSE_LIBIDN2:BOOL=OFF
++    ${LIBCURL_EXTRA_CMAKE_ARGS}
+ )
+ 
+ ament_package(
+diff --git a/libcurl_vendor/libcurl_vendor-extras.cmake.in b/libcurl_vendor/libcurl_vendor-extras.cmake.in
+index 418d4d4..8cced37 100644
+--- a/libcurl_vendor/libcurl_vendor-extras.cmake.in
++++ b/libcurl_vendor/libcurl_vendor-extras.cmake.in
+@@ -15,6 +15,15 @@ if(NOT CURL_FOUND)
+ 
+     find_package(curl REQUIRED PATHS "${curl_DIR}" NO_MODULE NO_DEFAULT_PATH)
+ 
++    set(CURL_LIBRARIES CURL::libcurl)
++  elseif(OHOS_CROSS_BUILD)
++    # OHOS cross build: no pkg-config on the Windows build host; curl 7.81
++    # ships a proper CURLConfig.cmake, use it directly.
++    set(CURL_DIR "${@PROJECT_NAME@_DIR}/../../../opt/libcurl_vendor/lib/cmake/CURL")
++    message(STATUS "Setting CURL_DIR to: '${CURL_DIR}'")
++
++    find_package(CURL REQUIRED PATHS "${CURL_DIR}" NO_MODULE NO_DEFAULT_PATH)
++
+     set(CURL_LIBRARIES CURL::libcurl)
+   else()
+     # In this case, the vendor package should have built and installed a local copy.
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,77 @@
+From 8f3846b3ae56a5e583f1810d401d242b98e26c16 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:08 +0800
+Subject: [PATCH 1/2] rosidl_typesupport: drop group_depends and mimick_vendor
+ test_depend (OpenHarmony)
+
+The group_depends on rosidl_typesupport_{c,cpp}_packages are removed
+because skipped group members would be pulled back into colcon's
+dependency check. mimick_vendor test_depend in rosidl_typesupport_c is
+removed (aarch64 trampoline asm does not assemble with the OHOS NDK
+clang). Typesupport selection at runtime is via the ament index and is
+unaffected.
+---
+ rosidl_typesupport_c/package.xml   | 4 ++--
+ rosidl_typesupport_cpp/package.xml | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/rosidl_typesupport_c/package.xml b/rosidl_typesupport_c/package.xml
+index b3f7005..d9e77ab 100644
+--- a/rosidl_typesupport_c/package.xml
++++ b/rosidl_typesupport_c/package.xml
+@@ -39,10 +39,10 @@
+ 
+   <test_depend>ament_lint_auto</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+-  <test_depend>mimick_vendor</test_depend>
++  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
+   <test_depend>performance_test_fixture</test_depend>
+ 
+-  <group_depend>rosidl_typesupport_c_packages</group_depend>
++  <!-- OHOS cross build: group_depend removed (skipped fastrtps typesupport is a group member) -->
+ 
+   <member_of_group>rosidl_runtime_packages</member_of_group>
+ 
+diff --git a/rosidl_typesupport_cpp/package.xml b/rosidl_typesupport_cpp/package.xml
+index 02f629f..5da3980 100644
+--- a/rosidl_typesupport_cpp/package.xml
++++ b/rosidl_typesupport_cpp/package.xml
+@@ -44,7 +44,7 @@
+   <test_depend>ament_lint_common</test_depend>
+   <test_depend>performance_test_fixture</test_depend>
+ 
+-  <group_depend>rosidl_typesupport_cpp_packages</group_depend>
++  <!-- OHOS cross build: group_depend removed (skipped fastrtps typesupport is a group member) -->
+ 
+   <member_of_group>rosidl_runtime_packages</member_of_group>
+ 
+-- 
+2.55.0.windows.5
+
+
+From 93a9c4968aece515472bbdc1fe10688bef2c6125 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:07:12 +0800
+Subject: [PATCH 2/2] package.xml: dependency unroll for the OHOS cross
+ workspace
+
+---
+ rosidl_typesupport_c/package.xml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/rosidl_typesupport_c/package.xml b/rosidl_typesupport_c/package.xml
+index d9e77ab..bbcaf5c 100644
+--- a/rosidl_typesupport_c/package.xml
++++ b/rosidl_typesupport_c/package.xml
+@@ -39,7 +39,7 @@
+ 
+   <test_depend>ament_lint_auto</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+-  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
++  <test_depend>mimick_vendor</test_depend>
+   <test_depend>performance_test_fixture</test_depend>
+ 
+   <!-- OHOS cross build: group_depend removed (skipped fastrtps typesupport is a group member) -->
+-- 
+2.55.0.windows.5
+

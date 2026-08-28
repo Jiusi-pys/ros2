@@ -155,6 +155,45 @@ If a downstream test fails, use `colcon test --packages-select <package> --event
 
 ## Cross-compiling for OpenHarmony (RK3588A / KaihongOS, aarch64-linux-ohos)
 
+### Porting workflow (no push access to upstream repos)
+
+All OHOS modifications to the `src/` subrepos live as local commits on top of
+the upstream branches and are mirrored into `patches/` (one format-patch
+series + a `.base` file per repo, recorded against the TRUE base = parent of
+the first local commit, which can differ from `origin/<branch>` after a
+`vcs pull`):
+
+- `./scripts/export_patches.sh` — regenerate `patches/` from the current
+  subrepo commits. Run it every time you commit/amend in a subrepo.
+- `./scripts/apply_patches.sh` — apply `patches/` onto a fresh checkout;
+  idempotent (reverse-apply check), uses `git am --3way` so series still
+  apply after upstream moved.
+
+Moving to another machine:
+
+```bash
+git clone <your-fork-of-ros2/ros2> && cd ros2
+vcs import --input ros2.repos src/
+./scripts/apply_patches.sh        # replay the OHOS port commits
+# then the one-time dep scripts and ./scripts/build_ohos.sh as below
+```
+
+Syncing with upstream ROS 2:
+
+```bash
+vcs pull src/                     # or per-repo: git fetch origin && git reset --hard origin/jazzy
+./scripts/apply_patches.sh        # 3-way reapply; resolve conflicts if any
+./scripts/export_patches.sh       # re-export the (possibly rebased) series
+```
+
+This meta repository itself is a fork candidate: keep `origin` pointing at
+your own GitHub fork and add `https://github.com/ros2/ros2.git` as `upstream`
+for syncing. If a subrepo's port grows too large for a patch series (many
+commits, heavy divergence), fork that one repo and point its `ros2.repos`
+entry at your fork instead - the rest stays patch-based.
+
+### Build
+
 The workspace cross-builds the full ROS 2 stack (CycloneDDS and Fast-DDS RMWs,
 rclcpp + rclpy + ros2cli, demos, iceoryx, LTTng tracing, Qt5/rqt/turtlesim,
 rviz — 364 packages) for OpenHarmony boards using the OHOS SDK NDK clang

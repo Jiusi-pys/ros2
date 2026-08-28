@@ -1,0 +1,55 @@
+From dccd520619923be2dfccddeefa5396bedb53b4b9 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 14:30:45 +0800
+Subject: [PATCH] Adapt colcon build for OpenHarmony (aarch64-linux-ohos) cross
+ build
+
+- colcon.pkg: BUILD_IDLC=OFF instead of AUTO; the idlpp preprocessor
+  (bundled mcpp) does not compile against the OHOS musl sysroot, and the
+  ddsc library itself does not need idlc at build time.
+- package.xml: drop iceoryx_{binding_c,posh,hoofs} deps; CycloneDDS is
+  built with ENABLE_ICEORYX=OFF for OHOS (no /dev/shm), and the declared
+  deps break colcon dependency resolution when iceoryx is not in the
+  workspace.
+
+Reuse notes (RK3588A / KaihongOS):
+- Built by scripts/build_ohos.sh in the ros2/ros2 workspace with the
+  cmake/ohos-aarch64.toolchain.cmake toolchain (OHOS NDK clang 15, musl);
+  override the NDK location with OHOS_NATIVE_SDK.
+- Companion commit: ros2/rmw_cyclonedds drops the iceoryx_binding_c depend
+  for the same reason. iceoryx itself is not ported (skipped).
+- Board-to-board discovery works over multicast on eth1 (192.168.77.0/24);
+  if multicast is blocked, use config/cyclonedds_board_*.xml via
+  CYCLONEDDS_URI.
+---
+ colcon.pkg  | 2 +-
+ package.xml | 4 +---
+ 2 files changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/colcon.pkg b/colcon.pkg
+index b7468da9..2d2a3ae2 100644
+--- a/colcon.pkg
++++ b/colcon.pkg
+@@ -1,3 +1,3 @@
+ {
+-  "cmake-args": [ "-DBUILD_IDLC=AUTO" ]
++  "cmake-args": [ "-DBUILD_IDLC=OFF" ]
+ }
+diff --git a/package.xml b/package.xml
+index 3fa926c7..5841a1a7 100644
+--- a/package.xml
++++ b/package.xml
+@@ -17,9 +17,7 @@
+     <build_depend>libssl-dev</build_depend>
+     <exec_depend>openssl</exec_depend>
+ 
+-    <depend>iceoryx_binding_c</depend>
+-    <depend>iceoryx_posh</depend>
+-    <depend>iceoryx_hoofs</depend>
++    <!-- iceoryx deps removed for OHOS cross build: built with ENABLE_ICEORYX=OFF -->
+ 
+     <doc_depend>doxygen</doc_depend>
+     <doc_depend>python3-breathe</doc_depend>
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,85 @@
+From 7af02f7d2a66da0bd6e464a1bda698b1f672de09 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:06 +0800
+Subject: [PATCH 1/2] rcl: drop mimick_vendor test_depend (aarch64 trampoline
+ asm not portable to OHOS NDK)
+
+mimick_vendor's aarch64 trampoline assembly does not assemble with the
+OHOS NDK clang, so mimick_vendor is skipped in scripts/build_ohos.sh and
+the test_depend must go with it. Tests are not built for the target
+(BUILD_TESTING=OFF); this only keeps colcon dependency resolution happy.
+---
+ rcl/package.xml                   | 2 +-
+ rcl_yaml_param_parser/package.xml | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/rcl/package.xml b/rcl/package.xml
+index 0737de2..9db4dd4 100644
+--- a/rcl/package.xml
++++ b/rcl/package.xml
+@@ -39,7 +39,7 @@
+   <test_depend>launch</test_depend>
+   <test_depend>launch_testing</test_depend>
+   <test_depend>launch_testing_ament_cmake</test_depend>
+-  <test_depend>mimick_vendor</test_depend>
++  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
+   <test_depend>osrf_testing_tools_cpp</test_depend>
+   <test_depend>rmw</test_depend>
+   <test_depend>rmw_implementation_cmake</test_depend>
+diff --git a/rcl_yaml_param_parser/package.xml b/rcl_yaml_param_parser/package.xml
+index b105c90..12bceff 100644
+--- a/rcl_yaml_param_parser/package.xml
++++ b/rcl_yaml_param_parser/package.xml
+@@ -25,7 +25,7 @@
+   <test_depend>ament_cmake_gtest</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+-  <test_depend>mimick_vendor</test_depend>
++  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
+   <test_depend>osrf_testing_tools_cpp</test_depend>
+   <test_depend>performance_test_fixture</test_depend>
+ 
+-- 
+2.55.0.windows.5
+
+
+From 95d3ab5520418d4997c022f8c71d50915fe03917 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:07:11 +0800
+Subject: [PATCH 2/2] package.xml: dependency unrolls for the OHOS cross
+ workspace
+
+---
+ rcl/package.xml                   | 2 +-
+ rcl_yaml_param_parser/package.xml | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/rcl/package.xml b/rcl/package.xml
+index 9db4dd4..0737de2 100644
+--- a/rcl/package.xml
++++ b/rcl/package.xml
+@@ -39,7 +39,7 @@
+   <test_depend>launch</test_depend>
+   <test_depend>launch_testing</test_depend>
+   <test_depend>launch_testing_ament_cmake</test_depend>
+-  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
++  <test_depend>mimick_vendor</test_depend>
+   <test_depend>osrf_testing_tools_cpp</test_depend>
+   <test_depend>rmw</test_depend>
+   <test_depend>rmw_implementation_cmake</test_depend>
+diff --git a/rcl_yaml_param_parser/package.xml b/rcl_yaml_param_parser/package.xml
+index 12bceff..b105c90 100644
+--- a/rcl_yaml_param_parser/package.xml
++++ b/rcl_yaml_param_parser/package.xml
+@@ -25,7 +25,7 @@
+   <test_depend>ament_cmake_gtest</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+   <test_depend>ament_lint_auto</test_depend>
+-  <!-- OHOS cross build: mimick_vendor removed (aarch64 trampoline asm not portable to OHOS toolchain) -->
++  <test_depend>mimick_vendor</test_depend>
+   <test_depend>osrf_testing_tools_cpp</test_depend>
+   <test_depend>performance_test_fixture</test_depend>
+ 
+-- 
+2.55.0.windows.5
+

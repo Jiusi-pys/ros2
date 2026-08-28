@@ -1,0 +1,231 @@
+From 252de2880011cc0e66ec375acc62350ec6c713ff Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:06:44 +0800
+Subject: [PATCH] kdl_parser_py: convert to ament_python
+
+The jazzy branch still shipped the ROS1 catkin-style kdl_parser_py, which
+cannot be built by colcon; backport the ament_python conversion so the
+package builds in the OHOS cross workspace.
+---
+ kdl_parser_py/CMakeLists.txt                  | 22 -----------
+ kdl_parser_py/kdl_parser_py/urdf.py           | 10 +----
+ kdl_parser_py/package.xml                     | 22 +++++------
+ .../{AMENT_IGNORE => resource/kdl_parser_py}  |  0
+ kdl_parser_py/setup.cfg                       |  4 ++
+ kdl_parser_py/setup.py                        | 33 ++++++++++++----
+ kdl_parser_py/test/test_kdl_parser.launch     |  3 --
+ kdl_parser_py/test/test_kdl_parser.py         | 38 -------------------
+ 8 files changed, 39 insertions(+), 93 deletions(-)
+ delete mode 100644 kdl_parser_py/CMakeLists.txt
+ rename kdl_parser_py/{AMENT_IGNORE => resource/kdl_parser_py} (100%)
+ create mode 100644 kdl_parser_py/setup.cfg
+ delete mode 100644 kdl_parser_py/test/test_kdl_parser.launch
+ delete mode 100755 kdl_parser_py/test/test_kdl_parser.py
+
+diff --git a/kdl_parser_py/CMakeLists.txt b/kdl_parser_py/CMakeLists.txt
+deleted file mode 100644
+index 6bbffaf..0000000
+--- a/kdl_parser_py/CMakeLists.txt
++++ /dev/null
+@@ -1,22 +0,0 @@
+-cmake_minimum_required(VERSION 2.8.3)
+-
+-project(kdl_parser_py)
+-
+-find_package(catkin REQUIRED
+-  COMPONENTS urdf
+-)
+-
+-catkin_package(
+-  LIBRARIES ${PROJECT_NAME}
+-  CATKIN_DEPENDS urdf
+-)
+-
+-catkin_python_setup()
+-
+-catkin_install_python(PROGRAMS ${PROJECT_NAME}/urdf.py
+-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+-
+-if(CATKIN_ENABLE_TESTING)
+-  find_package(catkin REQUIRED COMPONENTS rostest)
+-  add_rostest(test/test_kdl_parser.launch)
+-endif()
+diff --git a/kdl_parser_py/kdl_parser_py/urdf.py b/kdl_parser_py/kdl_parser_py/urdf.py
+index 0198856..3acc018 100644
+--- a/kdl_parser_py/kdl_parser_py/urdf.py
++++ b/kdl_parser_py/kdl_parser_py/urdf.py
+@@ -13,14 +13,6 @@ def treeFromFile(filename):
+     with open(filename) as urdf_file:
+         return treeFromUrdfModel(urdf.URDF.from_xml_string(urdf_file.read()))
+ 
+-def treeFromParam(param):
+-    """
+-    Construct a PyKDL.Tree from an URDF in a ROS parameter.
+-    :param param: Parameter name, ``str``
+-    """
+-
+-    return treeFromUrdfModel(urdf.URDF.from_parameter_server())
+-
+ def treeFromString(xml):
+     """
+     Construct a PyKDL.Tree from an URDF xml string.
+@@ -50,7 +42,7 @@ def _toKdlInertia(i):
+ 
+ def _toKdlJoint(jnt):
+ 
+-    fixed = lambda j,F: kdl.Joint(j.name, kdl.Joint.None)
++    fixed = lambda j,F: kdl.Joint(j.name, kdl.Joint.Fixed)
+     rotational = lambda j,F: kdl.Joint(j.name, F.p, F.M * kdl.Vector(*j.axis), kdl.Joint.RotAxis)
+     translational = lambda j,F: kdl.Joint(j.name, F.p, F.M * kdl.Vector(*j.axis), kdl.Joint.TransAxis)
+ 
+diff --git a/kdl_parser_py/package.xml b/kdl_parser_py/package.xml
+index cfb3bb6..d185ba8 100644
+--- a/kdl_parser_py/package.xml
++++ b/kdl_parser_py/package.xml
+@@ -1,6 +1,8 @@
+-<package>
++<?xml version="1.0"?>
++<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
++<package format="3">
+   <name>kdl_parser_py</name>
+-  <version>2.8.0</version>
++  <version>2.11.0</version>
+   <description>
+    The Kinematics and Dynamics Library (KDL) defines a tree structure
+    to represent the kinematic and dynamic parameters of a robot
+@@ -15,19 +17,13 @@
+ 
+   <license>BSD</license>
+ 
+-  <!--url type="website">http://ros.org/wiki/kdl_parser_py</url-->
+   <url type="repository">https://github.com/ros2/kdl_parser</url>
+   <url type="bugtracker">https://github.com/ros2/kdl_parser/issues</url>
+ 
+-  <buildtool_depend version_gte="0.5.68">catkin</buildtool_depend>
+-  <buildtool_depend>python-catkin-pkg</buildtool_depend>
+-
+-  <build_depend>python_orocos_kdl_vendor</build_depend>
+-  <build_depend>urdf</build_depend>
+-  <build_depend>rostest</build_depend>
+-
+-  <run_depend>python_orocos_kdl_vendor</run_depend>
+-  <run_depend>urdf</run_depend>
+-  <run_depend>urdfdom_py</run_depend>
++  <exec_depend>python_orocos_kdl_vendor</exec_depend>
++  <exec_depend>urdfdom_py</exec_depend>
+ 
++  <export>
++    <build_type>ament_python</build_type>
++  </export>
+ </package>
+diff --git a/kdl_parser_py/AMENT_IGNORE b/kdl_parser_py/resource/kdl_parser_py
+similarity index 100%
+rename from kdl_parser_py/AMENT_IGNORE
+rename to kdl_parser_py/resource/kdl_parser_py
+diff --git a/kdl_parser_py/setup.cfg b/kdl_parser_py/setup.cfg
+new file mode 100644
+index 0000000..ee23b37
+--- /dev/null
++++ b/kdl_parser_py/setup.cfg
+@@ -0,0 +1,4 @@
++[develop]
++script_dir=$base/lib/kdl_parser_py
++[install]
++install_scripts=$base/lib/kdl_parser_py
+diff --git a/kdl_parser_py/setup.py b/kdl_parser_py/setup.py
+index 0ff6afe..67a23fd 100644
+--- a/kdl_parser_py/setup.py
++++ b/kdl_parser_py/setup.py
+@@ -1,11 +1,28 @@
+-#!/usr/bin/env python
++from setuptools import setup
+ 
+-from distutils.core import setup
+-from catkin_pkg.python_setup import generate_distutils_setup
++package_name = 'kdl_parser_py'
+ 
+-d = generate_distutils_setup(
+-   packages=['kdl_parser_py'],
+-   package_dir={'': ''}
++setup(
++    name=package_name,
++    version='2.11.0',
++    packages=[package_name],
++    data_files=[
++        ('share/ament_index/resource_index/packages',
++            ['resource/' + package_name]),
++        ('share/' + package_name, ['package.xml']),
++    ],
++    install_requires=['setuptools'],
++    zip_safe=True,
++    keywords=['ROS2'],
++    classifiers=[
++        'Intended Audience :: Developers',
++        'Programming Language :: Python',
++        'Topic :: Software Development',
++    ],
++    maintainer='Chris Lalancette, Shane Loretz',
++    maintainer_email='clalancette@osrfoundation.org, sloretz@osrfoundation.org',
++    description='Python tools to construct a KDL tree from an XML robot '
++        'representation in URDF.',
++    license='BSD',
++    tests_require=['pytest'],
+ )
+-
+-setup(**d)
+diff --git a/kdl_parser_py/test/test_kdl_parser.launch b/kdl_parser_py/test/test_kdl_parser.launch
+deleted file mode 100644
+index f6e41a0..0000000
+--- a/kdl_parser_py/test/test_kdl_parser.launch
++++ /dev/null
+@@ -1,3 +0,0 @@
+-<launch>
+-  <test test-name="test_kdl_parser" pkg="kdl_parser_py" type="test_kdl_parser.py" args="$(find kdl_parser_py)/test/test.urdf"/>
+-</launch>
+diff --git a/kdl_parser_py/test/test_kdl_parser.py b/kdl_parser_py/test/test_kdl_parser.py
+deleted file mode 100755
+index f3e3066..0000000
+--- a/kdl_parser_py/test/test_kdl_parser.py
++++ /dev/null
+@@ -1,38 +0,0 @@
+-#!/usr/bin/env python
+-
+-import sys
+-
+-import kdl_parser_py.urdf
+-import unittest
+-
+-import rostest
+-
+-PKG = "kdl_parser_py"
+-NAME = "test_kdl_parser"
+-
+-class TestKdlParser(unittest.TestCase):
+-    def runTest(self):
+-        filename = None
+-        if (sys.argv > 1):
+-            filename = sys.argv[1]
+-        else:
+-            self.fail("Expected filename!")
+-        (ok, tree) = kdl_parser_py.urdf.treeFromFile(filename)
+-        self.assertTrue(ok)
+-        # KDL doesn't count fixed joints (since they aren't kinematic)
+-        self.assertEqual(tree.getNrOfJoints(), 8)
+-        # KDL doesn't count base link (since it's attached by fixed links
+-        self.assertEqual(tree.getNrOfSegments(), 10)
+-        chain = tree.getChain("base_link", "right_gripper")
+-        self.assertEqual(chain.getNrOfSegments(), 2)
+-        self.assertEqual(chain.getNrOfJoints(), 2)
+-        self.assertEqual(chain.getSegment(0).getName(), "gripper_pole")
+-        self.assertEqual(chain.getSegment(0).getJoint().getName(), "gripper_extension")
+-        self.assertEqual(chain.getSegment(1).getName(), "right_gripper")
+-        self.assertEqual(chain.getSegment(1).getJoint().getName(), "right_gripper_joint")
+-
+-        inertia = chain.getSegment(1).getInertia()
+-        self.assertAlmostEqual(inertia.getCOG().z(), 3.0)
+-
+-if __name__ == '__main__':
+-    rostest.run(PKG, NAME, TestKdlParser, sys.argv)
+-- 
+2.55.0.windows.5
+

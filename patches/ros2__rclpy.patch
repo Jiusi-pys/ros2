@@ -1,0 +1,43 @@
+From c776d763e5962f30324218d760f7b230ecab6d33 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:07 +0800
+Subject: [PATCH] rclpy: do not link -latomic with the OHOS NDK clang (musl has
+ no separate libatomic)
+
+The NDK musl sysroot has no standalone libatomic (atomic builtins are in
+libc), so the Clang branch now also requires NOT OHOS_CROSS_BUILD.
+
+Reuse notes (cross-building rclpy / rosidl_generator_py extensions):
+- The workspace build (scripts/build_ohos.sh) points Python3_INCLUDE_DIR /
+  Python3_LIBRARY / Python3_SOABI at the board's CPython 3.12 sysroot copy
+  (python_target/usr, pulled by scripts/pull_python_target.sh from the
+  Jiusi-pys/python RK3588A port) while keeping Python3_EXECUTABLE = the
+  host pixi python for code generation.
+- PYTHON_MODULE_EXTENSION=.cpython-312-aarch64-linux-ohos.so must be set
+  because pybind11 queries the HOST interpreter for EXT_SUFFIX (which
+  would produce a win_amd64 .pyd name on a Windows host).
+- On the board, extension modules only import because env.sh LD_PRELOADs
+  libpython3.12.so.1.0: the Jiusi-pys launcher dlopen()s libpython with
+  RTLD_LOCAL, so Py* symbols would otherwise not be globally visible.
+---
+ rclpy/CMakeLists.txt | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/rclpy/CMakeLists.txt b/rclpy/CMakeLists.txt
+index 06c08de..f53023b 100644
+--- a/rclpy/CMakeLists.txt
++++ b/rclpy/CMakeLists.txt
+@@ -112,7 +112,9 @@ pybind11_add_module(_rclpy_pybind11
+   src/rclpy/wait_set.cpp
+ )
+ 
+-if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE)
++# OHOS cross build: the NDK musl sysroot has no standalone libatomic;
++# atomic builtins are provided by libc, so skip the extra link.
++if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE AND NOT OHOS_CROSS_BUILD)
+   target_link_libraries(_rclpy_pybind11 PRIVATE atomic)
+ endif()
+ 
+-- 
+2.55.0.windows.5
+

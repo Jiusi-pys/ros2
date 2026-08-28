@@ -1,0 +1,53 @@
+From c3e8962441721dc9c62c8ab65ae70fceb4587a9f Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:07:12 +0800
+Subject: [PATCH] OHOS: prepend opt/gz_utils_vendor to CMAKE_PREFIX_PATH in
+ extras
+
+The GLOBAL_HOOK env propagation of CMAKE_PREFIX_PATH is unreliable when
+colcon runs on a Windows host, so nested find_package(gz-utils) calls cannot
+find the vendored install.
+---
+ CMakeLists.txt                  | 14 ++++++++++++++
+ gz_utils_vendor-extras.cmake.in |  5 +++++
+ 2 files changed, 19 insertions(+)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8ef59e4..1eb788b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -22,6 +22,20 @@ find_package(ament_cmake_export_dependencies REQUIRED)
+ 
+ find_package(gz_cmake_vendor REQUIRED)
+ 
++# OHOS cross build: the vendor package GLOBAL_HOOK relies on CMAKE_PREFIX_PATH
++# env propagation into the vendored ExternalProject, which is not forwarded by
++# colcon's hook chain on the Windows host. Derive the gz_cmake_vendor install
++# prefix from the extra_cmake path its extras added, so the vendored project
++# can find gz-cmake3.
++if(OHOS_CROSS_BUILD)
++  foreach(_prefix IN LISTS CMAKE_PREFIX_PATH)
++    if(_prefix MATCHES "/opt/gz_cmake_vendor/extra_cmake$")
++      get_filename_component(_gz_cmake_vendor_prefix "${_prefix}" DIRECTORY)
++      list(APPEND CMAKE_PREFIX_PATH "${_gz_cmake_vendor_prefix}")
++    endif()
++  endforeach()
++endif()
++
+ # Set the VERSION_MATCH to "EXACT" by default, but relax the requirement
+ # if we are users are building from source (determined by the
+ # GZ_BUILD_FROM_SOURCE environment variable) or if explicitly told to do so
+diff --git a/gz_utils_vendor-extras.cmake.in b/gz_utils_vendor-extras.cmake.in
+index d490202..946b7ae 100644
+--- a/gz_utils_vendor-extras.cmake.in
++++ b/gz_utils_vendor-extras.cmake.in
+@@ -1 +1,6 @@
+ list(PREPEND CMAKE_PREFIX_PATH "@CMAKE_INSTALL_PREFIX@/opt/@PROJECT_NAME@/extra_cmake")
++if(OHOS_CROSS_BUILD)
++  # The GLOBAL_HOOK CMAKE_PREFIX_PATH env propagation is unreliable from the
++  # Windows host; let downstream find_package(gz-utils2) work from the extras.
++  list(PREPEND CMAKE_PREFIX_PATH "@CMAKE_INSTALL_PREFIX@/opt/@PROJECT_NAME@")
++endif()
+-- 
+2.55.0.windows.5
+

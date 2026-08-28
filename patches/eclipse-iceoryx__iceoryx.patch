@@ -1,0 +1,360 @@
+From da119e411af1fc0c8b7b1e844954426ef0ab0158 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:06:44 +0800
+Subject: [PATCH] OpenHarmony/musl port of iceoryx_hoofs
+
+- mqueue: musl has no mq_* syscall wrappers in this NDK, stub the message
+  queue wrapper with ENOSYS stubs
+- access_control: no libacl on musl, no-op the ACL wrapper
+- mutex: PTHREAD_MUTEX_RECURSIVE for PTHREAD_MUTEX_RECURSIVE_NP
+- CMake: no libacl/libatomic/librt link on OHOS
+---
+ iceoryx_hoofs/CMakeLists.txt                  |   3 +-
+ iceoryx_hoofs/platform/CMakeLists.txt         |  18 ++-
+ .../include/iceoryx_hoofs/platform/acl.hpp    |  24 ++++
+ .../include/iceoryx_hoofs/platform/mqueue.hpp |   1 +
+ .../platform/linux/source/mqueue.cpp          |  27 +++++
+ .../source/posix_wrapper/access_control.cpp   |  46 ++++++++
+ .../source/posix_wrapper/message_queue.cpp    | 108 ++++++++++++++++++
+ iceoryx_hoofs/source/posix_wrapper/mutex.cpp  |   8 +-
+ 8 files changed, 228 insertions(+), 7 deletions(-)
+
+diff --git a/iceoryx_hoofs/CMakeLists.txt b/iceoryx_hoofs/CMakeLists.txt
+index da5ef43b4..95b5f23e3 100644
+--- a/iceoryx_hoofs/CMakeLists.txt
++++ b/iceoryx_hoofs/CMakeLists.txt
+@@ -203,7 +203,8 @@ target_link_libraries(iceoryx_hoofs
+     ${ICEORYX_SANITIZER_FLAGS}
+ )
+ 
+-if(LINUX)
++# OHOS musl has neither libacl nor libatomic (aarch64 atomics are native)
++if(LINUX AND NOT OHOS_CROSS_BUILD)
+     target_link_libraries(iceoryx_hoofs PRIVATE acl atomic ${CODE_COVERAGE_LIBS})
+ endif()
+ 
+diff --git a/iceoryx_hoofs/platform/CMakeLists.txt b/iceoryx_hoofs/platform/CMakeLists.txt
+index 78bad09f8..57be748ae 100644
+--- a/iceoryx_hoofs/platform/CMakeLists.txt
++++ b/iceoryx_hoofs/platform/CMakeLists.txt
+@@ -55,11 +55,19 @@ target_link_libraries(iceoryx_platform PRIVATE ${ICEORYX_SANITIZER_FLAGS})
+ target_compile_options(iceoryx_platform PRIVATE ${ICEORYX_WARNINGS} ${ICEORYX_SANITIZER_FLAGS})
+ 
+ if(LINUX)
+-    target_link_libraries(iceoryx_platform
+-        PUBLIC
+-        rt
+-        pthread
+-    )
++    if(OHOS_CROSS_BUILD)
++        # OHOS musl folds rt into libc; only pthread exists as a stub
++        target_link_libraries(iceoryx_platform
++            PUBLIC
++            pthread
++        )
++    else()
++        target_link_libraries(iceoryx_platform
++            PUBLIC
++            rt
++            pthread
++        )
++    endif()
+ elseif(QNX)
+     target_link_libraries(iceoryx_platform
+         PRIVATE
+diff --git a/iceoryx_hoofs/platform/linux/include/iceoryx_hoofs/platform/acl.hpp b/iceoryx_hoofs/platform/linux/include/iceoryx_hoofs/platform/acl.hpp
+index 5ebf85c68..fdceb0a9a 100644
+--- a/iceoryx_hoofs/platform/linux/include/iceoryx_hoofs/platform/acl.hpp
++++ b/iceoryx_hoofs/platform/linux/include/iceoryx_hoofs/platform/acl.hpp
+@@ -17,6 +17,30 @@
+ #ifndef IOX_HOOFS_LINUX_PLATFORM_ACL_HPP
+ #define IOX_HOOFS_LINUX_PLATFORM_ACL_HPP
+ 
++#ifdef __MUSL__
++// OHOS: musl does not ship <sys/acl.h>. Provide the minimal type/constant
++// surface so AccessController compiles; every acl_* call is stubbed in
++// access_control.cpp to fail gracefully (single-user boards do not need ACLs).
++#include <sys/types.h>
++
++typedef int acl_tag_t;
++typedef unsigned int acl_perm_t;
++typedef struct iox_acl_stub* acl_t;
++typedef struct iox_acl_stub* acl_entry_t;
++typedef struct iox_acl_stub* acl_permset_t;
++
++#define ACL_USER_OBJ 1
++#define ACL_USER 2
++#define ACL_GROUP_OBJ 3
++#define ACL_GROUP 4
++#define ACL_MASK 5
++#define ACL_OTHER 6
++
++#define ACL_READ 4
++#define ACL_WRITE 2
++#define ACL_EXECUTE 1
++#else
+ #include <sys/acl.h>
++#endif
+ 
+ #endif // IOX_HOOFS_LINUX_PLATFORM_ACL_HPP
+diff --git a/iceoryx_hoofs/platform/linux/include/iceoryx_hoofs/platform/mqueue.hpp b/iceoryx_hoofs/platform/linux/include/iceoryx_hoofs/platform/mqueue.hpp
+index 65741d5af..341b6055c 100644
+--- a/iceoryx_hoofs/platform/linux/include/iceoryx_hoofs/platform/mqueue.hpp
++++ b/iceoryx_hoofs/platform/linux/include/iceoryx_hoofs/platform/mqueue.hpp
+@@ -18,6 +18,7 @@
+ #define IOX_HOOFS_LINUX_PLATFORM_MQUEUE_HPP
+ 
+ #include <mqueue.h>
++#include <sys/types.h> // mode_t; OHOS musl's mqueue.h does not provide it
+ 
+ mqd_t iox_mq_open2(const char* name, int oflag);
+ mqd_t iox_mq_open4(const char* name, int oflag, mode_t mode, struct mq_attr* attr);
+diff --git a/iceoryx_hoofs/platform/linux/source/mqueue.cpp b/iceoryx_hoofs/platform/linux/source/mqueue.cpp
+index 261d313e8..a6f138700 100644
+--- a/iceoryx_hoofs/platform/linux/source/mqueue.cpp
++++ b/iceoryx_hoofs/platform/linux/source/mqueue.cpp
+@@ -16,6 +16,32 @@
+ 
+ #include "iceoryx_hoofs/platform/mqueue.hpp"
+ 
++#ifdef __MUSL__
++// OHOS: musl libc ships no POSIX message queue implementation (<mqueue.h>
++// only declares the types). IoxIpcChannelType is UnixDomainSocket
++// (platform_settings.hpp), so these entry points are never used at runtime.
++#include <cerrno>
++
++// NOLINTNEXTLINE(readability-identifier-naming)
++mqd_t iox_mq_open2(const char* name, int oflag)
++{
++    (void)name;
++    (void)oflag;
++    errno = ENOSYS;
++    return -1;
++}
++
++// NOLINTNEXTLINE(readability-function-size,readability-identifier-naming)
++mqd_t iox_mq_open4(const char* name, int oflag, mode_t mode, struct mq_attr* attr)
++{
++    (void)name;
++    (void)oflag;
++    (void)mode;
++    (void)attr;
++    errno = ENOSYS;
++    return -1;
++}
++#else
+ // NOLINTNEXTLINE(readability-identifier-naming)
+ mqd_t iox_mq_open2(const char* name, int oflag)
+ {
+@@ -27,3 +53,4 @@ mqd_t iox_mq_open4(const char* name, int oflag, mode_t mode, struct mq_attr* att
+ {
+     return mq_open(name, oflag, mode, attr);
+ }
++#endif
+diff --git a/iceoryx_hoofs/source/posix_wrapper/access_control.cpp b/iceoryx_hoofs/source/posix_wrapper/access_control.cpp
+index 7d74eca60..2a943599b 100644
+--- a/iceoryx_hoofs/source/posix_wrapper/access_control.cpp
++++ b/iceoryx_hoofs/source/posix_wrapper/access_control.cpp
+@@ -22,6 +22,50 @@
+ #include <iostream>
+ 
+ #include "iceoryx_hoofs/platform/platform_correction.hpp"
++
++#ifdef __MUSL__
++// OHOS: musl libc has no <sys/acl.h>. The boards are single-user (root), so
++// POSIX ACLs are unnecessary - the permission bits that SharedMemoryObject
++// applies via fchmod are sufficient. writePermissionsToFile is a successful
++// no-op; everything else accepts and discards entries.
++namespace iox
++{
++namespace posix
++{
++bool AccessController::writePermissionsToFile(const int32_t) const noexcept
++{
++    return true;
++}
++
++cxx::expected<AccessController::smartAclPointer_t, AccessController::AccessControllerError>
++AccessController::createACL(const int32_t) noexcept
++{
++    return cxx::error<AccessControllerError>(AccessControllerError::COULD_NOT_ALLOCATE_NEW_ACL);
++}
++
++bool AccessController::addPermissionEntry(const Category, const Permission, const string_t&) noexcept
++{
++    return true;
++}
++
++bool AccessController::addPermissionEntry(const Category, const Permission, const uint32_t) noexcept
++{
++    return true;
++}
++
++bool AccessController::createACLEntry(const acl_t, const PermissionEntry&) noexcept
++{
++    return true;
++}
++
++bool AccessController::addAclPermission(acl_permset_t, acl_perm_t) noexcept
++{
++    return true;
++}
++
++} // namespace posix
++} // namespace iox
++#else
+ namespace iox
+ {
+ namespace posix
+@@ -308,3 +352,5 @@ bool AccessController::addAclPermission(acl_permset_t f_permset, acl_perm_t f_pe
+ 
+ } // namespace posix
+ } // namespace iox
++
++#endif // __MUSL__
+diff --git a/iceoryx_hoofs/source/posix_wrapper/message_queue.cpp b/iceoryx_hoofs/source/posix_wrapper/message_queue.cpp
+index a329d0388..a53efd655 100644
+--- a/iceoryx_hoofs/source/posix_wrapper/message_queue.cpp
++++ b/iceoryx_hoofs/source/posix_wrapper/message_queue.cpp
+@@ -24,6 +24,112 @@
+ #include <cstdlib>
+ #include <string>
+ 
++#ifdef __MUSL__
++// OHOS: musl libc has no POSIX message queues (<mqueue.h> declares no mq_*
++// functions). IoxIpcChannelType is UnixDomainSocket (platform_settings.hpp),
++// so MessageQueue is never instantiated at runtime; these definitions only
++// keep the library linkable and fail cleanly if ever called.
++namespace iox
++{
++namespace posix
++{
++namespace
++{
++cxx::error<IpcChannelError> noMqueueSupport() noexcept
++{
++    return cxx::error<IpcChannelError>(IpcChannelError::UNDEFINED);
++}
++} // namespace
++
++MessageQueue::MessageQueue() noexcept
++{
++    this->m_isInitialized = false;
++    this->m_errorValue = IpcChannelError::NOT_INITIALIZED;
++}
++
++MessageQueue::MessageQueue(const IpcChannelName_t&,
++                           const IpcChannelSide channelSide,
++                           const size_t,
++                           const uint64_t) noexcept
++    : m_channelSide(channelSide)
++{
++    this->m_isInitialized = false;
++    this->m_errorValue = IpcChannelError::NOT_INITIALIZED;
++}
++
++MessageQueue::MessageQueue(MessageQueue&& other) noexcept = default;
++MessageQueue& MessageQueue::operator=(MessageQueue&& other) noexcept = default;
++MessageQueue::~MessageQueue() noexcept = default;
++
++cxx::expected<bool, IpcChannelError> MessageQueue::unlinkIfExists(const IpcChannelName_t&) noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<IpcChannelError> MessageQueue::destroy() noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<IpcChannelError> MessageQueue::send(const std::string&) const noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<std::string, IpcChannelError> MessageQueue::receive() const noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<std::string, IpcChannelError> MessageQueue::timedReceive(const units::Duration&) const noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<IpcChannelError> MessageQueue::timedSend(const std::string&, const units::Duration&) const noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<bool, IpcChannelError> MessageQueue::isOutdated() noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<mqd_t, IpcChannelError> MessageQueue::open(const IpcChannelName_t&, const IpcChannelSide) noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<IpcChannelError> MessageQueue::close() noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<IpcChannelError> MessageQueue::unlink() noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::error<IpcChannelError> MessageQueue::createErrorFromErrnum(const int32_t) const noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::error<IpcChannelError> MessageQueue::createErrorFromErrnum(const IpcChannelName_t&, const int32_t) noexcept
++{
++    return noMqueueSupport();
++}
++
++cxx::expected<IpcChannelName_t, IpcChannelError>
++MessageQueue::sanitizeIpcChannelName(const IpcChannelName_t&) noexcept
++{
++    return cxx::error<IpcChannelError>(IpcChannelError::INVALID_CHANNEL_NAME);
++}
++
++} // namespace posix
++} // namespace iox
++#else
+ 
+ namespace iox
+ {
+@@ -406,3 +512,5 @@ MessageQueue::sanitizeIpcChannelName(const IpcChannelName_t& name) noexcept
+ 
+ } // namespace posix
+ } // namespace iox
++
++#endif // __MUSL__
+diff --git a/iceoryx_hoofs/source/posix_wrapper/mutex.cpp b/iceoryx_hoofs/source/posix_wrapper/mutex.cpp
+index d739dc38d..8456fbc6c 100644
+--- a/iceoryx_hoofs/source/posix_wrapper/mutex.cpp
++++ b/iceoryx_hoofs/source/posix_wrapper/mutex.cpp
+@@ -35,8 +35,14 @@ mutex::mutex(bool f_isRecursive) noexcept
+                           .returnValueMatchesErrno()
+                           .evaluate()
+                           .has_error();
++#ifdef __MUSL__
++    // OHOS: musl does not define the glibc-specific _NP mutex type aliases
++    const int mutexType = f_isRecursive ? PTHREAD_MUTEX_RECURSIVE : PTHREAD_MUTEX_NORMAL;
++#else
++    const int mutexType = f_isRecursive ? PTHREAD_MUTEX_RECURSIVE_NP : PTHREAD_MUTEX_FAST_NP;
++#endif
+     isInitialized &=
+-        !posixCall(pthread_mutexattr_settype)(&attr, f_isRecursive ? PTHREAD_MUTEX_RECURSIVE_NP : PTHREAD_MUTEX_FAST_NP)
++        !posixCall(pthread_mutexattr_settype)(&attr, mutexType)
+              .returnValueMatchesErrno()
+              .evaluate()
+              .has_error();
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,40 @@
+From e83af377d2243cba852bbca37e3da8b06d6a774c Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:07 +0800
+Subject: [PATCH] rosbag2_storage: export yaml_cpp_vendor before yaml-cpp so
+ its extras set yaml-cpp_DIR (OpenHarmony)
+
+rosbag2_storage's CMakeLists finds yaml_cpp_vendor first and then
+yaml-cpp, so building rosbag2_storage itself works. But
+ament_export_dependencies preserves the given order in the generated
+extras file, and downstream packages (rosbag2_storage_sqlite3,
+rosbag2_storage_mcap) then run find_package(yaml-cpp) BEFORE
+yaml_cpp_vendor's extras have set yaml-cpp_DIR. On Linux this is invisible
+(system yaml-cpp is in the default search path); in the OHOS cross build
+yaml-cpp only exists under opt/yaml_cpp_vendor, so the find fails.
+
+Reuse note: whenever a package exports both a *_vendor package and the
+vendored package, list the *_vendor first or downstream find_package calls
+will not see the vendor extras' *_DIR setup.
+---
+ rosbag2_storage/CMakeLists.txt | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/rosbag2_storage/CMakeLists.txt b/rosbag2_storage/CMakeLists.txt
+index 444d575c..55b49268 100644
+--- a/rosbag2_storage/CMakeLists.txt
++++ b/rosbag2_storage/CMakeLists.txt
+@@ -76,7 +76,9 @@ ament_export_libraries(${PROJECT_NAME})
+ # Export modern CMake targets
+ ament_export_targets(export_${PROJECT_NAME})
+ 
+-ament_export_dependencies(rclcpp rcutils rmw yaml-cpp yaml_cpp_vendor)
++# OHOS: export yaml_cpp_vendor before yaml-cpp so downstream packages run the
++# vendor extras (which set yaml-cpp_DIR) before find_package(yaml-cpp).
++ament_export_dependencies(rclcpp rcutils rmw yaml_cpp_vendor yaml-cpp)
+ 
+ if(BUILD_TESTING)
+   find_package(ament_lint_auto REQUIRED)
+-- 
+2.55.0.windows.5
+

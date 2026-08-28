@@ -1,0 +1,62 @@
+From 83f1baa2e5c785913638733a107e2da070c878d2 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:07 +0800
+Subject: [PATCH] rttest: guard mallopt() constants for musl (__MUSL__,
+ OpenHarmony)
+
+musl does not implement mallopt() and does not define M_TRIM_THRESHOLD /
+M_MMAP_MAX, so the malloc tuning in lock_and_prefault_dynamic() is now
+compiled only when the constants exist. Real-time behavior on musl is
+unaffected (the tuning was a no-op hint anyway).
+---
+ rttest/src/rttest.cpp | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/rttest/src/rttest.cpp b/rttest/src/rttest.cpp
+index 04ca18e..b64c844 100644
+--- a/rttest/src/rttest.cpp
++++ b/rttest/src/rttest.cpp
+@@ -607,20 +607,27 @@ int Rttest::lock_and_prefault_dynamic()
+     return -1;
+   }
+ 
++#ifdef M_TRIM_THRESHOLD
+   // Turn off malloc trimming.
++  // (OHOS: musl libc does not provide mallopt; skip these tunings there.)
+   if (mallopt(M_TRIM_THRESHOLD, -1) == 0) {
+     perror("mallopt for trim threshold failed");
+     munlockall();
+     return -1;
+   }
++#endif
+ 
++#ifdef M_MMAP_MAX
+   // Turn off mmap usage.
+   if (mallopt(M_MMAP_MAX, 0) == 0) {
+     perror("mallopt for mmap failed");
++#ifdef M_TRIM_THRESHOLD
+     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
++#endif
+     munlockall();
+     return -1;
+   }
++#endif
+ 
+   struct rusage usage;
+   size_t page_size = sysconf(_SC_PAGESIZE);
+@@ -650,8 +657,12 @@ int Rttest::lock_and_prefault_dynamic()
+         delete[] ptr;
+       }
+ 
++#ifdef M_TRIM_THRESHOLD
+       mallopt(M_TRIM_THRESHOLD, 128 * 1024);
++#endif
++#ifdef M_MMAP_MAX
+       mallopt(M_MMAP_MAX, 65536);
++#endif
+       munlockall();
+       return -1;
+     }
+-- 
+2.55.0.windows.5
+

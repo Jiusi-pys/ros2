@@ -1,0 +1,6 @@
+# Shell scripts and patch/base files must keep LF everywhere: git am would
+# otherwise import \r into patched sources, and sh rejects CRLF scripts.
+*.sh text eol=lf
+patches/*.patch text eol=lf
+patches/*.base text eol=lf
+target_deps_src/*.patch text eol=lf

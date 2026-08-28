@@ -1,0 +1,40 @@
+From 15eea6856e458cde38a18168a4f7309db9685a22 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:07:12 +0800
+Subject: [PATCH] OHOS: keep default symbol visibility when cross compiling
+
+-fvisibility=hidden hides the weak typeinfo of the header-only
+urdfdom_headers geometry classes inside liburdfdom_model.so; libc++abi
+compares typeinfo by pointer in dynamic_cast, so cross-DSO casts such as
+dynamic_cast<const urdf::Sphere&>(geometry) in rviz_default_plugins'
+robot_link.cpp throw std::bad_cast.
+---
+ CMakeLists.txt | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4e8c522..d7f9341 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -27,11 +27,18 @@ if (NOT CMAKE_BUILD_TYPE)
+ endif()
+ 
+ # If compiler support symbol visibility, enable it.
++# OHOS: keep default visibility - libc++abi compares typeinfo BY POINTER in
++# dynamic_cast, so the header-only urdfdom_headers classes (no export macros)
++# must share one global weak typeinfo across DSOs, otherwise cross-DSO casts
++# like dynamic_cast<const urdf::Sphere&>(geometry) throw std::bad_cast
++# (e.g. rviz_default_plugins' robot_link.cpp).
++if (NOT OHOS_CROSS_BUILD)
+ include(CheckCCompilerFlag)
+ check_c_compiler_flag(-fvisibility=hidden HAS_VISIBILITY)
+ if (HAS_VISIBILITY)
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
+ endif()
++endif()
+ 
+ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+   add_compile_options(-Wall -Wextra -Wpedantic)
+-- 
+2.55.0.windows.5
+

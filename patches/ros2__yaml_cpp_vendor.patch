@@ -1,0 +1,32 @@
+From 3ff451a4185d23ee2a853e5f367b692a8d5455a0 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:08 +0800
+Subject: [PATCH] yaml_cpp_vendor: fall back to lib/cmake/yaml-cpp in extras
+ (OpenHarmony cross build)
+
+yaml-cpp 0.8 installs its CMake package under lib/cmake/yaml-cpp (not
+share/cmake/yaml-cpp) when configured with a Linux target on a Windows
+host, so the extras now fall back to that location when the share path
+does not exist.
+---
+ yaml_cpp_vendor-extras.cmake.in | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/yaml_cpp_vendor-extras.cmake.in b/yaml_cpp_vendor-extras.cmake.in
+index 2c09e7c..9df11d2 100644
+--- a/yaml_cpp_vendor-extras.cmake.in
++++ b/yaml_cpp_vendor-extras.cmake.in
+@@ -3,5 +3,10 @@ if(WIN32)
+   set(yaml-cpp_DIR "${@PROJECT_NAME@_DIR}/../../../opt/yaml_cpp_vendor/CMake")
+ else()
+   set(yaml-cpp_DIR "${@PROJECT_NAME@_DIR}/../../../opt/yaml_cpp_vendor/share/cmake/yaml-cpp")
++  # OHOS cross build: yaml-cpp 0.8 installs its CMake package under lib/cmake
++  # when configured with a Linux target on a Windows host; fall back to it.
++  if(NOT EXISTS "${yaml-cpp_DIR}")
++    set(yaml-cpp_DIR "${@PROJECT_NAME@_DIR}/../../../opt/yaml_cpp_vendor/lib/cmake/yaml-cpp")
++  endif()
+ endif()
+ message(STATUS "Setting yaml-cpp_DIR to: '${yaml-cpp_DIR}'")
+-- 
+2.55.0.windows.5
+

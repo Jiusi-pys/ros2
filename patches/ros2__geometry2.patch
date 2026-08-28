@@ -1,0 +1,57 @@
+From 2ee235f5c3d48aef9c4942cab74e3efb6714904b Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 17:03:06 +0800
+Subject: [PATCH 1/2] geometry2: drop tf2_bullet exec_depend (Bullet not ported
+ to OpenHarmony)
+
+The geometry2 meta package exec_depends on tf2_bullet, but there is no
+Bullet build for the OHOS target and tf2_bullet is skipped in
+scripts/build_ohos.sh. tf2_eigen / tf2_eigen_kdl conversions are
+unaffected.
+---
+ geometry2/package.xml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/geometry2/package.xml b/geometry2/package.xml
+index 8c5459ae..c983099a 100644
+--- a/geometry2/package.xml
++++ b/geometry2/package.xml
+@@ -22,7 +22,7 @@
+   <buildtool_depend>ament_cmake</buildtool_depend>
+ 
+   <exec_depend>tf2</exec_depend>
+-  <exec_depend>tf2_bullet</exec_depend>
++  <!-- OHOS cross build: tf2_bullet removed (no target Bullet build) -->
+   <exec_depend>tf2_eigen</exec_depend>
+   <exec_depend>tf2_eigen_kdl</exec_depend>
+   <exec_depend>tf2_geometry_msgs</exec_depend>
+-- 
+2.55.0.windows.5
+
+
+From 3261360935960e464f28bde8527830406029ffe3 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 29 Aug 2026 02:07:12 +0800
+Subject: [PATCH 2/2] package.xml: dependency unroll for the OHOS cross
+ workspace
+
+---
+ geometry2/package.xml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/geometry2/package.xml b/geometry2/package.xml
+index c983099a..8c5459ae 100644
+--- a/geometry2/package.xml
++++ b/geometry2/package.xml
+@@ -22,7 +22,7 @@
+   <buildtool_depend>ament_cmake</buildtool_depend>
+ 
+   <exec_depend>tf2</exec_depend>
+-  <!-- OHOS cross build: tf2_bullet removed (no target Bullet build) -->
++  <exec_depend>tf2_bullet</exec_depend>
+   <exec_depend>tf2_eigen</exec_depend>
+   <exec_depend>tf2_eigen_kdl</exec_depend>
+   <exec_depend>tf2_geometry_msgs</exec_depend>
+-- 
+2.55.0.windows.5
+

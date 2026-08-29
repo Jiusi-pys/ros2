@@ -12,12 +12,23 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Repos owned by Jiusi-pys are registered in ros2.repos and pushed directly
+# to their own GitHub remotes; never mirror them into patches/.
+OWNED_REPOS="Jiusi-pys/mdds ros2/rmw_mdds"
+
 mkdir -p patches
 found=0
 while IFS= read -r gitdir; do
   repo="${gitdir%/.git}"
   rel="${repo#src/}"
   key="${rel//\//__}"
+  case " $OWNED_REPOS " in
+    *" $rel "*)
+      # owned repo: drop any stale series exported before this exemption
+      rm -f "patches/$key.patch" "patches/$key.base"
+      continue
+      ;;
+  esac
   branch="$(git -C "$repo" symbolic-ref --short -q HEAD || true)"
   [ -n "$branch" ] || continue                       # detached HEAD: skip (warn below)
   git -C "$repo" rev-parse --verify -q "origin/$branch" >/dev/null || continue

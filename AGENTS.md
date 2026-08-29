@@ -187,8 +187,8 @@ vcs pull src/                     # or per-repo: git fetch origin && git reset -
 ```
 
 Two subrepos are owned by Jiusi-pys and registered in `ros2.repos`, so they
-do NOT go through the `patches/` mirror flow — push them directly to their
-own GitHub repos:
+do NOT go through the `patches/` mirror flow (`export_patches.sh` skips them
+via `OWNED_REPOS`) — push them directly to their own GitHub repos:
 
 - `src/Jiusi-pys/mdds` — the mdds core library, `git@github.com:Jiusi-pys/mdds.git`.
 - `src/ros2/rmw_mdds` — the `rmw_mdds` + `mdds_gateway` ROS packages,

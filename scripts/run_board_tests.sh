@@ -63,7 +63,7 @@ for pkg in "${PKGS[@]}"; do
     -not -path "*/gtest/*" -not -path "*/gmock/*" \
     -exec file {} + \
     | grep "ELF 64-bit" | grep -i "aarch64" | grep -iE "executable|interpreter" | cut -d: -f1 \
-    | grep -v "/benchmark_" | grep -v "__rmw_mdds")
+    | grep -v "/benchmark_")
   [ ${#exes[@]} -eq 0 ] && { echo "== $pkg: no test executables, skipped"; continue; }
   mapfile -t libs < <(find "$dir" -type f -name "*.so" -not -path "*/.cmake/*" -not -path "*/CMakeFiles/*")
   echo "== $pkg: ${#exes[@]} executables, ${#libs[@]} helper libs"

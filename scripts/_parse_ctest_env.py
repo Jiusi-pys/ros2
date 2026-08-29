@@ -75,11 +75,6 @@ for m in tests:
     if name in seen:
         continue
     seen.add(name)
-    if "__rmw_mdds" in name:
-        # rmw_mdds is not part of this workspace; the test executables were
-        # never built
-        print(f"echo 'BOARDTEST {name} SKIP'")
-        continue
     try:
         args = shlex.split(args_blob.replace('"[=[', '"').replace(']=]"', '"'))
     except ValueError:

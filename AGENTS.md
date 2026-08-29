@@ -186,6 +186,14 @@ vcs pull src/                     # or per-repo: git fetch origin && git reset -
 ./scripts/export_patches.sh       # re-export the (possibly rebased) series
 ```
 
+Two subrepos are owned by Jiusi-pys and registered in `ros2.repos`, so they
+do NOT go through the `patches/` mirror flow — push them directly to their
+own GitHub repos:
+
+- `src/Jiusi-pys/mdds` — the mdds core library, `git@github.com:Jiusi-pys/mdds.git`.
+- `src/ros2/rmw_mdds` — the `rmw_mdds` + `mdds_gateway` ROS packages,
+  `git@github.com:Jiusi-pys/rmw_mdds.git`.
+
 This meta repository lives at `git@github.com:Jiusi-pys/ros2.git` (`origin`,
 branch `jazzy_ohos`); `https://github.com/ros2/ros2.git` is `upstream` for
 syncing. If a subrepo's port grows too large for a patch series (many

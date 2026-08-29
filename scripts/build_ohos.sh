@@ -56,8 +56,7 @@ PACKAGES_SKIP=(
   # alternative DDS vendors (Connext); Fast-DDS (fastrtps) is ported
   rmw_connextdds rmw_connextdds_common rmw_connextddsmicro rti_connext_dds_cmake_module
   rosidl_generator_dds_idl
-  # other rmw DDS implementations are out of scope for this port
-  rmw_mdds
+  # rmw_mdds is in scope (mdds/dsoftbus RMW implementation)
   # iceoryx is ported (Phase 4): CycloneDDS picks up iceoryx_binding_c
   # automatically (ENABLE_SHM=AUTO) once the iceoryx packages are installed.
   # GUI packages (Qt / rqt / turtlesim / rviz) are ported (Phase 6); rviz uses

@@ -82,7 +82,7 @@ for m in tests:
     if "--skip-test" in args:
         print(f"echo 'BOARDTEST {name} SKIP'")
         continue
-    envs, appends, exe = [], [], ""
+    envs, appends, exe, cmd_args = [], [], "", []
     i = 0
     while i < len(args):
         a = args[i]
@@ -97,7 +97,11 @@ for m in tests:
             exe = args[i + 1].replace("\\", "/")
             exe = exe[len(pkg_build) + 1:] if exe.startswith(pkg_build) \
                 else exe.rsplit("/", 1)[-1]
-            i += 1
+            # everything after the exe is the test's own command line
+            # (e.g. test_communication's message type + RMW name); dropping
+            # it makes binaries misread the first gtest flag as positional
+            cmd_args = args[i + 2:]
+            break
         i += 1
     if not exe and args and not args[0].endswith(".exe") and \
             not args[0].endswith(".py"):
@@ -105,8 +109,10 @@ for m in tests:
         cand = args[0].replace("\\", "/")
         if cand.startswith(pkg_build):
             exe = cand[len(pkg_build) + 1:]
+            cmd_args = args[1:]
         elif "/" not in cand:
             exe = cand
+            cmd_args = args[1:]
     if not exe or exe.endswith(".exe") or exe.endswith(".py") or exe == "python.exe":
         # lint / python tests have no native board executable here
         print(f"echo 'BOARDTEST {name} SKIP'")
@@ -131,7 +137,11 @@ for m in tests:
     env_prefix = " ".join(shlex.quote(a) for a in assignments)
     for x in exports:
         print(x)
-    cmd = f"env {env_prefix} timeout {TIMEOUT} ./{shlex.quote(exe)} --gtest_brief=1"
+    extra = " ".join(shlex.quote(remap(a)) for a in cmd_args)
+    # GTEST_BRIEF via env, not argv: tests with required positional args
+    # (test_communication's message type) reject the extra argv element
+    cmd = (f"env GTEST_BRIEF=1 {env_prefix} timeout {TIMEOUT} ./{shlex.quote(exe)}"
+           f"{' ' + extra if extra else ''}")
     print(f"{cmd} > {shlex.quote(name)}.log 2>&1")
     print("rc=$?")
     print(verdict_line(name))

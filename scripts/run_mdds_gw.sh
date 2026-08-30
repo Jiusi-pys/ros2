@@ -23,7 +23,7 @@ export MSYS2_ARG_CONV_EXCL='*'
 # Remote env prefixes: mdds nodes pin rmw_mdds. The gateway must NOT have
 # RMW_IMPLEMENTATION set (it pins rmw_cyclonedds_cpp itself and fails closed
 # on a foreign RMW) and needs the unicast cyclone config toward the PC.
-RENVS=". $DEVICE_DIR/env.sh; export RMW_IMPLEMENTATION=rmw_mdds;"
+RENVS=". $DEVICE_DIR/env.sh; export RMW_IMPLEMENTATION=rmw_mdds; export MDDS_UDP_PEER_ALLOW=192.168.77.0/24;"
 GWENVS=". $DEVICE_DIR/env.sh; unset RMW_IMPLEMENTATION; export CYCLONEDDS_URI=$DEVICE_DIR/mdds_e2e/cyclonedds_board_a.xml;"
 
 shell()  { "$HDC" -t "$1" shell "$2" </dev/null; }
@@ -150,19 +150,30 @@ s_gw04() {
   # sequence continuity (lost=0 reorder=0; head-of-run discovery loss is
   # expected gateway behavior, so received>=1 per block, not ==count).
   gw_reset
-  rbg "$BOARD_B" "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode sub --topic /mdds_sweep --sizes 1024,4096,65536,262144,1048576,4194304 --idle-timeout 20" gw04_sub.log
-  start_gateway 300 gw04_gw.log
+  rbg "$BOARD_B" "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode sub --topic /mdds_sweep --sizes 1024,4096,65536,262144,1048576,4194304 --idle-timeout 60" gw04_sub.log
+  start_gateway 480 gw04_gw.log
   sleep 6
   # --depth 200: the reliable Cyclone hop over WiFi repairs fragment losses
   # from the writer's history; KEEP_LAST(10) at 18-64 msg/s leaves only
   # ~150-550 ms of repair slack and thrashes (observed: 64KB block lost 174/183).
-  # --rate 10: the Windows sleep floor (~15.6 ms) pins default 50 msg/s pacing
-  # to ~64 msg/s, which overruns the gateway's cyclone receive path on 4KB.
-  pc_start gw_pc_sweep_pub.bat gw04_pub.log --topic /mdds_sweep --sizes 1024,4096,65536,262144,1048576,4194304 --rate 10 --rate-bps 1200000 --depth 200 --wait-match --flush-ms 20000
-  # worst case ~70s of paced publishing; poll for completion (hdc shell always
-  # exits 0 — poll on captured content, never on exit status)
+  # --rate 5: repair slack = depth x period. At 10 Hz a 200-deep history covers
+  # only 20 s, and a measured 18-20 s WiFi repair stall evicted the hole first
+  # (writer GAPs it -> permanent loss, observed lost=6 in the 64KB block). 5 Hz
+  # doubles the window to 40 s. (The Windows sleep floor ~15.6 ms also pins
+  # default 50 msg/s pacing to ~64 msg/s, so the rate must be set explicitly.)
+  # --rate-bps 800000: byte-rate cap for the >=256KB blocks; keeps the offered
+  # load well under what the jittery WiFi + cyclone repair can sustain.
+  # idle-timeout 60 + poll 360s: on a jittery WiFi day (ping avg 39ms/max 137ms)
+  # cyclone repair of a 64KB burst can legitimately stall the flow for tens of
+  # seconds; the sub idle timeout must outlast repair, not assert liveness.
+  # flush-ms 60000: the reliable writer must OUTLAST slow repair tails — once
+  # the publisher exits, its reader-side holes can never be repaired and the
+  # gateway flow freezes permanently (observed: c2m stuck at 661/847).
+  pc_start gw_pc_sweep_pub.bat gw04_pub.log --topic /mdds_sweep --sizes 1024,4096,65536,262144,1048576,4194304 --rate 5 --rate-bps 800000 --depth 200 --wait-match --flush-ms 60000
+  # poll for completion (hdc shell always exits 0 — poll on captured content,
+  # never on exit status)
   local i n
-  for i in $(seq 1 24); do
+  for i in $(seq 1 36); do
     sleep 10
     n=$(shell "$BOARD_B" "grep -c SWEEP_RESULT $DEVICE_DIR/gw04_sub.log 2>/dev/null || true" | tr -dc '0-9')
     [ -n "$n" ] && [ "$n" -ge 1 ] && break
@@ -227,12 +238,36 @@ s_gw06() {
   verdict "GW-06" $? "restart recovery: heard before=${n1:-0} after=$n2 dup_max=$d"
 }
 
+s_gw07() {
+  # Application-level interop: the REAL PC ros2 CLI (ros2.exe topic echo
+  # --once) must receive a /chatter sample through the gateway. The bat
+  # redirects to %PC_WS%\gw07_echo.log (piping the CLI through grep/head
+  # deadlocks on python's block-buffered stdout — observed hang).
+  gw_reset
+  rm -f "$PC_WS/gw07_echo.log"
+  rbg "$BOARD_B" "\$ROS2_TALKER" gw07_b_talker.log
+  start_gateway 120 gw07_gw.log
+  sleep 6
+  pc_start gw_pc_ros2_echo.bat gw07_pc_echo_outer.log
+  local i
+  # the bat retries echo up to 6x (SEDP type-resolution race); wait for a real
+  # data line, not just any output (attempt 1 may log only the warning)
+  for i in $(seq 1 18); do sleep 10; grep -q "data:" "$PC_WS/gw07_echo.log" 2>/dev/null && break; done
+  sleep 2
+  pc_kill ros2.exe
+  stopall; kill_gw
+  cp "$PC_WS/gw07_echo.log" "$LOGDIR/gw07_pc_echo.log" 2>/dev/null || true
+  pull "$BOARD_A" gw07_gw.log
+  grep -q "data: 'Hello World:" "$LOGDIR/gw07_pc_echo.log" 2>/dev/null
+  verdict "GW-07" $? "PC ros2 CLI topic echo --once /chatter via gateway"
+}
+
 # --- main --------------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
-  set -- gw01 gw02 gw03 gw04 gw05 gw06
+  set -- gw01 gw02 gw03 gw04 gw05 gw06 gw07
 elif [ "$1" = all ]; then
-  set -- gw01 gw02 gw03 gw04 gw05 gw06
+  set -- gw01 gw02 gw03 gw04 gw05 gw06 gw07
 fi
 push_gw_files
 for sc in "$@"; do

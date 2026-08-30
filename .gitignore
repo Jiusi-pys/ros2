@@ -34,6 +34,9 @@ scripts/env.sh
 # stray source tarball (canonical location is target_deps_src/)
 lttng-ust-*.tar.bz2
 
+# Python bytecode caches (board_sweep.py and helpers are run in place)
+__pycache__
+
 # Ignore everything in src except a .gitkeep file
 src/*
 !src/.gitkeep

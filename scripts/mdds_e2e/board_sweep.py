@@ -31,6 +31,12 @@ def count_for(size):
     return max(8, min(300, 12_000_000 // size))
 
 
+def target_count(args, size):
+    # --count overrides the per-size block length (e.g. fixed-rate endurance
+    # runs: 100 Hz x 30 s = 3000); the default stays size-scaled.
+    return args.count if args.count > 0 else count_for(size)
+
+
 def period_for(size, base_rate, rate_bps):
     # Pace by BOTH a message-rate cap and an offered-byte-rate cap. The
     # cross-board dsoftbus lane sustains ~2.3 MB/s; an offered load beyond
@@ -79,13 +85,24 @@ def run_pub(args):
     init_ros(args)
     node = rclpy.create_node('mdds_sweep_pub')
     pub = node.create_publisher(ByteMultiArray, args.topic, make_qos(args))
+    if args.wait_match:
+        # VOLATILE durability: samples published before discovery/matching
+        # completes are silently dropped by the middleware. Wait (bounded) for
+        # at least one matched subscription so block heads are not lost to
+        # SEDP/discovery latency.
+        m0 = time.monotonic()
+        while rclpy.ok() and pub.get_subscription_count() < 1 and \
+                time.monotonic() - m0 < 10.0:
+            rclpy.spin_once(node, timeout_sec=0.1)
     sizes = [int(s) for s in args.sizes.split(',')]
     t0 = time.monotonic()
     for size in sizes:
-        n = count_for(size)
+        n = target_count(args, size)
         period = period_for(size, args.rate, args.rate_bps)
         body = bytes(size - HDR.size)
+        next_t = time.monotonic()
         for seq in range(n):
+            next_t += period
             msg = ByteMultiArray()
             msg.data = HDR.pack(MAGIC, size, seq) + body
             try:
@@ -96,10 +113,17 @@ def run_pub(args):
                 raise
             if seq % max(1, n // 5) == 0:
                 print(f'SWEEP-PUB size={size} seq={seq}/{n}', flush=True)
-            time.sleep(period)
+            # absolute-deadline pacing: a 64 KB publish costs milliseconds of
+            # fragmentation/send, and naive sleep(period) drifts the effective
+            # rate well below the nominal one over long runs
+            delay = next_t - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
         print(f'SWEEP-PUB-DONE size={size} count={n}', flush=True)
     print('SWEEP-PUB-ALL-DONE', flush=True)
-    time.sleep(2)  # let the tail flush through the send lane
+    # linger so the reliable writer can finish retransmitting the tail; a fixed
+    # 2 s is not enough when the last block is multi-MB over a lossy link
+    time.sleep(args.flush_ms / 1000.0)
     node.destroy_node()
     rclpy.shutdown()
     return 0
@@ -191,7 +215,7 @@ def run_sub(args):
     ok = True
     for size in sorted(stats):
         st = stats[size]
-        expected = count_for(size)
+        expected = target_count(args, size)
         dur = (st.last_t - st.first_t) if st.first_t else 0.0
         mbps = (st.bytes / 1e6 / dur) if dur > 0 else 0.0
         block_ok = st.reorder == 0
@@ -220,6 +244,9 @@ def main():
     ap.add_argument('--mode', choices=['pub', 'sub'], required=True)
     ap.add_argument('--topic', default='/mdds_sweep')
     ap.add_argument('--sizes', default=','.join(str(s) for s in DEFAULT_SIZES))
+    ap.add_argument('--count', type=int, default=0,
+                    help='messages per size block (default: size-scaled, see '
+                         'count_for); use for fixed-rate endurance runs')
     ap.add_argument('--rate', type=int, default=50,
                     help='pub only: message-rate cap in Hz')
     ap.add_argument('--rate-bps', type=int, default=1_200_000,
@@ -239,6 +266,12 @@ def main():
                          'context shutdown')
     ap.add_argument('--rclpy-signals', action='store_true',
                     help='use rclpy default signal handlers (parity check)')
+    ap.add_argument('--wait-match', action='store_true',
+                    help='pub only: wait (<=10s) for >=1 matched subscription '
+                         'before publishing (VOLATILE head-loss guard)')
+    ap.add_argument('--flush-ms', type=int, default=2000,
+                    help='pub only: linger after the last sample so reliable '
+                         'retransmission of the tail can finish')
     args = ap.parse_args()
     return run_pub(args) if args.mode == 'pub' else run_sub(args)
 

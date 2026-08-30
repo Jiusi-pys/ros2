@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CycloneDDS config for the mdds_gateway process on board A (L3 gateway
+     tests, run_mdds_gw.sh). Unicast-only discovery toward the Windows PC
+     (192.168.8.101) over the wlan0 interface (192.168.8.112); mirrors the
+     PC-side CYCLONEDDS_URI in scripts/mdds_e2e/pc/*.bat. -->
+<CycloneDDS>
+  <Domain>
+    <General>
+      <AllowMulticast>false</AllowMulticast>
+      <Interfaces>
+        <NetworkInterface address="192.168.8.112"/>
+      </Interfaces>
+    </General>
+    <Internal>
+      <!-- 4MB samples arrive as ~2800 IP fragments in one burst; the board's
+           default rmem drops them wholesale. rmem_max is already 16MB, so a
+           16MB receive buffer is grantable (same fix as mdds SO_RCVBUF=16MB).
+           Send buffer left at default: wmem_max is only 256KB and cyclone
+           fails domain creation when min is ungrantable. -->
+      <SocketReceiveBufferSize min="16MB"/>
+    </Internal>
+    <Discovery>
+      <Peers>
+        <Peer address="192.168.8.101"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

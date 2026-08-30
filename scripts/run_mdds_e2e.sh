@@ -4,7 +4,8 @@
 # and starts with an rclpy preflight that prints the effective RMW identifier.
 #
 #   ./scripts/run_mdds_e2e.sh [scenario ...]
-# scenarios: preflight loopback bidir py service action params besteffort sweep neg01 all
+# scenarios: preflight loopback bidir py service action params besteffort sweep neg01
+#            latejoin multitopic matched all
 # default:  preflight loopback bidir service action sweep
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -192,12 +193,67 @@ s_neg01() {
   verdict "NEG-01" $? "keep_all backpressure: received=${n:-?}/300 (<300 expected)"
 }
 
+s_latejoin() {
+  # E2E-10: talker runs alone for 10s, then the listener joins; discovery
+  # re-announce must connect them within two announce periods.
+  stopall
+  rbg "$BOARD_A" "\$ROS2_TALKER" e2e_late_talker.log
+  sleep 10
+  rbg "$BOARD_B" "\$ROS2_LISTENER" e2e_late_listener.log
+  sleep 20
+  stopall
+  pull "$BOARD_B" e2e_late_listener.log
+  local n; n=$(heard_count e2e_late_listener.log)
+  [ "$n" -ge 10 ]; verdict "E2E-10" $? "late-join heard=$n (>=10 within 20s after join)"
+}
+
+s_multitopic() {
+  # E2E-11: three talkers on chatter1/2/3; a listener on chatter2 must receive
+  # while a listener on an unadvertised topic must receive nothing (isolation).
+  stopall
+  rbg "$BOARD_B" "\$ROS2_LISTENER --ros-args -r chatter:=chatter2" e2e_mt_listener2.log
+  rbg "$BOARD_B" "\$ROS2_LISTENER --ros-args -r chatter:=chatter_none" e2e_mt_listener0.log
+  sleep 3
+  rbg "$BOARD_A" "\$ROS2_TALKER --ros-args -r chatter:=chatter1" e2e_mt_talker1.log
+  rbg "$BOARD_A" "\$ROS2_TALKER --ros-args -r chatter:=chatter2" e2e_mt_talker2.log
+  rbg "$BOARD_A" "\$ROS2_TALKER --ros-args -r chatter:=chatter3" e2e_mt_talker3.log
+  sleep 20
+  stopall
+  pull "$BOARD_B" e2e_mt_listener2.log
+  pull "$BOARD_B" e2e_mt_listener0.log
+  local n2 n0
+  n2=$(heard_count e2e_mt_listener2.log)
+  n0=$(heard_count e2e_mt_listener0.log)
+  [ "$n2" -ge 10 ] && [ "$n0" -eq 0 ]
+  verdict "E2E-11" $? "multi-topic: chatter2 heard=$n2 (>=10), unsubscribed heard=$n0 (==0)"
+}
+
+s_matched() {
+  # E2E-12: the stock matched_event_detect demo exercises pub/sub matched and
+  # unmatched callbacks; the full 8-event sequence must appear in order.
+  stopall
+  runfg "$BOARD_A" "timeout 100 $DEVICE_DIR/Lib/demo_nodes_cpp/matched_event_detect" \
+    > "$LOGDIR/e2e_matched.log" 2>&1
+  local pat missing=0
+  for pat in "First subscription is connected" \
+             "connected subscription is 1 and current number of connected subscription is 2" \
+             "connected subscription is -1 and current number of connected subscription is 1" \
+             "Last subscription is disconnected" \
+             "First publisher is connected" \
+             "connected publisher is 1 and current number of connected publisher is 2" \
+             "connected publisher is -1 and current number of connected publisher is 1" \
+             "Last publisher is disconnected"; do
+    grep -qF "$pat" "$LOGDIR/e2e_matched.log" || { missing=1; echo "   missing: $pat"; }
+  done
+  verdict "E2E-12" $missing "matched_event_detect full 8-event sequence"
+}
+
 # --- main --------------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
   set -- preflight loopback bidir service action sweep
 elif [ "$1" = all ]; then
-  set -- preflight loopback bidir py service action params besteffort sweep neg01
+  set -- preflight loopback bidir py service action params besteffort sweep neg01 latejoin multitopic matched
 fi
 for sc in "$@"; do
   echo "== scenario: $sc =="

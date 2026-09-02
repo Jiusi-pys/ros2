@@ -225,6 +225,15 @@ local_regular_bytes() {
   printf '%s\n' "$bytes"
 }
 
+# GNU tar treats a colon in a Windows absolute path (for example C:/...) as a
+# remote archive separator unless this flag is present.  Board archives are
+# deliberately stored under the host evidence root, so validate them through
+# one wrapper rather than silently turning a successful board run into an
+# unproven result on the Windows collector.
+local_archive_tar() {
+  tar --force-local "$@"
+}
+
 strict_hdc_single_line() {
   local value="$1"
   # Command substitution strips trailing LF.  HDC may leave one transport CR
@@ -518,12 +527,12 @@ verify_archive_controls() { # <package> <archive> <manifest> <ready> <terminal>
   ready_member="$pkg/$ready_name"
   terminal_member="$pkg/$terminal_name"
   for listed in "$manifest_member" "$ready_member" "$terminal_member"; do
-    if [[ "$(tar -tf "$archive" | tr -d '\r' | grep -Fxc "$listed")" != "1" ]]; then
+    if [[ "$(local_archive_tar -tf "$archive" | tr -d '\r' | grep -Fxc "$listed")" != "1" ]]; then
       echo "ERROR: archive lacks exactly one READY control entry for $pkg: $listed" >&2
       return 1
     fi
   done
-  manifest_digest="$(tar -xOf "$archive" "$manifest_member" | sha256sum | cut -d ' ' -f1)" || return 1
+  manifest_digest="$(local_archive_tar -xOf "$archive" "$manifest_member" | sha256sum | cut -d ' ' -f1)" || return 1
   if [[ "$manifest_digest" != "$READY_MANIFEST_SHA256" ]]; then
     echo "ERROR: archive READY manifest hash mismatch for $pkg: expected=$READY_MANIFEST_SHA256 got=${manifest_digest:-MISSING}" >&2
     return 1
@@ -531,8 +540,8 @@ verify_archive_controls() { # <package> <archive> <manifest> <ready> <terminal>
   expected_ready="MDDS_BOARDTEST_READY RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$READY_MANIFEST_SHA256"
   expected_ready_sha="$(printf '%s\n' "$expected_ready" | sha256sum | cut -d ' ' -f1)"
   expected_terminal_sha="$(printf '%s\n' "$TERMINAL_LINE" | sha256sum | cut -d ' ' -f1)"
-  ready_digest="$(tar -xOf "$archive" "$ready_member" | sha256sum | cut -d ' ' -f1)" || return 1
-  terminal_digest="$(tar -xOf "$archive" "$terminal_member" | sha256sum | cut -d ' ' -f1)" || return 1
+  ready_digest="$(local_archive_tar -xOf "$archive" "$ready_member" | sha256sum | cut -d ' ' -f1)" || return 1
+  terminal_digest="$(local_archive_tar -xOf "$archive" "$terminal_member" | sha256sum | cut -d ' ' -f1)" || return 1
   if [[ "$ready_digest" != "$expected_ready_sha" || "$terminal_digest" != "$expected_terminal_sha" ]]; then
     echo "ERROR: archive READY/terminal exact-byte digest mismatch for $pkg" >&2
     return 1

@@ -70,6 +70,12 @@ GW_TOPIC_LAT_REQ="$GW_TOPIC_PREFIX/lat_req"
 GW_TOPIC_LAT_RSP="$GW_TOPIC_PREFIX/lat_rsp"
 GW_CONFIG_TEMPLATE="scripts/mdds_e2e/mdds_gateway_test.conf"
 GW_CONFIG_LOCAL="$LOGDIR/mdds_gateway_test.rendered.conf"
+# GW e2e has a dedicated CycloneDDS domain.  Keep it distinct from production
+# domain 0 and the DS-03 gateway proof (Cyclone 46, MDDS/DSoftBus 43).  The
+# raw MDDS leg remains 44 so it cannot share a DSoftBus Socket session with
+# either gate.
+GW_CYCLONE_DOMAIN=47
+GW_MDDS_DOMAIN=44
 
 # Test-only launcher fault injection: simulate an HDC stdout/token loss after
 # a successful remote launch.  launch() must recover from the persistent
@@ -105,14 +111,18 @@ export MSYS2_ARG_CONV_EXCL='*'
 # The gateway test uses an MDDS DSoftBus domain that is separate from its
 # CycloneDDS/PC domain. Both board-side RMW nodes source the installed
 # production profile, which selects DSoftBus only and rejects any legacy
-# MDDS_TRANSPORT override. Domain 44 is deliberately isolated from the
-# DSoftBus-only DS gate (43) and from the default application domain (0).
+# MDDS_TRANSPORT override. MDDS domain 44 and Cyclone domain 47 are
+# deliberately isolated from the DSoftBus-only DS gate (43/46) and from the
+# default application domain (0).
 #
 # The gateway must NOT have RMW_IMPLEMENTATION pinned by its environment: it
 # pins rmw_cyclonedds_cpp internally and fails closed on a foreign RMW. Its
 # raw MDDS participant is selected solely by mdds_gateway_test.conf.
-RENVS=". $DEVICE_DIR/env.sh; . $DEVICE_DIR/share/rmw_mdds/config/ohos_dsoftbus.env; export MDDS_DEBUG=1; export ROS_DOMAIN_ID=44;"
-GWENVS=". $DEVICE_DIR/env.sh; unset RMW_IMPLEMENTATION MDDS_DEPLOYMENT_PROFILE MDDS_TRANSPORT MDDS_UDP_PEER_ALLOW; export CYCLONEDDS_URI=$DEVICE_DIR/mdds_e2e/cyclonedds_board_a.xml; export MDDS_DEBUG=1; export RCUTILS_LOGGING_BUFFERED_STREAM=0;"
+RENVS=". $DEVICE_DIR/env.sh; . $DEVICE_DIR/share/rmw_mdds/config/ohos_dsoftbus.env; export MDDS_DEBUG=1; export ROS_DOMAIN_ID=$GW_MDDS_DOMAIN;"
+# main.cpp obtains its Cyclone domain exclusively from the rendered config via
+# InitOptions::set_domain_id().  Clear inherited ROS_DOMAIN_ID so an unrelated
+# board process cannot make the intended boundary ambiguous in diagnostics.
+GWENVS=". $DEVICE_DIR/env.sh; unset RMW_IMPLEMENTATION MDDS_DEPLOYMENT_PROFILE MDDS_TRANSPORT MDDS_UDP_PEER_ALLOW ROS_DOMAIN_ID; export CYCLONEDDS_URI=$DEVICE_DIR/mdds_e2e/cyclonedds_board_a.xml; export MDDS_DEBUG=1; export RCUTILS_LOGGING_BUFFERED_STREAM=0;"
 
 # HDC shell's exit status is not a trustworthy board-process status. Every
 # launcher writes a run-scoped PID:start record before emitting an optional
@@ -1310,6 +1320,18 @@ render_gateway_config() {
       return 1
     fi
   done
+  # Fail closed if a source edit made the test PC and gateway domains diverge,
+  # or duplicated either key.  The generated configuration is the exact
+  # input hashed and deployed below, so this catches configuration drift
+  # before a board or PC process is launched.
+  if [ "$(grep -Ec '^[[:space:]]*cyclone_domain_id[[:space:]]*=' "$tmp")" -ne 1 ] || \
+     [ "$(grep -Ec '^[[:space:]]*mdds_domain_id[[:space:]]*=' "$tmp")" -ne 1 ] || \
+     [ "$(grep -Fxc "cyclone_domain_id = $GW_CYCLONE_DOMAIN" "$tmp")" -ne 1 ] || \
+     [ "$(grep -Fxc "mdds_domain_id = $GW_MDDS_DOMAIN" "$tmp")" -ne 1 ]; then
+    rm -f "$tmp"
+    echo "ERROR: gateway test config must contain exactly cyclone_domain_id=$GW_CYCLONE_DOMAIN and mdds_domain_id=$GW_MDDS_DOMAIN" >&2
+    return 1
+  fi
   mv -f "$tmp" "$GW_CONFIG_LOCAL"
 }
 
@@ -1413,6 +1435,109 @@ assert_gateway_dsoftbus_only_log() { # <local log basename>
     ! grep -Fq 'udp(' "$LOGDIR/$log"
 }
 
+# A count observed by a downstream PC node is not sufficient evidence that the
+# reliable mdds -> CycloneDDS relay stayed healthy.  A TopicBridge deliberately
+# exits after an ACK-fence timeout, ingress loss, or publish exception; the
+# ownership-fenced reset below correctly treats an already-gone process as
+# cleaned up.  Therefore every scenario that exercises this direction must
+# inspect the final per-topic counters before it can pass.
+#
+# assert_gateway_m2c_healthy <gateway-log> <topic> <min-forwarded> <min-ack-batches>
+assert_gateway_m2c_healthy() {
+  local log="$1" topic="$2" min_forwarded="$3" min_ack_batches="$4"
+  local path final_line forwarded ack_batches ack_timeouts messages_lost resource_drops terminal forward_exceptions required_batches
+  if ! [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$topic" =~ ^/[A-Za-z0-9_/-]+$ && \
+          "$min_forwarded" =~ ^[1-9][0-9]*$ && "$min_ack_batches" =~ ^[1-9][0-9]*$ ]]; then
+    echo "   ERROR: invalid gateway mdds->cyclone health assertion arguments" >&2
+    return 1
+  fi
+  path="$LOGDIR/$log"
+  final_line=$(grep -F "$topic final:" "$path" 2>/dev/null | tail -n 1)
+  if [ -z "$final_line" ]; then
+    echo "   $log: missing final mdds->cyclone counters for $topic" >&2
+    return 1
+  fi
+  forwarded=$(sed -n 's/.*mdds->cyclone=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  ack_batches=$(sed -n 's/.*m2c_ack_batches=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  ack_timeouts=$(sed -n 's/.*m2c_ack_timeouts=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  messages_lost=$(sed -n 's/.*m2c_messages_lost=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  resource_drops=$(sed -n 's/.*m2c_resource_drops=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  terminal=$(sed -n 's/.*m2c_terminal=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  forward_exceptions=$(sed -n 's/.*m2c_forward_exceptions=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  if ! [[ "$forwarded" =~ ^[0-9]+$ && "$ack_batches" =~ ^[0-9]+$ && \
+          "$ack_timeouts" =~ ^[0-9]+$ && "$messages_lost" =~ ^[0-9]+$ && \
+          "$resource_drops" =~ ^[0-9]+$ && "$terminal" =~ ^[0-9]+$ && \
+          "$forward_exceptions" =~ ^[0-9]+$ ]]; then
+    echo "   $log: malformed final mdds->cyclone counters for $topic" >&2
+    return 1
+  fi
+  # The bridge fences every eight publishes and fences the remaining tail on
+  # shutdown.  Require the final counter to cover every sample it reports,
+  # not merely the scenario's minimum observed at the PC.
+  required_batches=$(((forwarded + 7) / 8))
+  if (( forwarded < min_forwarded || ack_batches < min_ack_batches || ack_batches < required_batches ||
+        ack_timeouts != 0 || messages_lost != 0 || resource_drops != 0 ||
+        terminal != 0 || forward_exceptions != 0 )); then
+    echo "   $log: unhealthy mdds->cyclone final for $topic (ACK batches=$ack_batches, need >=$required_batches): $final_line" >&2
+    return 1
+  fi
+  if grep -Eq 'terminal bridge failure|mdds->cyclone ACK fence (failed|timed out)|mdds->cyclone ingress loss|mdds->cyclone publish failed|mdds->cyclone forwarding thread failed|mdds_gateway: terminal executor failure' "$path"; then
+    echo "   $log: terminal mdds->cyclone failure was logged" >&2
+    return 1
+  fi
+  return 0
+}
+
+# The reverse direction is also fail-closed.  The gateway's MDDS writer uses
+# finite KEEP_ALL history: a write rejection, callback exception, malformed
+# serialized message, pre-activation drop, or history-cap pressure is terminal
+# rather than a silent KEEP_LAST overwrite.  `gw_reset` correctly accepts an
+# already-gone owned process, so threshold data evidence alone cannot prove a
+# healthy C->M relay.
+#
+# assert_gateway_c2m_healthy <gateway-log> <topic> <min-forwarded>
+assert_gateway_c2m_healthy() {
+  local log="$1" topic="$2" min_forwarded="$3"
+  local path final_line forwarded terminal write_rejections callback_exceptions invalid_messages pre_activation sample_rejections byte_rejections
+  if ! [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$topic" =~ ^/[A-Za-z0-9_/-]+$ && \
+          "$min_forwarded" =~ ^[1-9][0-9]*$ ]]; then
+    echo "   ERROR: invalid gateway cyclone->mdds health assertion arguments" >&2
+    return 1
+  fi
+  path="$LOGDIR/$log"
+  final_line=$(grep -F "$topic final:" "$path" 2>/dev/null | tail -n 1)
+  if [ -z "$final_line" ]; then
+    echo "   $log: missing final cyclone->mdds counters for $topic" >&2
+    return 1
+  fi
+  forwarded=$(sed -n 's/.*cyclone->mdds=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  terminal=$(sed -n 's/.*c2m_terminal=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  write_rejections=$(sed -n 's/.*c2m_write_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  callback_exceptions=$(sed -n 's/.*c2m_callback_exceptions=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  invalid_messages=$(sed -n 's/.*c2m_invalid_serialized_messages=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  pre_activation=$(sed -n 's/.*c2m_pre_activation_drops=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  sample_rejections=$(sed -n 's/.*c2m_history_sample_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  byte_rejections=$(sed -n 's/.*c2m_history_byte_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  if ! [[ "$forwarded" =~ ^[0-9]+$ && "$terminal" =~ ^[0-9]+$ && \
+          "$write_rejections" =~ ^[0-9]+$ && "$callback_exceptions" =~ ^[0-9]+$ && \
+          "$invalid_messages" =~ ^[0-9]+$ && "$pre_activation" =~ ^[0-9]+$ && \
+          "$sample_rejections" =~ ^[0-9]+$ && "$byte_rejections" =~ ^[0-9]+$ ]]; then
+    echo "   $log: malformed final cyclone->mdds counters for $topic" >&2
+    return 1
+  fi
+  if (( forwarded < min_forwarded || terminal != 0 || write_rejections != 0 ||
+        callback_exceptions != 0 || invalid_messages != 0 || pre_activation != 0 ||
+        sample_rejections != 0 || byte_rejections != 0 )); then
+    echo "   $log: unhealthy cyclone->mdds final for $topic: $final_line" >&2
+    return 1
+  fi
+  if grep -Eq 'cyclone->mdds terminal failure|mdds_gateway: terminal executor failure|terminal bridge failure' "$path"; then
+    echo "   $log: terminal cyclone->mdds failure was logged" >&2
+    return 1
+  fi
+  return 0
+}
+
 # Backend-selection text proves intent, while this trace proves the selected
 # backend actually crossed the native DSoftBus Socket/Bytes API boundary.  The
 # DSoftBus implementation logs these calls only under MDDS_DEBUG=1, which this
@@ -1448,7 +1573,8 @@ push_gw_files() {
   config_sha=$(helper_local_sha256 "$GW_CONFIG_LOCAL") || return 1
   {
     printf 'template=%s sha256=%s\n' "$GW_CONFIG_TEMPLATE" "$template_sha"
-    printf 'rendered=%s sha256=%s mdds_transport=dsoftbus mdds_domain_id=44\n' "$GW_CONFIG_LOCAL" "$config_sha"
+    printf 'rendered=%s sha256=%s mdds_transport=dsoftbus cyclone_domain_id=%s mdds_domain_id=%s\n' \
+      "$GW_CONFIG_LOCAL" "$config_sha" "$GW_CYCLONE_DOMAIN" "$GW_MDDS_DOMAIN"
     printf 'topics chatter=%s chatter_back=%s sweep=%s lat_req=%s lat_rsp=%s\n' \
       "$GW_TOPIC_CHATTER" "$GW_TOPIC_CHATTER_BACK" "$GW_TOPIC_SWEEP" \
       "$GW_TOPIC_LAT_REQ" "$GW_TOPIC_LAT_RSP"
@@ -1456,15 +1582,20 @@ push_gw_files() {
 }
 
 wait_gateway_dsoftbus_ready() { # <gateway-log-name>
-  local log="$1" attempt status
+  local log="$1" attempt status expected_domain
+  expected_domain="cyclone domain $GW_CYCLONE_DOMAIN, mdds domain $GW_MDDS_DOMAIN"
   for attempt in $(seq 1 30); do
-    status=$(shell "$BOARD_A" "if test -f '$REMOTE_LOGDIR/$log' && grep -Fq 'mdds transports requested=[dsoftbus] active=[dsoftbus(' '$REMOTE_LOGDIR/$log' && ! grep -Fq 'udp(' '$REMOTE_LOGDIR/$log'; then printf MDDS_GW_DSOFTBUS_READY; elif test -f '$REMOTE_LOGDIR/$log' && grep -Fq 'mdds transports requested=' '$REMOTE_LOGDIR/$log'; then printf MDDS_GW_DSOFTBUS_WRONG; else printf MDDS_GW_DSOFTBUS_WAIT; fi" || true)
+    status=$(shell "$BOARD_A" "if test -f '$REMOTE_LOGDIR/$log' && grep -Fq 'mdds transports requested=[dsoftbus] active=[dsoftbus(' '$REMOTE_LOGDIR/$log' && ! grep -Fq 'udp(' '$REMOTE_LOGDIR/$log' && grep -Fq '$expected_domain' '$REMOTE_LOGDIR/$log'; then printf MDDS_GW_READY; elif test -f '$REMOTE_LOGDIR/$log' && grep -Fq 'mdds_gateway up:' '$REMOTE_LOGDIR/$log' && ! grep -Fq '$expected_domain' '$REMOTE_LOGDIR/$log'; then printf MDDS_GW_DOMAIN_WRONG; elif test -f '$REMOTE_LOGDIR/$log' && grep -Fq 'mdds_gateway up:' '$REMOTE_LOGDIR/$log' && grep -Fq 'mdds transports requested=' '$REMOTE_LOGDIR/$log'; then printf MDDS_GW_DSOFTBUS_WRONG; else printf MDDS_GW_WAIT; fi" || true)
     status=$(printf '%s' "$status" | tr -d '\r\n')
     printf 'log=%s attempt=%s result=%s\n' "$log" "$attempt" "${status:-NO_SENTINEL}" \
       >> "$LOGDIR/gateway_transport_evidence.txt"
     case "$status" in
-      MDDS_GW_DSOFTBUS_READY)
+      MDDS_GW_READY)
         return 0
+        ;;
+      MDDS_GW_DOMAIN_WRONG)
+        echo "ERROR: gateway reported a domain other than Cyclone $GW_CYCLONE_DOMAIN / MDDS $GW_MDDS_DOMAIN in $log" >&2
+        return 1
         ;;
       MDDS_GW_DSOFTBUS_WRONG)
         echo "ERROR: gateway reported a non-DSoftBus-only active transport in $log" >&2
@@ -1473,7 +1604,7 @@ wait_gateway_dsoftbus_ready() { # <gateway-log-name>
     esac
     sleep 1
   done
-  echo "ERROR: gateway did not report an active DSoftBus-only transport in $log" >&2
+  echo "ERROR: gateway did not report active DSoftBus-only transport on Cyclone $GW_CYCLONE_DOMAIN / MDDS $GW_MDDS_DOMAIN in $log" >&2
   return 1
 }
 
@@ -1825,6 +1956,7 @@ s_gw01() {
   local n transport_ok=0; n=$(heard_count gw01_b_listener.log)
   assert_rmw_dsoftbus_only_log gw01_b_listener.log && \
     assert_gateway_dsoftbus_only_log gw01_gw.log && \
+    assert_gateway_c2m_healthy gw01_gw.log "$GW_TOPIC_CHATTER" 15 && \
     assert_dsoftbus_socket_bytes_trace gw01_b_listener.log && \
     assert_dsoftbus_socket_bytes_trace gw01_gw.log || transport_ok=1
   [ "$n" -ge 15 ] && [ "$transport_ok" -eq 0 ]
@@ -1842,13 +1974,14 @@ s_gw02() {
   gw_reset || return 1
   pull "$BOARD_B" gw02_talker.log || return 1
   pull "$BOARD_A" gw02_gw.log || return 1
-  local n transport_ok=0; n=$(heard_count gw02_pc_listener.log)
+  local n checks_failed=0; n=$(heard_count gw02_pc_listener.log)
   assert_rmw_dsoftbus_only_log gw02_talker.log && \
     assert_gateway_dsoftbus_only_log gw02_gw.log && \
+    assert_gateway_m2c_healthy gw02_gw.log "$GW_TOPIC_CHATTER" 15 2 && \
     assert_dsoftbus_socket_bytes_trace gw02_talker.log && \
-    assert_dsoftbus_socket_bytes_trace gw02_gw.log || transport_ok=1
-  [ "$n" -ge 15 ] && [ "$transport_ok" -eq 0 ]
-  verdict "GW-02" $? "B->PC heard=$n (>=15), transport_only=$transport_ok"
+    assert_dsoftbus_socket_bytes_trace gw02_gw.log || checks_failed=1
+  [ "$n" -ge 15 ] && [ "$checks_failed" -eq 0 ]
+  verdict "GW-02" $? "B->PC heard=$n (>=15), checks_failed=$checks_failed"
 }
 
 s_gw03() {
@@ -1880,6 +2013,8 @@ s_gw03() {
     [ "$n1" -ge 40 ] && [ "$n2" -ge 40 ] && [ "$d2" -le 1 ] && \
     assert_rmw_dsoftbus_only_log gw03_b_duplex.log && \
     assert_gateway_dsoftbus_only_log gw03_gw.log && \
+    assert_gateway_c2m_healthy gw03_gw.log "$GW_TOPIC_CHATTER" 40 && \
+    assert_gateway_m2c_healthy gw03_gw.log "$GW_TOPIC_CHATTER_BACK" 40 5 && \
     assert_dsoftbus_socket_bytes_trace gw03_b_duplex.log && \
     assert_dsoftbus_socket_bytes_trace gw03_gw.log
   verdict "GW-03" $? "bidir: PC->B received=$n1, B->PC heard=$n2 dup=$d2"
@@ -1932,6 +2067,11 @@ s_gw04() {
   done
   grep -q 'SWEEP_RESULT PASS' "$LOGDIR/gw04_sub.log" || { echo "   missing SWEEP_RESULT PASS"; bad=1; }
   grep -q ' BAD' "$LOGDIR/gw04_sub.log" && { echo "   subscriber reported BAD"; bad=1; }
+  # The six default sweep blocks offer exactly 847 samples.  This assertion
+  # binds the strict board-side CRC/count result to a non-terminal gateway
+  # C->M handoff with no finite KEEP_ALL history-pressure rejection.
+  assert_gateway_c2m_healthy gw04_gw.log "$GW_TOPIC_SWEEP" 847 \
+    || { echo "   gateway cyclone->mdds relay was not healthy for the 847-sample sweep"; bad=1; }
   assert_rmw_dsoftbus_only_log gw04_sub.log || { echo "   B subscriber did not prove DSoftBus-only transport"; bad=1; }
   assert_gateway_dsoftbus_only_log gw04_gw.log || { echo "   gateway did not prove DSoftBus-only transport"; bad=1; }
   assert_dsoftbus_socket_bytes_trace gw04_sub.log || { echo "   B subscriber lacks DSoftBus Socket/Bytes trace"; bad=1; }
@@ -1964,6 +2104,7 @@ s_gw05() {
     grep -Fq "$GW_TOPIC_CHATTER final: cyclone->mdds=0 mdds->cyclone=30" "$LOGDIR/gw05_gw.log" && \
     assert_rmw_dsoftbus_only_log gw05_b_loop.log && \
     assert_gateway_dsoftbus_only_log gw05_gw.log && \
+    assert_gateway_m2c_healthy gw05_gw.log "$GW_TOPIC_CHATTER" 30 4 && \
     assert_dsoftbus_socket_bytes_trace gw05_b_loop.log && \
     assert_dsoftbus_socket_bytes_trace gw05_gw.log
   verdict "GW-05" $? "single-participant loop suppression: exact 30/30, real gateway mdds->cyclone=30, no echo duplicate"
@@ -1995,6 +2136,8 @@ s_gw06() {
     assert_rmw_dsoftbus_only_log gw06_b_listener.log && \
     assert_gateway_dsoftbus_only_log gw06_gw1.log && \
     assert_gateway_dsoftbus_only_log gw06_gw2.log && \
+    assert_gateway_c2m_healthy gw06_gw1.log "$GW_TOPIC_CHATTER" 5 && \
+    assert_gateway_c2m_healthy gw06_gw2.log "$GW_TOPIC_CHATTER" 5 && \
     assert_dsoftbus_socket_bytes_trace gw06_b_listener.log && \
     assert_dsoftbus_socket_bytes_trace gw06_gw1.log && \
     assert_dsoftbus_socket_bytes_trace gw06_gw2.log
@@ -2026,6 +2169,7 @@ s_gw07() {
   grep -q "data: 'Hello World:" "$LOGDIR/gw07_pc_echo.log" 2>/dev/null && \
     assert_rmw_dsoftbus_only_log gw07_b_talker.log && \
     assert_gateway_dsoftbus_only_log gw07_gw.log && \
+    assert_gateway_m2c_healthy gw07_gw.log "$GW_TOPIC_CHATTER" 1 1 && \
     assert_dsoftbus_socket_bytes_trace gw07_b_talker.log && \
     assert_dsoftbus_socket_bytes_trace gw07_gw.log
   verdict "GW-07" $? "PC ros2 CLI topic echo --once /chatter via gateway"
@@ -2052,6 +2196,7 @@ s_gw08() {
   [ "$exact" -eq 10 ] && [ "$total" -eq 10 ] && \
     assert_rmw_dsoftbus_only_log gw08_b_constant_pub.log && \
     assert_gateway_dsoftbus_only_log gw08_gw.log && \
+    assert_gateway_m2c_healthy gw08_gw.log "$GW_TOPIC_CHATTER" 10 2 && \
     assert_dsoftbus_socket_bytes_trace gw08_b_constant_pub.log && \
     assert_dsoftbus_socket_bytes_trace gw08_gw.log
   verdict "GW-08" $? "identical String(constant): received=$exact/10 total=$total"

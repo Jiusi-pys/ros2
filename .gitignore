@@ -8,6 +8,10 @@ build_ohos
 install_ohos
 log_ohos
 ohos_test_logs
+# Focused local colcon logs created by the DSoftBus and QoS regression builds.
+# The associated source tests live under scripts/ and are tracked separately.
+log_dsoftbus_fake_runtime
+log_p2_qos_snapshot
 # Local CMake review/sanitizer build trees; scripts recreate them as needed.
 build_*
 # target-side Python staging (pulled from board / cross-built wheels)

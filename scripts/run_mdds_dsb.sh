@@ -9,7 +9,11 @@
 #   DS-02  board B -> board A, dsoftbus-only, exact N/N; board B additionally
 #          runs ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT
 #   DS-03  board B -> mdds_gateway on A (mdds_transport=dsoftbus) -> Windows PC
-#          (cyclone), exact N/N
+#          (CycloneDDS test domain 46), exact N/N
+#   DS-03-ACK-BURST  directed P1 regression: 32 high-rate, post-match board-B
+#          samples through the same isolated gateway path, completing >=4 ACK
+#          fences.  It does not infer the size of each completed fence solely
+#          from the fence-count metric.
 #   DS-04  negative evidence while dsoftbus nodes run: neither board holds any
 #          socket in the mdds UDP port band (47811-47842 = 0xBAC3-0xBAE2), and
 #          the process logs name dsoftbus as the active backend
@@ -28,9 +32,17 @@
 # PC: an owned cmd.exe PID and its child tree). No pkill -f, command-line PID
 # scanning, or taskkill /IM.
 #
-#   ./scripts/run_mdds_dsb.sh [ds01 ... ds07 | all]
+#   ./scripts/run_mdds_dsb.sh [ds01 ... ds07 | ds03_ack_burst | all]
+#
+# `all` includes DS-03-ACK-BURST.  It remains a directed regression rather
+# than one of the normative DS-01..07 identifiers, but a final "all" run may
+# not silently omit the ACK-fence proof.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+source "$PWD/scripts/lib/mdds_msys_env.sh" || {
+  echo "ERROR: cannot load Git-Bash environment conversion helper" >&2
+  exit 2
+}
 
 HDC="${HDC:-C:/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/command-line-tools/sdk/default/openharmony/toolchains/hdc.exe}"
 BOARD_A=3e01ff55454d202020104033bf453b00
@@ -57,6 +69,15 @@ RUN_NONCE="${MDDS_RUN_NONCE:-n${RANDOM}p${RANDOM}x$$}"
 case "$RUN_NONCE" in
   ''|*[!A-Za-z0-9_-]*) echo "ERROR: MDDS_RUN_NONCE must use only A-Z a-z 0-9 _ -" >&2; exit 2 ;;
 esac
+# DS-03 traffic is intentionally bound to this one invocation.  The source
+# fields above are constrained to the topic-safe alphabet, so they can be
+# rendered into the gateway config and passed through the PowerShell launcher
+# without introducing a shell/configuration injection surface.
+DS3_TOPIC="/mdds_dsb_sweep_${RUN_ID}_${RUN_NONCE}"
+if (( ${#DS3_TOPIC} > 200 )); then
+  echo "ERROR: MDDS_RUN_ID + MDDS_RUN_NONCE makes the DS-03 topic too long" >&2
+  exit 2
+fi
 REMOTE_OWNER="$REMOTE_LOGDIR/.mdds_run_owner"
 # PowerShell guards inherit only exported state. Keep the shell-local source of
 # truth above, then export the already validated copies used in their signed
@@ -64,6 +85,10 @@ REMOTE_OWNER="$REMOTE_LOGDIR/.mdds_run_owner"
 export MDDS_RUN_ID="$RUN_ID"
 export MDDS_RUN_NONCE="$RUN_NONCE"
 mkdir -p "$LOGDIR" || { echo "ERROR: cannot create log directory $LOGDIR" >&2; exit 2; }
+DSB_CONFIG_TEMPLATE="scripts/mdds_e2e/mdds_gateway_dsb.conf"
+DSB_CONFIG_LOCAL="$LOGDIR/mdds_gateway_dsb.rendered.conf"
+printf 'RUN_ID=%s\nRUN_NONCE=%s\nDS3_TOPIC=%s\n' "$RUN_ID" "$RUN_NONCE" "$DS3_TOPIC" \
+  > "$LOGDIR/ds03_topic_binding.txt" || { echo "ERROR: cannot record DS-03 topic binding" >&2; exit 2; }
 RUN_MARKER="$LOGDIR/.dsb_run_$$_${RANDOM}.marker"
 touch "$RUN_MARKER" || { echo "ERROR: cannot create run marker $RUN_MARKER" >&2; exit 2; }
 
@@ -84,14 +109,19 @@ export MDDS_TEST_SUPPRESS_LAUNCH_TOKEN="$SUPPRESS_LAUNCH_TOKEN"
 # that the guard never reaches its payload.  They are deliberately accepted
 # only as booleans and never interpolate into a board command.
 DROP_FIRST_RECORD_READ="${MDDS_TEST_DROP_FIRST_RECORD_READ:-0}"
+# This test-only hook proves pending cleanup can recover a board-side valid
+# PID:start record even when every host-side record read is lost.  It is never
+# interpolated as a shell fragment and defaults off for all normal gates.
+DROP_ALL_RECORD_READS="${MDDS_TEST_DROP_ALL_RECORD_READS:-0}"
 FAIL_LAUNCH_RECORD_WRITE="${MDDS_TEST_FAIL_LAUNCH_RECORD_WRITE:-0}"
-for _launch_test_flag in "$DROP_FIRST_RECORD_READ" "$FAIL_LAUNCH_RECORD_WRITE"; do
+for _launch_test_flag in "$DROP_FIRST_RECORD_READ" "$DROP_ALL_RECORD_READS" "$FAIL_LAUNCH_RECORD_WRITE"; do
   case "$_launch_test_flag" in
     0|1) ;;
-    *) echo "ERROR: MDDS_TEST_DROP_FIRST_RECORD_READ and MDDS_TEST_FAIL_LAUNCH_RECORD_WRITE must be 0 or 1" >&2; exit 2 ;;
+    *) echo "ERROR: MDDS_TEST_DROP_FIRST_RECORD_READ, MDDS_TEST_DROP_ALL_RECORD_READS, and MDDS_TEST_FAIL_LAUNCH_RECORD_WRITE must be 0 or 1" >&2; exit 2 ;;
   esac
 done
 export MDDS_TEST_DROP_FIRST_RECORD_READ="$DROP_FIRST_RECORD_READ"
+export MDDS_TEST_DROP_ALL_RECORD_READS="$DROP_ALL_RECORD_READS"
 export MDDS_TEST_FAIL_LAUNCH_RECORD_WRITE="$FAIL_LAUNCH_RECORD_WRITE"
 
 export MSYS2_ARG_CONV_EXCL='*'
@@ -125,7 +155,18 @@ DSB_ENVS_B="$DSB_ENVS"
 # current Cyclone match, not a delayed file flush.
 GWENVS=". $DEVICE_DIR/env.sh; unset RMW_IMPLEMENTATION; export CYCLONEDDS_URI=$DEVICE_DIR/mdds_e2e/cyclonedds_board_a.xml; export MDDS_DEBUG=1; export RCUTILS_LOGGING_BUFFERED_STREAM=0;"
 
-shell() { "$HDC" -t "$1" shell "$2" </dev/null; }
+# The deployed KaihongOS /bin/sh image has no external `tr`, yet the durable
+# launch-control protocol needs only LF-canonical board files.  Provide a
+# deliberately narrow shell-function fallback for the two existing calls
+# (`tr -d '\\r'` and `tr -d '\\r\\n'`) rather than treating a missing utility
+# as an empty launch record.  The function rejects every other form; host-side
+# parsing continues to use the real Git-Bash tr.  Board control files are
+# written with printf '\n', so passing their stream through cat is equivalent
+# for the supported forms and preserves fail-closed parsing if a CR appears.
+shell() {
+  local board="$1" command="$2"
+  "$HDC" -t "$board" shell "tr() { case \"\$1:\$2\" in '-d:\\r'|'-d:\\r\\n') cat ;; *) return 127 ;; esac; }; $command" </dev/null
+}
 
 ACTIVITY_LOCK_DIR="$DEVICE_DIR/.mdds-activity-lock"
 declare -a ACTIVITY_LOCKED_BOARDS=()
@@ -272,6 +313,12 @@ read_remote_pid_record() { # <board> <record-path>; print verified pid:start aft
   local board="$1" record_path="$2" attempt raw pair
   for attempt in 1 2 3; do
     REMOTE_RECORD_READ_ATTEMPTS=$((REMOTE_RECORD_READ_ATTEMPTS + 1))
+    if [ "$DROP_ALL_RECORD_READS" = 1 ]; then
+      printf 'event=inject-drop-all-remote-record-reads board=%s record=%s attempt=%s\n' \
+        "$board" "$record_path" "$attempt" >> "$LOGDIR/launch_fault_injection.txt"
+      sleep 1
+      continue
+    fi
     if [ "$DROP_FIRST_RECORD_READ" = 1 ] && [ "$REMOTE_RECORD_READ_ATTEMPTS" -eq 1 ]; then
       printf 'event=inject-drop-first-remote-record-read board=%s record=%s\n' "$board" "$record_path" \
         >> "$LOGDIR/launch_fault_injection.txt"
@@ -535,7 +582,10 @@ read_pc_pid_record() { # <record-file>; print verified guard pid:start after bou
       sleep 1
       continue
     fi
-    raw=$(tr -d '\r' < "$record_file" 2>/dev/null || true)
+    # The first probe can run before the PowerShell guard has created its
+    # record.  Treat that expected state as an empty read, without letting the
+    # shell redirection emit a misleading host-side error into gate evidence.
+    raw=$({ if [ -r "$record_file" ]; then tr -d '\r' < "$record_file"; fi; } 2>/dev/null || true)
     pair=$(printf '%s' "$raw" | parse_pc_pid_record | head -1)
     if [[ "$pair" =~ ^[0-9]+:[0-9]+$ ]]; then
       printf '%s' "$pair"
@@ -547,23 +597,23 @@ read_pc_pid_record() { # <record-file>; print verified guard pid:start after bou
 }
 
 pc_start_sweep_sub() {
-  local count="${1:-}" depth="${2:-}"
+  local count="${1:-}" depth="${2:-}" tag="${3:-ds03}" topic="${4:-$DS3_TOPIC}"
   # DS-03 publishes a short burst through the gateway.  The PC reader must be
   # able to retain every expected sample while its executor drains the queue;
   # otherwise KEEP_LAST(10) fabricates a transport-loss failure (11/30 was the
   # observed signature).  Keep this guard next to the PC launch so a future
   # scenario-count change cannot silently reintroduce that false negative.
-  if ! [[ "$count" =~ ^[1-9][0-9]*$ && "$depth" =~ ^[1-9][0-9]*$ ]] || (( depth < count )); then
-    echo "   ERROR: invalid DS-03 PC queue contract: count=$count depth=$depth (depth must be >= count)" >&2
+  if ! [[ "$count" =~ ^[1-9][0-9]*$ && "$depth" =~ ^[1-9][0-9]*$ && "$tag" =~ ^[a-z0-9_]+$ && "$topic" =~ ^/[A-Za-z0-9_-]+$ ]] || (( depth < count )); then
+    echo "   ERROR: invalid DS-03 PC queue/topic contract: count=$count depth=$depth topic=$topic (depth must be >= count)" >&2
     return 1
   fi
   # The recorded root is a PowerShell guard, not cmd.exe.  The guard writes a
   # signed PID/start record before it starts cmd, then waits for cmd; therefore
   # taskkill /T can prove cleanup of every inherited child rather than merely
   # stopping a launcher that already escaped to a new process tree.
-  local out_win err_win token_file ps_err_file record_file intent_file cancel_file status_file token pair source terminal i
-  out_win=$(cygpath -w "$LOGDIR/ds03_pc_sub.log")
-  err_win=$(cygpath -w "$LOGDIR/ds03_pc_sub.err.log")
+  local out_win err_win token_file ps_err_file record_file intent_file cancel_file status_file token pair source terminal i msys_env_conv_excl
+  out_win=$(cygpath -w "$LOGDIR/${tag}_pc_sub.log")
+  err_win=$(cygpath -w "$LOGDIR/${tag}_pc_sub.err.log")
   record_file="$LOGDIR/.pc_guard_${RUN_NONCE}_$$_${RANDOM}.record"
   intent_file="$record_file.intent"
   cancel_file="$record_file.cancel"
@@ -585,11 +635,24 @@ pc_start_sweep_sub() {
   export MDDS_PC_STATUS="$(cygpath -w "$status_file")"
   export MDDS_PC_SWEEP_COUNT="$count"
   export MDDS_PC_SWEEP_DEPTH="$depth"
+  export MDDS_PC_SWEEP_TOPIC="$topic"
+  # MSYS2_ARG_CONV_EXCL (set for HDC below) does not control inherited
+  # environment conversion.  Without this narrow exclusion Git Bash rewrites
+  # the absolute ROS topic, e.g. /mdds_dsb_sweep_X, into a Windows path before
+  # PowerShell can hand it to cmd.exe.  Keep the already-Windows-formatted
+  # file-path variables convertible; only this protocol value must remain
+  # byte-for-byte unchanged.  This matches the guarded PC launcher in the GW
+  # runner and is covered by test_msys_pc_topic_env.sh without a board.
+  msys_env_conv_excl="$(mdds_append_msys2_env_conv_excl MDDS_PC_SWEEP_TOPIC)" || {
+    echo "   ERROR: cannot construct MSYS2 environment-conversion exclusion" >&2
+    return 1
+  }
   # Pending is set before the guard is even forked.  On an interrupt before it
   # reaches its record write, cleanup leaves a signed cancellation request and
   # waits for its signed pre-exec acknowledgement; it never treats absence as
   # proof of safety.
   PENDING_PC_RECORD="$record_file"
+  MSYS2_ENV_CONV_EXCL="$msys_env_conv_excl" \
   powershell -NoProfile -NonInteractive -Command '
     function Set-LaunchStatus([string]$state) {
       try { [System.IO.File]::WriteAllText($env:MDDS_PC_STATUS, "MDDS_PC_LAUNCH_STATUS RUN_ID=$env:MDDS_RUN_ID NONCE=$env:MDDS_RUN_NONCE STATE=$state$([Environment]::NewLine)") } catch { }
@@ -616,7 +679,7 @@ pc_start_sweep_sub() {
         if (([System.IO.File]::ReadAllText($env:MDDS_PC_RECORD)).Trim() -ne $record) { throw "record verification failed" }
       } catch { Set-LaunchStatus "RECORD_WRITE_FAILED"; exit 0 }
       if (Has-ExpectedCancel) { Set-LaunchStatus "CANCELLED_PREEXEC"; exit 0 }
-      $cmd = "call `"$env:MDDS_PC_BATCH`" --topic /mdds_dsb_sweep --sizes 1024 --count $env:MDDS_PC_SWEEP_COUNT --depth $env:MDDS_PC_SWEEP_DEPTH --idle-timeout 60"
+      $cmd = "call `"$env:MDDS_PC_BATCH`" --topic $env:MDDS_PC_SWEEP_TOPIC --sizes 1024 --count $env:MDDS_PC_SWEEP_COUNT --depth $env:MDDS_PC_SWEEP_DEPTH --idle-timeout 60"
       $child = Start-Process -FilePath "cmd.exe" -ArgumentList @("/c", $cmd) -WorkingDirectory $env:MDDS_PC_WORKDIR -RedirectStandardOutput $env:MDDS_PC_STDOUT -RedirectStandardError $env:MDDS_PC_STDERR -WindowStyle Hidden -PassThru
       if ($env:MDDS_TEST_SUPPRESS_LAUNCH_TOKEN -ne "1") { Write-Output "MDDS_PC_ROOT=${PID}:$start" }
       $child.WaitForExit()
@@ -631,7 +694,7 @@ pc_start_sweep_sub() {
     sleep 1
   done
   token=$(tr -d '\r\n' < "$token_file" 2>/dev/null || true)
-  unset MDDS_PC_BATCH MDDS_PC_STDOUT MDDS_PC_STDERR MDDS_PC_WORKDIR MDDS_PC_RECORD MDDS_PC_INTENT MDDS_PC_CANCEL MDDS_PC_STATUS MDDS_PC_SWEEP_COUNT MDDS_PC_SWEEP_DEPTH
+  unset MDDS_PC_BATCH MDDS_PC_STDOUT MDDS_PC_STDERR MDDS_PC_WORKDIR MDDS_PC_RECORD MDDS_PC_INTENT MDDS_PC_CANCEL MDDS_PC_STATUS MDDS_PC_SWEEP_COUNT MDDS_PC_SWEEP_DEPTH MDDS_PC_SWEEP_TOPIC
   if ! [[ "$pair" =~ ^([0-9]+):([0-9]+)$ ]]; then
     terminal=$(pc_launch_status "$record_file")
     echo "   ERROR: failed to recover signed PC guard identity (terminal=${terminal:-unresolved}); stderr=$(head -1 "$ps_err_file" 2>/dev/null)" >&2
@@ -646,8 +709,9 @@ pc_start_sweep_sub() {
   PC_PID="${BASH_REMATCH[1]}"
   PC_START_TICKS="${BASH_REMATCH[2]}"
   PC_RECORD_FILE="$record_file"
-  printf 'run_id=%s nonce=%s pid=%s start=%s source=%s local_record=%s intent=%s stdout=%s stderr=%s log=ds03_pc_sub.log\n' \
+  printf 'run_id=%s nonce=%s pid=%s start=%s source=%s local_record=%s intent=%s stdout=%s stderr=%s log=%s_pc_sub.log\n' \
     "$RUN_ID" "$RUN_NONCE" "$PC_PID" "$PC_START_TICKS" "$source" "$record_file" "$intent_file" "$token_file" "$ps_err_file" \
+    "$tag" \
     >> "$LOGDIR/pc_launch_records.txt"
   PENDING_PC_RECORD=""
   if [ "$source" = local-record ]; then
@@ -745,29 +809,104 @@ pc_cleanup() {
 # the PC subscriber.  The gateway's publisher is VOLATILE, so publishing in
 # that gap loses valid first samples by DDS contract.  Its health log reports
 # the actual Cyclone publisher subscription count; wait for it instead of a
-# fixed startup sleep.
-wait_gateway_cyclone_sub() {
+# fixed startup sleep.  The probe is topic-specific: another bridge's healthy
+# subscription is not evidence that this VOLATILE writer can reach the PC.
+wait_gateway_cyclone_sub() { # <gateway-log-name>
   # Do the poll inside one HDC shell instead of opening 30 independent HDC
   # sessions.  On these boards an HDC session can take seconds to establish;
   # the old outer loop consumed the PC reader's entire volatile lifetime even
   # though the gateway had already matched it.
-  local marker
+  local log="$1" marker
+  [[ "$log" =~ ^[a-z0-9_]+\.log$ ]] || return 1
   marker=$(shell "$BOARD_A" \
-    "i=0; while [ \$i -lt 30 ]; do if grep -Eq 'cyclone\\(pub_subs=[1-9][0-9]*\\)' '$REMOTE_LOGDIR/ds03_gw.log' 2>/dev/null; then echo GW_CYCLONE_SUB_READY; exit 0; fi; i=\$((i+1)); sleep 1; done; echo GW_CYCLONE_SUB_TIMEOUT" \
+    "i=0; while [ \$i -lt 30 ]; do if grep -F \"$DS3_TOPIC alive: \" '$REMOTE_LOGDIR/$log' 2>/dev/null | grep -Eq 'cyclone\\(pub_subs=[1-9][0-9]*\\)'; then echo GW_CYCLONE_SUB_READY; exit 0; fi; i=\$((i+1)); sleep 1; done; echo GW_CYCLONE_SUB_TIMEOUT" \
     | tr -d '\r')
   [[ "$marker" == *GW_CYCLONE_SUB_READY* ]]
 }
 
-wait_gateway_bridge() {
-  local marker
+wait_gateway_mdds_writer() { # <gateway-log-name>; the true B writer must be admitted on A
+  # `remote(w,r)` is derived from committed, QoS-compatible remote endpoint
+  # snapshots.  The DS-03 seed is only a reader, so its second field is zero;
+  # a positive second field on this run-unique topic proves the new B writer
+  # crossed ANNOUNCE admission before its release barrier opens.
+  local log="$1" marker
+  [[ "$log" =~ ^[a-z0-9_]+\.log$ ]] || return 1
   marker=$(shell "$BOARD_A" \
-    "i=0; while [ \$i -lt 30 ]; do if grep -Fq 'bridging /mdds_dsb_sweep [std_msgs/msg/ByteMultiArray]' '$REMOTE_LOGDIR/ds03_gw.log' 2>/dev/null; then echo GW_BRIDGE_READY; exit 0; fi; i=\$((i+1)); sleep 1; done; echo GW_BRIDGE_TIMEOUT" \
+    "i=0; while [ \$i -lt 40 ]; do if grep -F \"$DS3_TOPIC alive: \" '$REMOTE_LOGDIR/$log' 2>/dev/null | grep -Eq 'remote\\(w,r\\)=\\([0-9]+,[1-9][0-9]*\\)'; then echo GW_MDDS_WRITER_READY; exit 0; fi; i=\$((i+1)); sleep 1; done; echo GW_MDDS_WRITER_TIMEOUT" \
+    | tr -d '\r')
+  [[ "$marker" == *GW_MDDS_WRITER_READY* ]]
+}
+
+prepare_publisher_barrier() { # <safe-tag> <release-path> <token>
+  local tag="$1" release_path="$2" token="$3" out
+  [[ "$tag" =~ ^[a-z0-9_]+$ && "$release_path" == "$REMOTE_LOGDIR/"* && "$token" =~ ^[A-Za-z0-9_-]{1,200}$ ]] || return 1
+  ensure_remote_owner "$BOARD_B" || return 1
+  out=$(shell "$BOARD_B" \
+    "if test -d '$REMOTE_LOGDIR' && test ! -L '$REMOTE_LOGDIR' && test -f '$REMOTE_OWNER' && test ! -L '$REMOTE_OWNER' && grep -Fqx 'RUN_ID=$RUN_ID' '$REMOTE_OWNER' && grep -Fqx 'NONCE=$RUN_NONCE' '$REMOTE_OWNER' && ! test -e '$release_path' && ! test -L '$release_path' && ! test -e '$release_path.tmp' && ! test -L '$release_path.tmp'; then printf BARRIER_RELEASE_PATH_CLEAR; else printf BARRIER_RELEASE_PATH_CONFLICT; fi" \
+    | tr -d '\r\n')
+  [[ "$out" == "BARRIER_RELEASE_PATH_CLEAR" ]]
+}
+
+commit_publisher_barrier_release() { # <release-path> <token>; atomically reveal a fully written file
+  local release_path="$1" token="$2" expected out
+  [[ "$release_path" == "$REMOTE_LOGDIR/"* && "$token" =~ ^[A-Za-z0-9_-]{1,200}$ ]] || return 1
+  expected="MDDS_SWEEP_RELEASE token=$token"
+  # A same-directory hard link makes the release path visible only after its
+  # complete exact-token body has been written and verified.  Both paths are
+  # generated from validated run/tag/nonce fields; the only cleanup removes
+  # this invocation's exact temporary path.
+  out=$(shell "$BOARD_B" \
+    "release='$release_path'; tmp='$release_path.tmp'; expected='$expected'; if ! test -d '$REMOTE_LOGDIR' || test -L '$REMOTE_LOGDIR' || test -e \"\$release\" || test -L \"\$release\" || test -e \"\$tmp\" || test -L \"\$tmp\"; then printf BARRIER_RELEASE_CONFLICT; exit 2; fi; umask 077; if ! printf '%s\\n' \"\$expected\" > \"\$tmp\" || ! test -f \"\$tmp\" || test -L \"\$tmp\" || ! grep -Fqx \"\$expected\" \"\$tmp\"; then rm -f \"\$tmp\"; printf BARRIER_RELEASE_STAGE_FAILED; exit 3; fi; if ln \"\$tmp\" \"\$release\" 2>/dev/null && test -f \"\$release\" && test ! -L \"\$release\" && grep -Fqx \"\$expected\" \"\$release\"; then rm -f \"\$tmp\"; printf BARRIER_RELEASE_COMMITTED; else rm -f \"\$tmp\"; printf BARRIER_RELEASE_COMMIT_FAILED; exit 4; fi" \
+    | tr -d '\r\n')
+  [[ "$out" == "BARRIER_RELEASE_COMMITTED" ]]
+}
+
+wait_publisher_barrier_ready() { # <publisher-log-name> <token>
+  local log="$1" token="$2" marker
+  [[ "$log" =~ ^[a-z0-9_]+\.log$ && "$token" =~ ^[A-Za-z0-9_-]{1,200}$ ]] || return 1
+  marker=$(shell "$BOARD_B" \
+    "i=0; while [ \$i -lt 30 ]; do if grep -Eq '^SWEEP-PUB-BARRIER-READY token=$token local_subs=[1-9][0-9]*$' '$REMOTE_LOGDIR/$log' 2>/dev/null; then echo PUB_BARRIER_READY; exit 0; fi; if grep -Fq 'SWEEP-PUB-NO-MATCH' '$REMOTE_LOGDIR/$log' 2>/dev/null || grep -Fq 'SWEEP-PUB-BARRIER-FAIL' '$REMOTE_LOGDIR/$log' 2>/dev/null; then echo PUB_BARRIER_FAILED; exit 0; fi; i=\$((i+1)); sleep 1; done; echo PUB_BARRIER_TIMEOUT" \
+    | tr -d '\r')
+  [[ "$marker" == *PUB_BARRIER_READY* ]]
+}
+
+wait_gateway_bridge() { # <gateway-log-name>
+  local log="$1" marker
+  [[ "$log" =~ ^[a-z0-9_]+\.log$ ]] || return 1
+  marker=$(shell "$BOARD_A" \
+    "i=0; while [ \$i -lt 30 ]; do if grep -Fq 'bridging $DS3_TOPIC [std_msgs/msg/ByteMultiArray]' '$REMOTE_LOGDIR/$log' 2>/dev/null; then echo GW_BRIDGE_READY; exit 0; fi; i=\$((i+1)); sleep 1; done; echo GW_BRIDGE_TIMEOUT" \
     | tr -d '\r')
   [[ "$marker" == *GW_BRIDGE_READY* ]]
 }
 
-trace_ds03() {
-  printf '%s %s\n' "$(date -Ins)" "$*" >> "$LOGDIR/ds03_timeline.log"
+trace_dsb_gateway_case() { # <safe tag> <event...>
+  local tag="$1"; shift
+  [[ "$tag" =~ ^[a-z0-9_]+$ ]] || return 1
+  printf '%s %s\n' "$(date -Ins)" "$*" >> "$LOGDIR/${tag}_timeline.log"
+}
+
+gateway_final_m2c_is_healthy() { # <local gateway log>
+  local log="$1"
+  awk -v topic="$DS3_TOPIC final: " '
+    index($0, topic) &&
+    $0 ~ /m2c_ack_batches=[1-9][0-9]*/ &&
+    $0 ~ /m2c_ack_timeouts=0 / &&
+    $0 ~ /m2c_messages_lost=0 / &&
+    $0 ~ /m2c_resource_drops=0 / &&
+    $0 ~ /m2c_terminal=0 / &&
+    $0 ~ /m2c_forward_exceptions=0 / { found = 1 }
+    END { exit !found }
+  ' "$log"
+}
+
+gateway_alive_c2m_is_healthy() { # <local gateway log>
+  local log="$1"
+  awk -v topic="$DS3_TOPIC alive: " '
+    index($0, topic) &&
+    $0 ~ /c2m_dropped=0 / &&
+    $0 ~ /cyclone\(pub_subs=[1-9][0-9]*\)/ { found = 1 }
+    END { exit !found }
+  ' "$log"
 }
 
 pass=0; fail=0; failed_ids=()
@@ -867,17 +1006,50 @@ send_verified_helper() { # <board> <label> <local-file> <remote-file>
   record_helper_transfer "$label" "$board" "$local_path" "$remote" "$want" "$got" VERIFIED || return 1
 }
 
+render_dsb_gateway_config() {
+  local tmp rendered_topic_count template_topic_count
+  [ -f "$DSB_CONFIG_TEMPLATE" ] && [ ! -L "$DSB_CONFIG_TEMPLATE" ] || {
+    echo "ERROR: DS-03 gateway config template is not a regular file: $DSB_CONFIG_TEMPLATE" >&2
+    return 1
+  }
+  [ ! -e "$DSB_CONFIG_LOCAL" ] || {
+    echo "ERROR: refusing to overwrite DS-03 rendered config: $DSB_CONFIG_LOCAL" >&2
+    return 1
+  }
+  template_topic_count=$(grep -Fxc 'topic = @DS3_TOPIC@' "$DSB_CONFIG_TEMPLATE" 2>/dev/null || true)
+  if [ "$template_topic_count" -ne 1 ]; then
+    echo "ERROR: DS-03 config template must contain exactly one topic placeholder" >&2
+    return 1
+  fi
+  tmp=$(mktemp "$LOGDIR/.mdds_gateway_dsb.XXXXXX") || return 1
+  if ! sed "s|@DS3_TOPIC@|$DS3_TOPIC|g" "$DSB_CONFIG_TEMPLATE" > "$tmp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  rendered_topic_count=$(grep -Fxc "topic = $DS3_TOPIC" "$tmp" 2>/dev/null || true)
+  if [ "$rendered_topic_count" -ne 1 ] \
+    || grep -Fq '@DS3_TOPIC@' "$tmp" \
+    || [ "$(grep -Fxc 'cyclone_domain_id = 46' "$tmp" 2>/dev/null || true)" -ne 1 ] \
+    || [ "$(grep -Fxc 'mdds_domain_id = 43' "$tmp" 2>/dev/null || true)" -ne 1 ]; then
+    echo "ERROR: DS-03 rendered gateway config failed its topic/domain contract" >&2
+    rm -f -- "$tmp"
+    return 1
+  fi
+  mv -- "$tmp" "$DSB_CONFIG_LOCAL" || return 1
+}
+
 push_dsb_files() {
   : > "$LOGDIR/helper_transfer_transcript.txt" || return 1
   local board file
+  render_dsb_gateway_config || return 1
   for board in "$BOARD_A" "$BOARD_B"; do
     send_verified_helper "$board" board_sweep.py scripts/mdds_e2e/board_sweep.py \
       "$DEVICE_DIR/mdds_e2e/board_sweep.py" || return 1
   done
-  for file in cyclonedds_board_a.xml mdds_gateway_dsb.conf; do
-    send_verified_helper "$BOARD_A" "$file" "scripts/mdds_e2e/$file" \
-      "$DEVICE_DIR/mdds_e2e/$file" || return 1
-  done
+  send_verified_helper "$BOARD_A" cyclonedds_board_a.xml scripts/mdds_e2e/cyclonedds_board_a.xml \
+    "$DEVICE_DIR/mdds_e2e/cyclonedds_board_a.xml" || return 1
+  send_verified_helper "$BOARD_A" mdds_gateway_dsb.rendered.conf "$DSB_CONFIG_LOCAL" \
+    "$DEVICE_DIR/mdds_e2e/mdds_gateway_dsb.conf" || return 1
 }
 
 verify_final_artifacts() {
@@ -1000,87 +1172,175 @@ s_ds02() {
   verdict "DS-02" $bad "B->A dsoftbus-only exact 30/30, B SYSTEM_DEFAULT (ds02_sub.log)"
 }
 
-s_ds03() {
-  # B -> gateway(A, mdds_transport=dsoftbus) -> PC cyclone sub, exact 30/30.
-  # A gateway creates a bridge only after it has learned the MDDS topic type.
-  # Start B as a passive DSoftBus reader first, so that discovery/type exchange
-  # and bridge activation are complete before the PC's VOLATILE reader starts
-  # and before the real B writer can send its first sample.
-  local ds03_count=30 ds03_pc_depth=64
+s_ds03_case() { # <verdict-id> <safe-log-tag> <count> <rate-hz> <settle-ms> <minimum-ack-batches> <detail>
+  local verdict_id="$1" tag="$2" ds03_count="$3" rate="$4" settle_ms="$5" minimum_batches="$6" detail="$7"
+  local ds03_pc_depth=64
+  if ! [[ "$tag" =~ ^[a-z0-9_]+$ && "$ds03_count" =~ ^[1-9][0-9]*$ && "$rate" =~ ^[1-9][0-9]*$ && "$settle_ms" =~ ^[0-9]+$ && "$minimum_batches" =~ ^[1-9][0-9]*$ ]]; then
+    echo "   ERROR: invalid DS-03 gateway-case parameters" >&2
+    return 1
+  fi
+  (( ds03_pc_depth >= ds03_count )) || ds03_pc_depth=$ds03_count
+  local seed_log="${tag}_seed.log" gw_log="${tag}_gw.log" pub_log="${tag}_pub.log" pc_log="${tag}_pc_sub.log"
   cleanup_dsb || return 1
-  : > "$LOGDIR/ds03_timeline.log"
-  trace_ds03 "begin"
+  : > "$LOGDIR/${tag}_timeline.log"
+  trace_dsb_gateway_case "$tag" "begin topic=$DS3_TOPIC count=$ds03_count rate=$rate settle_ms=$settle_ms qos=reliable/keep_last/10"
+  # A passive board-B reader establishes discovery/type exchange before the
+  # gateway and PC volatile reader start.  It is deliberately a reader: after
+  # it stops, the runner must prove that the *new writer* was admitted on A
+  # before any first DATA can leave B.
   launch "$BOARD_B" "$DSB_ENVS_B" \
-    "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode sub --topic /mdds_dsb_sweep --sizes 1024 --count $ds03_count --idle-timeout 90" \
-    ds03_seed.log || return 1
+    "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode sub --topic $DS3_TOPIC --sizes 1024 --count $ds03_count --idle-timeout 90" \
+    "$seed_log" || return 1
   local seed_pid="$LAST_PID"
-  trace_ds03 "seed_started board=B pid=$seed_pid"
+  trace_dsb_gateway_case "$tag" "seed_started board=B pid=$seed_pid"
   sleep 3
-  # NOTE: no `timeout` wrapper here — kill_tracked must own the gateway PID
-  # directly; killing a `timeout` parent would orphan the gateway and leave
-  # it holding the d43 session (breaks DS-04/DS-05 on the next run).
+  # No `timeout` wrapper: kill_tracked must own the direct gateway PID so a
+  # failed run cannot orphan a process holding the DSoftBus domain-43 session.
   launch "$BOARD_A" "$GWENVS" \
     "$DEVICE_DIR/lib/mdds_gateway/mdds_gateway -c $DEVICE_DIR/mdds_e2e/mdds_gateway_dsb.conf" \
-    ds03_gw.log || return 1
-  trace_ds03 "gateway_started board=A pid=$LAST_PID"
-  if ! wait_gateway_bridge; then
-    pull "$BOARD_A" ds03_gw.log || echo "   ERROR: unable to recover gateway failure log" >&2
+    "$gw_log" || return 1
+  trace_dsb_gateway_case "$tag" "gateway_started board=A pid=$LAST_PID"
+  if ! wait_gateway_bridge "$gw_log"; then
+    pull "$BOARD_A" "$gw_log" || echo "   ERROR: unable to recover gateway failure log" >&2
     echo "   gateway never created the DSoftBus-side bridge"
     cleanup_dsb || echo "   ERROR: cleanup after bridge readiness failure was incomplete" >&2
     return 1
   fi
-  trace_ds03 "gateway_bridge_ready"
-  pc_start_sweep_sub "$ds03_count" "$ds03_pc_depth" || {
+  trace_dsb_gateway_case "$tag" "gateway_bridge_ready"
+  pc_start_sweep_sub "$ds03_count" "$ds03_pc_depth" "$tag" "$DS3_TOPIC" || {
     cleanup_dsb || echo "   ERROR: cleanup after PC subscriber launch failure was incomplete" >&2
     return 1
   }
-  trace_ds03 "pc_subscriber_started pid=$PC_PID"
-  if ! wait_gateway_cyclone_sub; then
-    pull "$BOARD_A" ds03_gw.log || echo "   ERROR: unable to recover gateway failure log" >&2
+  trace_dsb_gateway_case "$tag" "pc_subscriber_started pid=$PC_PID"
+  if ! wait_gateway_cyclone_sub "$gw_log"; then
+    pull "$BOARD_A" "$gw_log" || echo "   ERROR: unable to recover gateway failure log" >&2
     echo "   gateway never observed a Cyclone PC subscription"
     cleanup_dsb || echo "   ERROR: cleanup after Cyclone readiness failure was incomplete" >&2
     return 1
   fi
-  trace_ds03 "gateway_cyclone_sub_ready"
+  trace_dsb_gateway_case "$tag" "gateway_cyclone_sub_ready"
   kill_recorded "$BOARD_B" "$seed_pid" || {
     cleanup_dsb || echo "   ERROR: cleanup after seed shutdown failure was incomplete" >&2
     return 1
   }
-  trace_ds03 "seed_stopped board=B pid=$seed_pid"
+  trace_dsb_gateway_case "$tag" "seed_stopped board=B pid=$seed_pid"
+  local barrier_token="b_${RUN_NONCE}_${tag}"
+  local barrier_release="$REMOTE_LOGDIR/${tag}.${RUN_NONCE}.release"
+  if ! prepare_publisher_barrier "$tag" "$barrier_release" "$barrier_token"; then
+    echo "   unable to reserve the true-publisher release barrier"
+    cleanup_dsb || echo "   ERROR: cleanup after barrier reservation failure was incomplete" >&2
+    return 1
+  fi
+  trace_dsb_gateway_case "$tag" "publisher_barrier_reserved board=B path=$barrier_release token=$barrier_token"
   launch "$BOARD_B" "$DSB_ENVS_B" \
-    "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode pub --topic /mdds_dsb_sweep --sizes 1024 --count $ds03_count --rate 20 --wait-match --flush-ms 10000" \
-    ds03_pub.log || {
+    "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode pub --topic $DS3_TOPIC --sizes 1024 --count $ds03_count --rate $rate --reliability reliable --history keep_last --depth 10 --wait-match --match-timeout-ms 10000 --barrier-release-file $barrier_release --barrier-token $barrier_token --barrier-timeout-s 45 --settle-ms $settle_ms --flush-ms 10000" \
+    "$pub_log" || {
       cleanup_dsb || echo "   ERROR: cleanup after true-publisher launch failure was incomplete" >&2
       return 1
     }
-  trace_ds03 "true_publisher_started board=B pid=$LAST_PID"
+  trace_dsb_gateway_case "$tag" "true_publisher_started board=B pid=$LAST_PID"
+  if ! wait_publisher_barrier_ready "$pub_log" "$barrier_token"; then
+    pull "$BOARD_B" "$pub_log" || echo "   ERROR: unable to recover publisher barrier log" >&2
+    pull "$BOARD_A" "$gw_log" || echo "   ERROR: unable to recover gateway barrier log" >&2
+    echo "   true publisher did not establish its local release barrier"
+    cleanup_dsb || echo "   ERROR: cleanup after publisher barrier readiness failure was incomplete" >&2
+    return 1
+  fi
+  trace_dsb_gateway_case "$tag" "true_publisher_barrier_ready"
+  if ! wait_gateway_mdds_writer "$gw_log"; then
+    pull "$BOARD_B" "$pub_log" || echo "   ERROR: unable to recover publisher writer-readiness log" >&2
+    pull "$BOARD_A" "$gw_log" || echo "   ERROR: unable to recover gateway writer-readiness log" >&2
+    echo "   gateway never admitted the true board-B writer on the exact topic"
+    cleanup_dsb || echo "   ERROR: cleanup after gateway writer-readiness failure was incomplete" >&2
+    return 1
+  fi
+  trace_dsb_gateway_case "$tag" "gateway_mdds_writer_ready"
+  if ! commit_publisher_barrier_release "$barrier_release" "$barrier_token"; then
+    pull "$BOARD_B" "$pub_log" || echo "   ERROR: unable to recover publisher release log" >&2
+    pull "$BOARD_A" "$gw_log" || echo "   ERROR: unable to recover gateway release log" >&2
+    echo "   unable to commit the true-publisher release barrier"
+    cleanup_dsb || echo "   ERROR: cleanup after barrier release failure was incomplete" >&2
+    return 1
+  fi
+  trace_dsb_gateway_case "$tag" "true_publisher_barrier_released"
   local i n=0
   for i in $(seq 1 15); do
     sleep 10
-    n=$(grep -c "SWEEP_RESULT" "$LOGDIR/ds03_pc_sub.log" 2>/dev/null || true)
+    n=$(grep -c "SWEEP_RESULT" "$LOGDIR/$pc_log" 2>/dev/null || true)
     [ "$n" -ge 1 ] && break
   done
   cleanup_dsb || return 1
-  pull "$BOARD_A" ds03_gw.log || return 1
+  pull "$BOARD_A" "$gw_log" || return 1
+  pull "$BOARD_B" "$pub_log" || return 1
   local bad=0
   [ "$n" -ge 1 ] || { echo "   PC sub produced no SWEEP_RESULT"; bad=1; }
-  assert_sweep_pass "$LOGDIR/ds03_pc_sub.log" "$ds03_count" || bad=1
-  require_current_log "$LOGDIR/ds03_gw.log" || bad=1
-  # the gateway must have run its mdds side on dsoftbus only: the startup line
-  # is `mdds transports requested=[dsoftbus] active=[dsoftbus(session=...)]`
-  grep -q "requested=\[dsoftbus\]" "$LOGDIR/ds03_gw.log" \
+  assert_sweep_pass "$LOGDIR/$pc_log" "$ds03_count" || bad=1
+  require_current_log "$LOGDIR/$gw_log" || bad=1
+  require_current_log "$LOGDIR/$pub_log" || bad=1
+  grep -Fq "SWEEP-PUB-DONE size=1024 count=$ds03_count" "$LOGDIR/$pub_log" \
+    || { echo "   intended board-B publisher did not complete its exact $ds03_count-sample offer"; bad=1; }
+  grep -Fq 'SWEEP-PUB-ALL-DONE' "$LOGDIR/$pub_log" \
+    || { echo "   intended board-B publisher did not report completion"; bad=1; }
+  grep -Fq 'SWEEP-PUB-ERROR' "$LOGDIR/$pub_log" \
+    && { echo "   intended board-B publisher logged an error"; bad=1; }
+  grep -Eq "^SWEEP-PUB-MATCHED local_subs=[1-9][0-9]* elapsed_ms=[0-9]+$" "$LOGDIR/$pub_log" \
+    || { echo "   intended board-B publisher never proved its local subscription match"; bad=1; }
+  grep -Fqx "SWEEP-PUB-BARRIER-READY token=$barrier_token local_subs=1" "$LOGDIR/$pub_log" \
+    || grep -Eq "^SWEEP-PUB-BARRIER-READY token=$barrier_token local_subs=[1-9][0-9]*$" "$LOGDIR/$pub_log" \
+    || { echo "   intended board-B publisher never reached the release barrier"; bad=1; }
+  grep -Fqx "SWEEP-PUB-BARRIER-RELEASED token=$barrier_token" "$LOGDIR/$pub_log" \
+    || { echo "   intended board-B publisher was never released"; bad=1; }
+  awk -v release="SWEEP-PUB-BARRIER-RELEASED token=$barrier_token" '
+    $0 == release { released = 1 }
+    /^SWEEP-PUB size=/ && !released { bad = 1 }
+    END { exit !(released && !bad) }
+  ' "$LOGDIR/$pub_log" \
+    || { echo "   board-B publisher emitted DATA before the signed release barrier"; bad=1; }
+  grep -q "requested=\[dsoftbus\]" "$LOGDIR/$gw_log" \
     || { echo "   gateway startup lacks requested=[dsoftbus]"; bad=1; }
-  grep -q "active=\[dsoftbus(session=" "$LOGDIR/ds03_gw.log" \
+  grep -q "active=\[dsoftbus(session=" "$LOGDIR/$gw_log" \
     || { echo "   gateway startup lacks active=[dsoftbus(session=...)]"; bad=1; }
-  grep -q "active=\[[^]]*udp(" "$LOGDIR/ds03_gw.log" \
+  grep -q "active=\[[^]]*udp(" "$LOGDIR/$gw_log" \
     && { echo "   gateway startup shows udp active"; bad=1; }
-  grep -Fq "/mdds_dsb_sweep final: cyclone->mdds=0 mdds->cyclone=$ds03_count" \
-    "$LOGDIR/ds03_gw.log" \
+  grep -Fq "$DS3_TOPIC final: cyclone->mdds=0 mdds->cyclone=$ds03_count" \
+    "$LOGDIR/$gw_log" \
     || { echo "   gateway final counter is not cyclone->mdds=0 mdds->cyclone=$ds03_count"; bad=1; }
-  grep -Eq "/mdds_dsb_sweep alive: .*c2m_dropped=0 .*cyclone\\(pub_subs=[1-9][0-9]*\\)" \
-    "$LOGDIR/ds03_gw.log" \
+  # A timeout, ingress loss, or terminal forwarding failure is a hard negative
+  # even if a PC subscriber happened to report N/N before the bridge stopped.
+  gateway_final_m2c_is_healthy "$LOGDIR/$gw_log" \
+    || { echo "   gateway final ACK/ingress counters are missing or non-zero"; bad=1; }
+  local batches
+  batches=$(sed -n 's/.*m2c_ack_batches=\([0-9][0-9]*\).*/\1/p' "$LOGDIR/$gw_log" | tail -1)
+  if ! [[ "$batches" =~ ^[0-9]+$ ]] || (( batches < minimum_batches )); then
+    echo "   gateway ACK-fence batch count is below $minimum_batches: ${batches:-missing}"; bad=1
+  fi
+  grep -Eq 'ACK fence failed|ACK fence timed out|terminal bridge failure|ingress loss|mdds->cyclone publish failed|mdds->cyclone forwarding thread failed|mdds_gateway: terminal executor failure' \
+    "$LOGDIR/$gw_log" \
+    && { echo "   gateway logged terminal forwarding failure"; bad=1; }
+  gateway_alive_c2m_is_healthy "$LOGDIR/$gw_log" \
     || { echo "   gateway did not log an active Cyclone subscriber with c2m_dropped=0"; bad=1; }
-  verdict "DS-03" $bad "B->gateway(dsoftbus)->PC exact $ds03_count/$ds03_count (PC depth=$ds03_pc_depth; ds03_pc_sub.log)"
+  grep -Fq "cyclone domain 46, mdds domain 43" "$LOGDIR/$gw_log" \
+    || { echo "   gateway did not run on the isolated Cyclone domain 46"; bad=1; }
+  verdict "$verdict_id" "$bad" "$detail (topic=$DS3_TOPIC; PC depth=$ds03_pc_depth; $pc_log; $pub_log)"
+}
+
+s_ds03() {
+  # Steady byte-exact DSoftBus->gateway->PC proof. The deliberate 2 Hz offer
+  # and post-match settle avoid conflating ordinary DS-03 with reconnect-burst
+  # throughput; that adversarial case is covered separately below.
+  s_ds03_case "DS-03" "ds03" 30 2 5000 1 \
+    "B->gateway(dsoftbus)->PC exact 30/30 steady path"
+}
+
+s_ds03_ack_burst() {
+  # P1 regression: after the seed reader releases the DSoftBus session, the
+  # true writer must first pass the bilateral control-plane barrier above. It
+  # then offers 32 KEEP_LAST(10) samples at 1000 Hz without a data-plane settle.
+  # This verifies exact delivery and at least four completed downstream ACK
+  # fences without mislabeling the aggregate count as four full 8-sample fences.
+  # It is intentionally separate from the normative DS-01..07 suite.
+  s_ds03_case "DS-03-ACK-BURST" "ds03_ack_burst" 32 1000 0 4 \
+    "B->gateway(dsoftbus)->PC post-match 32-sample ACK-fence burst exact 32/32"
 }
 
 s_ds04() {
@@ -1308,9 +1568,22 @@ trap 'on_dsb_signal 143' TERM
 trap 'on_dsb_signal 129' HUP
 
 if [ $# -eq 0 ] || [ "$1" = all ]; then
-  set -- ds01 ds02 ds03 ds04 ds05 ds06 ds07
+  # Keep the normative suite and the directed ACK-fence regression together in
+  # the default final invocation.  Reports still identify the latter
+  # separately as DS-03-ACK-BURST rather than relabeling DS-01..07.
+  set -- ds01 ds02 ds03 ds03_ack_burst ds04 ds05 ds06 ds07
 fi
 REQUESTED_SCENARIOS=" $* "
+# DS-03 hands a leading-slash ROS topic from Git Bash through native
+# PowerShell/cmd.exe.  Validate the exact shared conversion helper before we
+# acquire a board lock or deploy anything, so host argument mutation fails
+# locally instead of looking like a gateway discovery failure later.
+if [[ "$REQUESTED_SCENARIOS" == *" ds03 "* || "$REQUESTED_SCENARIOS" == *" ds03_ack_burst "* ]]; then
+  if ! bash "$PWD/scripts/test_msys_pc_topic_env.sh"; then
+    echo "ERROR: DS-03 PC topic launch preflight failed" >&2
+    exit 1
+  fi
+fi
 if ! acquire_activity_locks; then
   echo "ERROR: DSoftBus gate did not start because the shared MDDS activity lock is unavailable" >&2
   exit 1
@@ -1333,8 +1606,13 @@ for sc in "$@"; do
     continue
   fi
   if ! "s_$sc"; then
+    local_failure_id="DS-${sc#ds}"
+    # Directed scenarios own a canonical external verdict ID that is not a
+    # mechanical dsXX spelling.  Preserve it even on an early setup/barrier
+    # error, otherwise manifests would split one failed gate into a new ID.
+    [ "$sc" = ds03_ack_burst ] && local_failure_id="DS-03-ACK-BURST"
     echo "   (scenario $sc errored)"
-    verdict "DS-${sc#ds}" 1 "scenario execution error"
+    verdict "$local_failure_id" 1 "scenario execution error"
     if ! cleanup_dsb; then
       echo "ERROR: aborting later DSoftBus scenarios because owned-process cleanup is incomplete" >&2
       break

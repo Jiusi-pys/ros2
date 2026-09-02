@@ -7,13 +7,23 @@ independent system (for example a signed release record or WORM store).
 
 The collector requires exactly the ros2, mdds, and rmw_mdds worktrees; the
 three delivery artifacts with their expected basenames; named script/config
-inputs including script_config and run_contract; seven named raw logs; seven
-named command logs; and the gateway profile whose bytes are deployed.  It
-records worktrees exactly as they stood at collection time, including binary
-diffs and hashes for every non-ignored untracked file.  All copied inputs and
-archive contents are symlink-free so the resulting bundle is self-contained.
+inputs; the raw-ANNOUNCE and per-gate evidence inputs required by this release
+contract; seven named raw logs; seven named command logs; and the gateway
+profile whose bytes are deployed.  It records worktrees exactly as they stood
+at collection time, including binary diffs and hashes for every non-ignored
+untracked file.  All copied inputs and archive contents are symlink-free so
+the resulting bundle is self-contained.
 Output is outside the ROS workspace by design, so the evidence directory
 cannot add a self-referential untracked entry.
+
+``--out`` is create-only and may not be inside a directory that already
+contains ``manifest.v1.json``.  This prevents a later collection from being
+mistaken for an addition to an immutable prior bundle.  Each repository state
+is captured and then re-read sequentially before this script writes
+``manifest.v1.json``; a changed HEAD, status, diff, or untracked inventory
+aborts without creating a seemingly valid manifest.  The collector does not
+hold a cross-repository write lock, so these per-repository comparisons are
+not an atomic snapshot of all three worktrees at one instant.
 """
 
 from __future__ import annotations
@@ -43,9 +53,53 @@ REQUIRED_ARTIFACT_BASENAMES = {
     "mdds_gateway": "mdds_gateway",
 }
 REQUIRED_GATEWAY_PROFILE_BASENAME = "mdds_gateway_ohos_dsoftbus.conf"
-REQUIRED_INPUT_NAMES = frozenset({"script_config", "run_contract"})
+# Evidence required for every release candidate in this verification contract.
+# The collector permits additional named inputs so a caller can retain
+# run-specific material without weakening this minimum.  In particular,
+# ``domain0_smoke`` is optional because it is required only for a release that
+# declares that production-domain smoke was executed.
+REQUIRED_INPUT_NAMES = frozenset({
+    "script_config",
+    "run_contract",
+    "raw_announce",
+    "board_a_evidence",
+    "board_b_evidence",
+    "ds_evidence",
+    "gw_evidence",
+    "rmw_evidence",
+    "deploy_evidence",
+})
+OPTIONAL_EXECUTED_INPUT_NAMES = frozenset({"domain0_smoke"})
 REQUIRED_RAW_LOG_NAMES = frozenset({"build", "deploy", "board_a", "board_b", "ds", "gw", "rmw"})
 REQUIRED_COMMAND_LOG_NAMES = frozenset({"build", "deploy", "board_a", "board_b", "ds", "gw", "rmw"})
+GIT_SNAPSHOT_COMMANDS: dict[str, list[str]] = {
+    "head": ["git", "rev-parse", "HEAD"],
+    "head_detail": ["git", "show", "-s", "--format=fuller", "HEAD"],
+    "status_porcelain_z": ["git", "status", "--porcelain=v1", "-z", "-uall"],
+    "diff_check": ["git", "diff", "--check"],
+    "diff_head_binary": ["git", "diff", "--binary", "--full-index", "--no-ext-diff", "HEAD"],
+    "diff_cached_binary": ["git", "diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "HEAD"],
+    "diff_unstaged_binary": ["git", "diff", "--binary", "--full-index", "--no-ext-diff"],
+    "untracked_z": ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+}
+GIT_SNAPSHOT_FILENAMES = {
+    "head": "HEAD.txt",
+    "head_detail": "HEAD-detail.txt",
+    "status_porcelain_z": "status.porcelain-v1.z",
+    "diff_check": "diff.check.txt",
+    "diff_head_binary": "worktree-vs-HEAD.binary.patch",
+    "diff_cached_binary": "staged-vs-HEAD.binary.patch",
+    "diff_unstaged_binary": "unstaged-vs-index.binary.patch",
+    "untracked_z": "untracked.z",
+}
+GIT_STABILITY_COMMAND_KEYS = (
+    "head",
+    "status_porcelain_z",
+    "diff_head_binary",
+    "diff_cached_binary",
+    "diff_unstaged_binary",
+    "untracked_z",
+)
 
 
 def is_symlink_or_reparse_point(metadata: os.stat_result) -> bool:
@@ -262,37 +316,10 @@ def json_dump(path: Path, value: Any) -> None:
     )
 
 
-def git_snapshot(name: str, repo: Path, out: Path) -> dict[str, Any]:
-    if not (repo / ".git").exists():
-        raise RuntimeError(f"not a Git worktree: {repo}")
-    repo_out = out / "source" / safe_name(name)
-    repo_out.mkdir(parents=True, exist_ok=False)
-    commands: dict[str, list[str]] = {
-        "head": ["git", "rev-parse", "HEAD"],
-        "head_detail": ["git", "show", "-s", "--format=fuller", "HEAD"],
-        "status_porcelain_z": ["git", "status", "--porcelain=v1", "-z", "-uall"],
-        "diff_check": ["git", "diff", "--check"],
-        "diff_head_binary": ["git", "diff", "--binary", "--full-index", "--no-ext-diff", "HEAD"],
-        "diff_cached_binary": ["git", "diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "HEAD"],
-        "diff_unstaged_binary": ["git", "diff", "--binary", "--full-index", "--no-ext-diff"],
-        "untracked_z": ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-    }
-    outputs: dict[str, bytes] = {key: run(command, repo) for key, command in commands.items()}
-    file_names = {
-        "head": "HEAD.txt",
-        "head_detail": "HEAD-detail.txt",
-        "status_porcelain_z": "status.porcelain-v1.z",
-        "diff_check": "diff.check.txt",
-        "diff_head_binary": "worktree-vs-HEAD.binary.patch",
-        "diff_cached_binary": "staged-vs-HEAD.binary.patch",
-        "diff_unstaged_binary": "unstaged-vs-index.binary.patch",
-        "untracked_z": "untracked.z",
-    }
-    for key, filename in file_names.items():
-        write_bytes(repo_out / filename, outputs[key])
-
+def collect_untracked_inventory(repo: Path, untracked_z: bytes) -> list[dict[str, Any]]:
+    """Hash every non-ignored untracked entry as part of repository state."""
     untracked: list[dict[str, Any]] = []
-    for raw_path in outputs["untracked_z"].split(b"\0"):
+    for raw_path in untracked_z.split(b"\0"):
         if not raw_path:
             continue
         relative = raw_path.decode("utf-8", "surrogateescape")
@@ -314,6 +341,61 @@ def git_snapshot(name: str, repo: Path, out: Path) -> dict[str, Any]:
         else:
             item["state"] = "non-regular"
         untracked.append(item)
+    return untracked
+
+
+def capture_git_state(repo: Path) -> tuple[dict[str, bytes], list[dict[str, Any]]]:
+    """Read all Git state that is sealed into a repository snapshot."""
+    if not (repo / ".git").exists():
+        raise RuntimeError(f"not a Git worktree: {repo}")
+    outputs = {
+        key: run(command, repo)
+        for key, command in GIT_SNAPSHOT_COMMANDS.items()
+    }
+    return outputs, collect_untracked_inventory(repo, outputs["untracked_z"])
+
+
+def changed_git_state_fields(
+    before: tuple[dict[str, bytes], list[dict[str, Any]]],
+    after: tuple[dict[str, bytes], list[dict[str, Any]]],
+) -> list[str]:
+    """Return every sealed repository-state field that changed during collection."""
+    before_outputs, before_untracked = before
+    after_outputs, after_untracked = after
+    changed = [
+        key
+        for key in GIT_STABILITY_COMMAND_KEYS
+        if before_outputs[key] != after_outputs[key]
+    ]
+    if before_untracked != after_untracked:
+        changed.append("untracked_inventory")
+    return changed
+
+
+def assert_git_state_stable(
+    name: str,
+    before: tuple[dict[str, bytes], list[dict[str, Any]]],
+    after: tuple[dict[str, bytes], list[dict[str, Any]]],
+) -> None:
+    changed = changed_git_state_fields(before, after)
+    if changed:
+        raise RuntimeError(
+            "repository changed during evidence collection: "
+            f"{name} ({', '.join(changed)})")
+
+
+def write_git_snapshot(
+    name: str,
+    repo: Path,
+    out: Path,
+    state: tuple[dict[str, bytes], list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Write a previously captured state; callers perform the final re-check."""
+    outputs, untracked = state
+    repo_out = out / "source" / safe_name(name)
+    repo_out.mkdir(parents=True, exist_ok=False)
+    for key, filename in GIT_SNAPSHOT_FILENAMES.items():
+        write_bytes(repo_out / filename, outputs[key])
     json_dump(repo_out / "untracked.sha256.json", untracked)
 
     return {
@@ -329,6 +411,11 @@ def git_snapshot(name: str, repo: Path, out: Path) -> dict[str, Any]:
         "untracked_count": len(untracked),
         "untracked_inventory_sha256": sha256_file(repo_out / "untracked.sha256.json"),
     }
+
+
+def git_snapshot(name: str, repo: Path, out: Path) -> dict[str, Any]:
+    """Compatibility helper for callers that only need to serialize one state."""
+    return write_git_snapshot(name, repo, out, capture_git_state(repo))
 
 
 def iter_regular_files(root: Path, excluded: set[Path] | None = None) -> Iterable[Path]:
@@ -575,9 +662,37 @@ def validate_gateway_profile(raw_path: str) -> Path:
     return path
 
 
+def existing_manifest_ancestor(path: Path) -> Path | None:
+    """Return an existing ancestor that carries a prior manifest, if any.
+
+    Treat any regular ``manifest.v1.json`` as a sealed-bundle boundary rather
+    than attempting to infer whether a caller considers it immutable.  This is
+    deliberately fail-closed: a new collection must be a sibling of an
+    existing bundle, never a child of it.
+    """
+    current = lexical_absolute(path)
+    while True:
+        manifest = current / "manifest.v1.json"
+        if exists_or_link(manifest):
+            if classify_non_symlink_path(manifest, "existing verification manifest") != "file":
+                raise RuntimeError(
+                    "existing verification manifest must be a non-symlink regular file: "
+                    f"{manifest}")
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
 def prepare_output_path(raw_path: str) -> Path:
     out = lexical_absolute(raw_path)
-    assert_no_symlink_components(out.parent, "evidence output")
+    assert_no_symlink_components(out, "evidence output")
+    protected_ancestor = existing_manifest_ancestor(out)
+    if protected_ancestor is not None:
+        raise RuntimeError(
+            "evidence output must not be inside an existing verification manifest bundle: "
+            f"{protected_ancestor}")
     if exists_or_link(out):
         raise RuntimeError(f"refusing to overwrite evidence directory: {out}")
     archive = out.parent / f"{out.name}.tar"
@@ -649,7 +764,11 @@ def validate_collection_plan(args: argparse.Namespace) -> tuple[
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--out", required=True, help="new evidence directory outside every repo")
+    parser.add_argument(
+        "--out",
+        required=True,
+        help="new evidence directory outside every repo and existing manifest bundle",
+    )
     parser.add_argument(
         "--repo",
         action="append",
@@ -664,7 +783,11 @@ def main() -> int:
         default=[],
         metavar="NAME=PATH",
         type=lambda value: parse_assignment(value, "--input"),
-        help="named script/config input; must include script_config=PATH and run_contract=PATH",
+        help=(
+            "named script/config/evidence input; must include "
+            + ",".join(sorted(REQUIRED_INPUT_NAMES))
+            + "; additional inputs are allowed, including domain0_smoke when executed"
+        ),
     )
     parser.add_argument(
         "--raw-log",
@@ -717,7 +840,20 @@ def main() -> int:
     assert_tree_has_no_symlinks(out, "evidence output")
 
     try:
-        repos = [git_snapshot(name, repository_paths[name], out) for name in sorted(REQUIRED_REPOSITORIES)]
+        # Capture every worktree before any evidence copy.  Each worktree is
+        # later re-read in this same order before manifest.v1.json is written.
+        # This detects changes to the sealed fields in each repository's own
+        # capture-to-recheck interval; it is deliberately not a global atomic
+        # snapshot because the collector does not hold a cross-repository lock.
+        repository_order = sorted(REQUIRED_REPOSITORIES)
+        initial_states = {
+            name: capture_git_state(repository_paths[name])
+            for name in repository_order
+        }
+        repos = [
+            write_git_snapshot(name, repository_paths[name], out, initial_states[name])
+            for name in repository_order
+        ]
         copied: dict[str, list[dict[str, Any]]] = {"inputs": [], "raw_logs": [], "command_logs": [], "artifacts": []}
         for name, raw, _ in sorted(inputs):
             copied_input = copy_input(
@@ -763,6 +899,13 @@ def main() -> int:
             require_regular_file=True,
         )
 
+        for name in repository_order:
+            assert_git_state_stable(
+                name,
+                initial_states[name],
+                capture_git_state(repository_paths[name]),
+            )
+
         notes = {name: value for name, value in args.note}
         manifest: dict[str, Any] = {
             "schema": "mdds-verification-manifest/v1",
@@ -774,6 +917,21 @@ def main() -> int:
             "run_id": args.run_id,
             "collected_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "collector": {"python": sys.version, "platform": platform.platform()},
+            "repository_stability": {
+                "result": "PER_REPOSITORY_SEQUENTIAL_RECHECK_MATCHED",
+                "compared": [*GIT_STABILITY_COMMAND_KEYS, "untracked_inventory"],
+                "capture_order": repository_order,
+                "recheck_order": repository_order,
+                "scope": "per-repository",
+                "cross_repository_snapshot_atomic": False,
+                "cross_repository_write_lock_held": False,
+                "warning": (
+                    "Each repository was captured and rechecked sequentially. "
+                    "No cross-repository write lock was held, so this is not an "
+                    "atomic global cross-repository snapshot; a repository can "
+                    "change after its own recheck or between rechecks."
+                ),
+            },
             "repositories": repos,
             "copied": copied,
             "gateway_profile": {

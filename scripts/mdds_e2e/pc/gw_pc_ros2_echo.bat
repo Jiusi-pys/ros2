@@ -8,6 +8,8 @@ cd /d C:\pixi_ws
 call C:\pixi_ws\shell_hook.bat
 call C:\pixi_ws\ros2-windows\setup.bat
 set RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+rem Must match mdds_gateway_test.conf; do not inherit a foreign domain-0 job.
+set ROS_DOMAIN_ID=47
 set "CYCLONEDDS_URI=<CycloneDDS><Domain><General><AllowMulticast>false</AllowMulticast><Interfaces><NetworkInterface address='192.168.8.101'/></Interfaces></General><Internal><SocketReceiveBufferSize min='4MB'/></Internal><Discovery><Peers><Peer address='192.168.8.112'/></Peers></Discovery></Domain></CycloneDDS>"
 set "ECHO_LOG=%GW07_ECHO_LOG%"
 if "%ECHO_LOG%"=="" set "ECHO_LOG=C:\pixi_ws\gw07_echo.log"

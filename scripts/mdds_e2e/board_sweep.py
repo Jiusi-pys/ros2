@@ -12,13 +12,19 @@
 #                             [--history keep_last|keep_all] [--depth N]
 #                             [--sleep-ms MS] [--idle-timeout S]
 #   python3.12 board_sweep.py --mode pub [--sizes 1024,4096,...] [--rate HZ]
-#                             [--reliability ...] [--history ...] [--depth N]
+#                             [--settle-ms MS] [--reliability ...]
+#                             [--history ...] [--depth N]
 #
 # Exit code: sub mode exits 0 and prints "SWEEP_RESULT PASS" iff the reliability
 # contract held for EVERY size block in --sizes (reliable: received == published
 # with 0 lost / 0 reorder / 0 crc errors; best_effort: 0 reorder / 0 crc errors
 # with at least one reception). A zero-reception block always fails the run.
 import argparse
+import errno
+import math
+import os
+import re
+import stat
 import struct
 import sys
 import time
@@ -28,6 +34,10 @@ MAGIC = 0x4D444453  # 'MDDS'
 HDR = struct.Struct('<IIQI')
 
 DEFAULT_SIZES = [1024, 4096, 65536, 262144, 1048576, 4194304, 8388608]
+# A release barrier is a test-orchestration guard, not a production wait.  Keep
+# its maximum short enough that a bad control-plane predicate cannot pin a board
+# process indefinitely or conceal a dead run behind a practically infinite wait.
+MAX_BARRIER_TIMEOUT_S = 120.0
 
 
 def count_for(size):
@@ -84,6 +94,58 @@ def init_ros(args):
         signal.signal(signal.SIGINT, _dbg)
 
 
+def wait_for_barrier_release(release_file, token, timeout_s):
+    """Wait for an immutable, exact-token release file.
+
+    The DS-03 runner first proves control-plane readiness on both sides of the
+    DSoftBus hop, then commits this file using an atomic hard link.  Treat a
+    link, a non-regular file, or a wrong body as a fail-closed test setup error:
+    publishing a probe sample would consume a sequence/history slot and turn a
+    readiness failure into ambiguous data-plane evidence.
+
+    This helper deliberately has no ROS dependencies so its filesystem contract
+    can be unit-tested on the host.
+    """
+    expected = f'MDDS_SWEEP_RELEASE token={token}\n'.encode('ascii')
+    deadline = time.monotonic() + timeout_s
+    if not hasattr(os, 'O_NOFOLLOW'):
+        # The test must not fall back to a path-based check/open sequence: that
+        # would reintroduce a symlink replacement race at the release boundary.
+        return False, 'o_nofollow_unavailable'
+    if not hasattr(os, 'O_NONBLOCK'):
+        # A FIFO can block open(2) before fstat can reject it.  A test release
+        # must remain bounded even if an untrusted entry appears at this path.
+        return False, 'o_nonblock_unavailable'
+    while True:
+        try:
+            fd = os.open(release_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            fd = None
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                return False, 'symlink'
+            return False, f'lstat={e!r}'
+        else:
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    return False, 'not_regular'
+                # Read through the already opened, no-follow descriptor.  Do
+                # not reopen by pathname after fstat: the path could change
+                # between checks on a shared board filesystem.
+                body = os.read(fd, len(expected) + 1)
+            except OSError as e:
+                return False, f'read={e!r}'
+            finally:
+                os.close(fd)
+            if body == expected:
+                return True, 'released'
+            return False, 'token_mismatch'
+        now = time.monotonic()
+        if now >= deadline:
+            return False, 'timeout'
+        time.sleep(min(0.1, deadline - now))
+
+
 def run_pub(args):
     import rclpy
     from std_msgs.msg import ByteMultiArray
@@ -96,9 +158,44 @@ def run_pub(args):
         # at least one matched subscription so block heads are not lost to
         # SEDP/discovery latency.
         m0 = time.monotonic()
+        timeout_s = args.match_timeout_ms / 1000.0
         while rclpy.ok() and pub.get_subscription_count() < 1 and \
-                time.monotonic() - m0 < 10.0:
+                time.monotonic() - m0 < timeout_s:
             rclpy.spin_once(node, timeout_sec=0.1)
+        local_subs = pub.get_subscription_count() if rclpy.ok() else 0
+        elapsed_ms = int((time.monotonic() - m0) * 1000)
+        if local_subs < 1:
+            print(f'SWEEP-PUB-NO-MATCH timeout_ms={args.match_timeout_ms} '
+                  f'local_subs={local_subs} elapsed_ms={elapsed_ms}', flush=True)
+            if rclpy.ok():
+                node.destroy_node()
+                rclpy.shutdown()
+            return 1
+        print(f'SWEEP-PUB-MATCHED local_subs={local_subs} elapsed_ms={elapsed_ms}', flush=True)
+    if args.barrier_release_file:
+        # The local match is necessary but not sufficient: the orchestrator
+        # also observes the remote gateway's admitted writer before it commits
+        # this release.  No DATA may be constructed or published before that.
+        local_subs = pub.get_subscription_count() if rclpy.ok() else 0
+        print(f'SWEEP-PUB-BARRIER-READY token={args.barrier_token} '
+              f'local_subs={local_subs}', flush=True)
+        released, reason = wait_for_barrier_release(
+            args.barrier_release_file, args.barrier_token, args.barrier_timeout_s)
+        if not released:
+            print(f'SWEEP-PUB-BARRIER-FAIL token={args.barrier_token} reason={reason}', flush=True)
+            if rclpy.ok():
+                node.destroy_node()
+                rclpy.shutdown()
+            return 1
+        print(f'SWEEP-PUB-BARRIER-RELEASED token={args.barrier_token}', flush=True)
+    if args.settle_ms:
+        # A match proves endpoint discovery, but a just-restarted backend may
+        # still be reconnecting its transport session.  Keep this explicit and
+        # opt-in: scenario runners use it when they need a steady data plane,
+        # rather than turning an initial reconnect burst into a DDS history
+        # overflow that obscures the end-to-end assertion.
+        print(f'SWEEP-PUB-SETTLE ms={args.settle_ms}', flush=True)
+        time.sleep(args.settle_ms / 1000.0)
     sizes = [int(s) for s in args.sizes.split(',')]
     t0 = time.monotonic()
     for size in sizes:
@@ -287,12 +384,41 @@ def main():
     ap.add_argument('--rclpy-signals', action='store_true',
                     help='use rclpy default signal handlers (parity check)')
     ap.add_argument('--wait-match', action='store_true',
-                    help='pub only: wait (<=10s) for >=1 matched subscription '
-                         'before publishing (VOLATILE head-loss guard)')
+                    help='pub only: require >=1 matched subscription before '
+                    'publishing (VOLATILE head-loss guard)')
+    ap.add_argument('--match-timeout-ms', type=int, default=10_000,
+                    help='pub only: bounded wait for --wait-match (default: 10000)')
+    ap.add_argument('--barrier-release-file', default='',
+                    help='pub only: exact-token regular file that releases a '
+                    'post-match publisher barrier')
+    ap.add_argument('--barrier-token', default='',
+                    help='pub only: ASCII token required in the barrier release file')
+    ap.add_argument('--barrier-timeout-s', type=float, default=0.0,
+                    help='pub only: positive release-barrier wait timeout')
+    ap.add_argument('--settle-ms', type=int, default=0,
+                    help='pub only: bounded post-match delay for transport-session '
+                         'stabilization before the first sample')
     ap.add_argument('--flush-ms', type=int, default=2000,
                     help='pub only: linger after the last sample so reliable '
                          'retransmission of the tail can finish')
     args = ap.parse_args()
+    if args.settle_ms < 0:
+        ap.error('--settle-ms must be >= 0')
+    if args.match_timeout_ms < 0:
+        ap.error('--match-timeout-ms must be >= 0')
+    barrier_args_present = bool(
+        args.barrier_release_file or args.barrier_token or args.barrier_timeout_s)
+    if barrier_args_present:
+        if args.mode != 'pub':
+            ap.error('publisher barrier arguments require --mode pub')
+        if not args.wait_match:
+            ap.error('publisher barrier requires --wait-match')
+        if not args.barrier_release_file or not args.barrier_token:
+            ap.error('publisher barrier requires --barrier-release-file and --barrier-token')
+        if not math.isfinite(args.barrier_timeout_s) or not 0 < args.barrier_timeout_s <= MAX_BARRIER_TIMEOUT_S:
+            ap.error('--barrier-timeout-s must be finite and in (0, 120] with publisher barrier')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', args.barrier_token):
+            ap.error('--barrier-token must use 1..200 A-Z a-z 0-9 _ - characters')
     return run_pub(args) if args.mode == 'pub' else run_sub(args)
 
 

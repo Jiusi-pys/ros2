@@ -7,6 +7,9 @@ cd "$(dirname "$0")/.."
 
 WORKSPACE_ROOT="$(pwd -W 2>/dev/null || pwd)"
 TOOLCHAIN_FILE="${WORKSPACE_ROOT}/cmake/ohos-aarch64.toolchain.cmake"
+# A verification run may pin its colcon event log under a sealed evidence
+# bundle.  Keep the historic log_ohos default for normal developer builds.
+COLCON_LOG_BASE="${OHOS_LOG_BASE:-log_ohos}"
 
 export PATH="$HOME/.pixi/bin:$PATH"
 
@@ -68,7 +71,7 @@ PACKAGES_SKIP=(
 # --base-paths src: colcon's default scan root is the workspace root, which
 # would pick up target_deps_src/* as plain cmake packages (a static, non-PIC
 # tinyxml2 gets installed and poisons rosbag2_storage/urdfdom).
-exec pixi run colcon --log-base log_ohos build --merge-install \
+exec pixi run colcon --log-base "$COLCON_LOG_BASE" build --merge-install \
   --build-base build_ohos --install-base install_ohos \
   --base-paths src \
   --packages-skip "${PACKAGES_SKIP[@]}" \
@@ -77,6 +80,7 @@ exec pixi run colcon --log-base log_ohos build --merge-install \
     -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
     -DCMAKE_BUILD_TYPE=Release \
+    -DMDDS_WITH_DSOFTBUS=ON \
     -DBUILD_TESTING=ON \
     -DCMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE=PRE_TEST \
     -DBUILD_EXAMPLES=OFF \

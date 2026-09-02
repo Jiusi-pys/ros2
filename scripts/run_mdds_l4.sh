@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # mdds L4 stress/resilience orchestrator: PERF-01/02, SOAK-01, RES-01/02 of
-# docs/designs/mdds_test_plan.md. Board A <-> board B, rmw_mdds, logs land in
+# ../../docs/designs/mdds_test_plan.md. Board A <-> board B, rmw_mdds, logs land in
 # ohos_test_logs/mdds_l4/. SOAK-01 runs 30 min and is not part of "all".
 #
 #   ./scripts/run_mdds_l4.sh [perf01|perf02|soak01|res01|res02|all]
@@ -24,8 +24,11 @@ rbg()    { shell "$1" "$RENVS nohup $2 > $DEVICE_DIR/$3 2>&1 &" & }
 pull()   { shell "$1" "cat $DEVICE_DIR/$2" > "$LOGDIR/$2" 2>/dev/null || true; }
 
 stopall() {
+  # Kill only processes running our test-installed executables/scripts; never
+  # a bare name match, and not even the whole deploy root (an editor or shell
+  # with the deploy dir in its command line must survive).
   for b in "$BOARD_A" "$BOARD_B"; do
-    shell "$b" "pkill -f 'board_sweep|talker|listener' 2>/dev/null; true" >/dev/null 2>&1 || true
+    shell "$b" "pkill -f '$DEVICE_DIR/[Ll]ib/|$DEVICE_DIR/bin/ros2|$DEVICE_DIR/mdds_e2e/' 2>/dev/null; true" >/dev/null 2>&1 || true
   done
   sleep 1
 }
@@ -179,7 +182,7 @@ s_res01() {
   sleep 3
   rbg "$BOARD_B" "\$ROS2_LISTENER" res01_listener1.log
   sleep 10
-  shell "$BOARD_B" "pkill -f listener 2>/dev/null; true" >/dev/null 2>&1 || true
+  shell "$BOARD_B" "pkill -f '$DEVICE_DIR/Lib/demo_nodes_cpp/listener' 2>/dev/null; true" >/dev/null 2>&1 || true
   sleep 5
   rbg "$BOARD_B" "\$ROS2_LISTENER" res01_listener2.log
   # recovery: new messages in the restarted listener's log within 10 s
@@ -203,7 +206,7 @@ s_res02() {
   sleep 3
   rbg "$BOARD_A" "\$ROS2_TALKER" res02_talker1.log
   sleep 10
-  shell "$BOARD_A" "pkill -f talker 2>/dev/null; true" >/dev/null 2>&1 || true
+  shell "$BOARD_A" "pkill -f '$DEVICE_DIR/Lib/demo_nodes_cpp/talker' 2>/dev/null; true" >/dev/null 2>&1 || true
   local n_before
   n_before=$(rcount "$BOARD_B" "I heard" res02_listener.log)
   sleep 5
@@ -227,6 +230,12 @@ fi
 push_sweep
 for sc in "$@"; do
   echo "== scenario: $sc =="
+  if ! declare -F "s_$sc" >/dev/null; then
+    # Unknown scenario names must count as failures, not just a note.
+    echo "   unknown scenario: $sc"
+    fail=$((fail+1)); failed_ids+=("$sc")
+    continue
+  fi
   "s_$sc" || echo "   (scenario $sc errored)"
 done
 

@@ -12,7 +12,15 @@ DURATION="${2:-15}"
 DEVICE_DIR=/data/local/tmp/ros2
 mkdir -p ohos_test_logs
 
-"$HDC" -t "$BOARD" shell "pkill -f 'talker|listener' 2>/dev/null; true" >/dev/null 2>&1 || true
+cleanup() {
+  # Path-qualified match: only demo nodes under our deploy tree, never a bare
+  # 'talker|listener' name that could kill an unrelated process.
+  "$HDC" -t "$BOARD" shell "pkill -f '$DEVICE_DIR/[Ll]ib/demo_nodes_' 2>/dev/null; true" >/dev/null 2>&1 || true
+}
+# Clean up on any exit (error/Ctrl-C included); preserves the exit code.
+trap 'rc=$?; cleanup; exit $rc' EXIT
+
+cleanup
 sleep 1
 
 "$HDC" -t "$BOARD" shell \
@@ -23,7 +31,7 @@ sleep 3
 
 echo "running ${DURATION}s on $BOARD ..."
 sleep "$DURATION"
-"$HDC" -t "$BOARD" shell "pkill -f 'talker|listener' 2>/dev/null; true" >/dev/null 2>&1 || true
+cleanup
 sleep 1
 
 "$HDC" -t "$BOARD" shell "cat $DEVICE_DIR/loop_listener.log" > ohos_test_logs/loop_listener.log

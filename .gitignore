@@ -8,6 +8,8 @@ build_ohos
 install_ohos
 log_ohos
 ohos_test_logs
+# Local CMake review/sanitizer build trees; scripts recreate them as needed.
+build_*
 # target-side Python staging (pulled from board / cross-built wheels)
 python_target
 # target_deps_src holds downloaded source trees and tarballs (reproducible via

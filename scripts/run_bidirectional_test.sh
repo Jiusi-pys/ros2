@@ -32,9 +32,12 @@ remote_bg() {  # remote_bg <board> <logname> <talker|listener>
 }
 
 remote_stop_all() {  # kill leftover demo processes on both boards
+  # Path-qualified match: only the demo executables/scripts under our deploy
+  # tree, never a bare 'talker|listener' name that could hit an unrelated
+  # process on a shared board.
   for board in "$BOARD_A" "$BOARD_B"; do
     "$HDC" -t "$board" shell \
-      "pkill -f 'talker|listener' 2>/dev/null; true" >/dev/null 2>&1 || true
+      "pkill -f '$DEVICE_DIR/[Ll]ib/demo_nodes_' 2>/dev/null; true" >/dev/null 2>&1 || true
   done
   sleep 1
 }
@@ -69,6 +72,10 @@ run_direction() {  # run_direction <talker_board> <listener_board> <tag>
     return 1
   fi
 }
+
+# Clean up both boards on any exit (error/Ctrl-C included) so a failed run
+# cannot leak demo nodes into the next one. Preserves the exit code.
+trap 'rc=$?; remote_stop_all >/dev/null 2>&1 || true; exit $rc' EXIT
 
 overall=0
 run_direction "$BOARD_A" "$BOARD_B" "a_to_b" || overall=1

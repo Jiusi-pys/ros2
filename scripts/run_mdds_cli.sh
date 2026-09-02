@@ -46,9 +46,10 @@ verdict() { # verdict <ID> <0|1> [detail]
 
 setup_nodes() {
   # long-running nodes on B; pkill runs in its own hdc call so the launching
-  # shell's own command line cannot match the pattern
+  # shell's own command line cannot match the pattern. Path-qualified: only
+  # executables/scripts under our deploy tree, never bare package names.
   for b in "$BOARD_A" "$BOARD_B"; do
-    shell "$b" "pkill -f 'demo_nodes_cpp|action_tutorials|ros2-script|board_latency' 2>/dev/null; true" >/dev/null 2>&1 || true
+    shell "$b" "pkill -f '$DEVICE_DIR/[Ll]ib/|$DEVICE_DIR/bin/ros2|$DEVICE_DIR/mdds_e2e/' 2>/dev/null; true" >/dev/null 2>&1 || true
   done
   sleep 1
   rbg "$BOARD_B" "$DEVICE_DIR/lib/demo_nodes_cpp/talker" cli_talker.log
@@ -64,7 +65,7 @@ setup_nodes() {
 
 teardown_nodes() {
   for b in "$BOARD_A" "$BOARD_B"; do
-    shell "$b" "pkill -f 'demo_nodes_cpp|action_tutorials|ros2-script' 2>/dev/null; true" >/dev/null 2>&1 || true
+    shell "$b" "pkill -f '$DEVICE_DIR/[Ll]ib/|$DEVICE_DIR/bin/ros2|$DEVICE_DIR/mdds_e2e/' 2>/dev/null; true" >/dev/null 2>&1 || true
   done
   sleep 1
 }

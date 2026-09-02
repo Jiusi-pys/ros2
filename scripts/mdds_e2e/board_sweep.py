@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-# Board-side message sweep node for mdds e2e tests (see docs/designs/mdds_test_plan.md).
+# Board-side message sweep node for mdds e2e tests (see ../../../docs/designs/mdds_test_plan.md).
 #
 # Publishes/subscribes std_msgs/ByteMultiArray blocks of increasing payload size.
-# Every message carries a 16-byte header: [magic u32][payload_size u32][seq u64].
-# The subscriber verifies per-size-block continuity (loss/reorder) and throughput.
+# Every message carries a 20-byte header: [magic u32][payload_size u32][seq u64]
+# [body_crc32 u32]. The subscriber verifies per-size-block continuity
+# (loss/reorder) AND full-body integrity (CRC32 over every byte after the
+# header) — a bare header-seq check cannot prove byte-level transparency.
 #
 # Usage (on board, after sourcing env.sh + RMW_IMPLEMENTATION=rmw_mdds):
 #   python3.12 board_sweep.py --mode sub [--reliability reliable|best_effort]
@@ -13,14 +15,17 @@
 #                             [--reliability ...] [--history ...] [--depth N]
 #
 # Exit code: sub mode exits 0 and prints "SWEEP_RESULT PASS" iff the reliability
-# contract held (reliable: 0 lost / 0 reorder; best_effort: 0 reorder).
+# contract held for EVERY size block in --sizes (reliable: received == published
+# with 0 lost / 0 reorder / 0 crc errors; best_effort: 0 reorder / 0 crc errors
+# with at least one reception). A zero-reception block always fails the run.
 import argparse
 import struct
 import sys
 import time
+import zlib
 
 MAGIC = 0x4D444453  # 'MDDS'
-HDR = struct.Struct('<IIQ')
+HDR = struct.Struct('<IIQI')
 
 DEFAULT_SIZES = [1024, 4096, 65536, 262144, 1048576, 4194304, 8388608]
 
@@ -100,11 +105,13 @@ def run_pub(args):
         n = target_count(args, size)
         period = period_for(size, args.rate, args.rate_bps)
         body = bytes(size - HDR.size)
+        # body is constant within a block: one CRC covers every seq.
+        body_crc = zlib.crc32(body)
         next_t = time.monotonic()
         for seq in range(n):
             next_t += period
             msg = ByteMultiArray()
-            msg.data = HDR.pack(MAGIC, size, seq) + body
+            msg.data = HDR.pack(MAGIC, size, seq, body_crc) + body
             try:
                 pub.publish(msg)
             except Exception as e:
@@ -147,13 +154,15 @@ def as_bytes(d):
 
 
 class SizeStats:
-    __slots__ = ('received', 'max_seq', 'lost', 'reorder', 'first_t', 'last_t', 'bytes')
+    __slots__ = ('received', 'max_seq', 'lost', 'reorder', 'crc_errors',
+                 'first_t', 'last_t', 'bytes')
 
     def __init__(self):
         self.received = 0
         self.max_seq = -1
         self.lost = 0
         self.reorder = 0
+        self.crc_errors = 0
         self.first_t = None
         self.last_t = None
         self.bytes = 0
@@ -164,14 +173,18 @@ def run_sub(args):
     from std_msgs.msg import ByteMultiArray
     init_ros(args)
     node = rclpy.create_node('mdds_sweep_sub')
-    stats = {}
+    # Pre-initialize one stats record per EXPECTED size block (--sizes is the
+    # set this run's pub side sends). A block that receives nothing must still
+    # produce a SWEEP-SUB line and fail the run — iterating only over sizes
+    # observed in callbacks would silently skip a dead block (false PASS).
+    stats = {size: SizeStats() for size in (int(s) for s in args.sizes.split(','))}
     state = {'last_msg_t': None}
 
     def cb(msg):
         data = as_bytes(msg.data)
         if len(data) < HDR.size:
             return
-        magic, size, seq = HDR.unpack_from(data)
+        magic, size, seq, body_crc = HDR.unpack_from(data)
         if magic != MAGIC:
             return
         st = stats.setdefault(size, SizeStats())
@@ -182,6 +195,10 @@ def run_sub(args):
         state['last_msg_t'] = now
         st.received += 1
         st.bytes += len(data)
+        # Full-body integrity: any flipped/truncated byte past the header
+        # breaks the CRC even when the sequence numbers look fine.
+        if zlib.crc32(data[HDR.size:]) != body_crc:
+            st.crc_errors += 1
         if seq <= st.max_seq:
             st.reorder += 1
         else:
@@ -218,14 +235,17 @@ def run_sub(args):
         expected = target_count(args, size)
         dur = (st.last_t - st.first_t) if st.first_t else 0.0
         mbps = (st.bytes / 1e6 / dur) if dur > 0 else 0.0
-        block_ok = st.reorder == 0
+        block_ok = st.reorder == 0 and st.crc_errors == 0 and st.received >= 1
         if args.reliability == 'reliable':
-            # tail truncation counts too: reliable delivery means every
-            # published message of the block arrived
-            block_ok = block_ok and st.lost == 0 and st.received >= expected
+            # exact per-block accounting: reliable delivery means every
+            # published message of the block arrived exactly once — neither
+            # loss / tail truncation (received < expected) nor duplicate
+            # delivery (received > expected) is acceptable
+            block_ok = block_ok and st.lost == 0 and st.received == expected
         ok = ok and block_ok
         print(f'SWEEP-SUB size={size} received={st.received}/{expected} lost={st.lost} '
-              f'reorder={st.reorder} mbps={mbps:.2f} {"OK" if block_ok else "BAD"}',
+              f'reorder={st.reorder} crc={st.crc_errors} mbps={mbps:.2f} '
+              f'{"OK" if block_ok else "BAD"}',
               flush=True)
     if not stats:
         ok = False

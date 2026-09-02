@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # mdds e2e test orchestrator for the two RK3588A boards (test plan:
-# docs/designs/mdds_test_plan.md). Every scenario pins RMW_IMPLEMENTATION=rmw_mdds
+# ../../docs/designs/mdds_test_plan.md). Every scenario pins RMW_IMPLEMENTATION=rmw_mdds
 # and starts with an rclpy preflight that prints the effective RMW identifier.
 #
 #   ./scripts/run_mdds_e2e.sh [scenario ...]
 # scenarios: preflight loopback bidir py service action params besteffort sweep neg01
-#            latejoin multitopic matched all
+#            latejoin multitopic matched off all
 # default:  preflight loopback bidir service action sweep
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -26,8 +26,13 @@ shell()  { "$HDC" -t "$1" shell "$2" </dev/null; }
 rbg()    { shell "$1" "$RENVS nohup $2 > $DEVICE_DIR/$3 2>&1 &" & }
 runfg()  { shell "$1" "$RENVS $2"; }
 stopall() {
+  # Kill only processes running our test-installed executables/scripts; never
+  # a bare name match, and not even the whole deploy root (an editor or shell
+  # with the deploy dir in its command line must survive). Everything the
+  # scenarios launch lives under $DEVICE_DIR/{Lib,lib}/, is the ros2 CLI in
+  # $DEVICE_DIR/bin/, or a script under $DEVICE_DIR/mdds_e2e/.
   for b in "$BOARD_A" "$BOARD_B"; do
-    shell "$b" "pkill -f 'talker|listener|add_two_ints|fibonacci|board_sweep|parameters' 2>/dev/null; true" >/dev/null 2>&1 || true
+    shell "$b" "pkill -f '$DEVICE_DIR/[Ll]ib/|$DEVICE_DIR/bin/ros2|$DEVICE_DIR/mdds_e2e/' 2>/dev/null; true" >/dev/null 2>&1 || true
   done
   sleep 1
 }
@@ -178,7 +183,7 @@ s_sweep() {
 
 s_neg01() {
   stopall; push_sweep
-  rbg "$BOARD_A" "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode sub --sleep-ms 200 --idle-timeout 10" e2e_neg_sub.log
+  rbg "$BOARD_A" "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode sub --sizes 1024 --sleep-ms 200 --idle-timeout 10" e2e_neg_sub.log
   sleep 4
   rbg "$BOARD_B" "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode pub --sizes 1024 --history keep_all" e2e_neg_pub.log
   sleep 30
@@ -248,15 +253,66 @@ s_matched() {
   verdict "E2E-12" $missing "matched_event_detect full 8-event sequence"
 }
 
+s_off() {
+  # E2E-13: ROS_AUTOMATIC_DISCOVERY_RANGE=OFF must genuinely disable mdds
+  # discovery (review gate: success-but-still-communicating is a fail). Two
+  # processes in the same domain on board A, both OFF, run off_check.py for 8 s
+  # (16x the 500 ms announce period): graph/matched/data must all be 0. A
+  # control pair with the default range MUST discover+communicate, otherwise
+  # the OFF assertions prove nothing.
+  stopall
+  shell "$BOARD_A" "mkdir -p $DEVICE_DIR/mdds_e2e"
+  "$HDC" -t "$BOARD_A" file send "$(cygpath -w scripts/mdds_e2e/off_check.py)" \
+    "$DEVICE_DIR/mdds_e2e/off_check.py" </dev/null > /dev/null
+  local RENVS_OFF="$RENVS export ROS_AUTOMATIC_DISCOVERY_RANGE=OFF;"
+  local bad=0 i n
+  # rbg() cannot inject an extra export between RENVS and nohup, so these
+  # launches call shell() directly with the env prefix spelled out.
+  shell "$BOARD_A" "$RENVS_OFF nohup python3.12 $DEVICE_DIR/mdds_e2e/off_check.py --role sub --expect off > $DEVICE_DIR/e2e_off_sub.log 2>&1 &" &
+  shell "$BOARD_A" "$RENVS_OFF nohup python3.12 $DEVICE_DIR/mdds_e2e/off_check.py --role pub --expect off > $DEVICE_DIR/e2e_off_pub.log 2>&1 &" &
+  # hdc shell always exits 0 — poll on captured content. cat|grep -c gives one
+  # total; the board has no paste/bc/awk.
+  for i in $(seq 1 6); do
+    sleep 5
+    n=$(shell "$BOARD_A" "cat $DEVICE_DIR/e2e_off_sub.log $DEVICE_DIR/e2e_off_pub.log 2>/dev/null | grep -c 'OFF_CHECK RESULT'" | tr -dc '0-9')
+    [ -n "$n" ] && [ "$n" -ge 2 ] && break
+  done
+  # control pair, default discovery range: must find each other and pass data
+  rbg "$BOARD_A" "python3.12 $DEVICE_DIR/mdds_e2e/off_check.py --role sub --expect on" e2e_on_sub.log
+  rbg "$BOARD_A" "python3.12 $DEVICE_DIR/mdds_e2e/off_check.py --role pub --expect on" e2e_on_pub.log
+  for i in $(seq 1 6); do
+    sleep 5
+    n=$(shell "$BOARD_A" "cat $DEVICE_DIR/e2e_on_sub.log $DEVICE_DIR/e2e_on_pub.log 2>/dev/null | grep -c 'OFF_CHECK RESULT'" | tr -dc '0-9')
+    [ -n "$n" ] && [ "$n" -ge 2 ] && break
+  done
+  stopall
+  local f
+  for f in e2e_off_sub.log e2e_off_pub.log e2e_on_sub.log e2e_on_pub.log; do
+    pull "$BOARD_A" "$f"
+    grep -q "OFF_CHECK RESULT PASS" "$LOGDIR/$f" || { echo "   $f: $(grep OFF_CHECK "$LOGDIR/$f" | tr '\n' ' ')"; bad=1; }
+  done
+  verdict "E2E-13" $bad "discovery OFF: graph/matched/data all 0; ON control communicates"
+}
+
 # --- main --------------------------------------------------------------------
+
+# Clean up both boards on any exit (error, Ctrl-C, normal end) so a failed
+# run cannot leak nodes into the next scenario. Preserves the exit code.
+trap 'rc=$?; stopall >/dev/null 2>&1 || true; exit $rc' EXIT
 
 if [ $# -eq 0 ]; then
   set -- preflight loopback bidir service action sweep
 elif [ "$1" = all ]; then
-  set -- preflight loopback bidir py service action params besteffort sweep neg01 latejoin multitopic matched
+  set -- preflight loopback bidir py service action params besteffort sweep neg01 latejoin multitopic matched off
 fi
 for sc in "$@"; do
   echo "== scenario: $sc =="
+  if ! declare -F "s_$sc" >/dev/null; then
+    # Unknown scenario names must count as failures, not just a note.
+    echo "   unknown scenario: $sc"
+    fail=$((fail+1)); failed_ids+=("$sc")
+    continue
+  fi
   "s_$sc" || echo "   (scenario $sc errored)"
 done
 

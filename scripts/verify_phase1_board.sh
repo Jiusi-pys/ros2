@@ -39,7 +39,7 @@ nohup $ROS2_LISTENER > $VLOG/vfy_listener.log 2>&1 &
 sleep 3
 nohup $ROS2_TALKER > $VLOG/vfy_talker.log 2>&1 &
 sleep 10
-pkill -f 'talker|listener' 2>/dev/null
+pkill -f "$ROS2_HOME/Lib/demo_nodes_cpp/" 2>/dev/null
 heard=$(grep -c "I heard" $VLOG/vfy_listener.log)
 echo "listener heard: $heard"
 [ "$heard" -gt 0 ] && echo "LOOPBACK_OK" || echo "LOOPBACK_FAIL"

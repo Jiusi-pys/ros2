@@ -19,7 +19,7 @@
 #
 # Usage from ros2/ in Git Bash:
 #   MDDS_RUN_ID=<id> MDDS_RUN_NONCE=<nonce> \
-#     MDDS_DOMAIN0_LOGROOT=/c/mdds-v10/<run>/raw_logs/domain0 \
+#     MDDS_DOMAIN0_LOGROOT=/c/mdds-v11/<run>/raw_logs/domain0 \
 #     ./scripts/mdds_e2e/run_domain0_chatter_smoke.sh
 #
 # --validate-only performs no HDC/PC/device action.
@@ -43,6 +43,13 @@ PC_WS=/c/pixi_ws
 PC_BAT_DIR="$(cygpath -w "$PWD/scripts/mdds_e2e/pc")"
 PROBE_LOCAL=scripts/mdds_e2e/domain0_chatter_probe.py
 PROBE_REMOTE="$DEVICE_DIR/mdds_e2e/domain0_chatter_probe.py"
+REMOTE_GUARD_LOCAL=scripts/mdds_e2e/domain0_remote_guard.sh
+REMOTE_GUARD="$DEVICE_DIR/mdds_e2e/domain0_remote_guard.sh"
+REMOTE_SPAWN_LOCAL=scripts/mdds_e2e/domain0_remote_spawn.py
+REMOTE_SPAWN="$DEVICE_DIR/mdds_e2e/domain0_remote_spawn.py"
+REMOTE_GUARD_TEST_LOCAL=scripts/mdds_e2e/domain0_remote_guard_selftest.sh
+REMOTE_GUARD_TEST="$DEVICE_DIR/mdds_e2e/domain0_remote_guard_selftest.sh"
+REMOTE_PYTHON=/data/python312-rk3588a/usr/bin/python3.12
 PC_BATCH_LOCAL=scripts/mdds_e2e/pc/domain0_chatter_probe.bat
 PC_GUARD_LOCAL=scripts/mdds_e2e/pc/domain0_chatter_guard.ps1
 PC_BATCH="$PC_BAT_DIR\\domain0_chatter_probe.bat"
@@ -81,6 +88,7 @@ REMOTE_LOGDIR="$DEVICE_DIR/mdds_domain0_chatter_runs/$RUN_ID"
 REMOTE_OWNER="$REMOTE_LOGDIR/.d0_run_owner"
 ACTIVITY_LOCK_DIR="$DEVICE_DIR/.mdds-activity-lock"
 LOCAL_OWNER="$LOGDIR/.d0_pc_run_owner"
+DIALER_DECISION_LOG="$LOGDIR/dialer_decisions.txt"
 
 VALIDATE_ONLY=0
 if [[ "${1:-}" = --validate-only && "$#" -eq 1 ]]; then
@@ -115,7 +123,7 @@ require_exact_line() { # <path> <literal>
 
 validate_local_contract() {
   local failed=0 path
-  for path in "$PROBE_LOCAL" "$CYCLONE_XML_LOCAL" "$RMW_PROFILE_LOCAL" \
+  for path in "$PROBE_LOCAL" "$REMOTE_GUARD_LOCAL" "$REMOTE_SPAWN_LOCAL" "$REMOTE_GUARD_TEST_LOCAL" "$CYCLONE_XML_LOCAL" "$RMW_PROFILE_LOCAL" \
               "$GATEWAY_PROFILE_LOCAL" "$PC_BATCH_LOCAL" "$PC_GUARD_LOCAL"; do
     if [ ! -f "$path" ]; then
       echo "D0_STATIC_CONTRACT missing=$path" >&2
@@ -306,8 +314,18 @@ verify_artifacts_and_helpers() {
   record_artifact librmw_mdds.so "$BOARD_B" install_ohos/lib/librmw_mdds.so "$DEVICE_DIR/lib/librmw_mdds.so" || return 1
   record_artifact rmw_mdds_dsoftbus_profile "$BOARD_B" "$RMW_PROFILE_LOCAL" "$RMW_PROFILE_REMOTE" || return 1
   send_verified_helper "$BOARD_B" domain0_chatter_probe.py "$PROBE_LOCAL" "$PROBE_REMOTE" || return 1
+  send_verified_helper "$BOARD_A" domain0_remote_guard.sh "$REMOTE_GUARD_LOCAL" "$REMOTE_GUARD" || return 1
+  send_verified_helper "$BOARD_B" domain0_remote_guard.sh "$REMOTE_GUARD_LOCAL" "$REMOTE_GUARD" || return 1
+  send_verified_helper "$BOARD_A" domain0_remote_spawn.py "$REMOTE_SPAWN_LOCAL" "$REMOTE_SPAWN" || return 1
+  send_verified_helper "$BOARD_B" domain0_remote_spawn.py "$REMOTE_SPAWN_LOCAL" "$REMOTE_SPAWN" || return 1
+  send_verified_helper "$BOARD_A" domain0_remote_guard_selftest.sh "$REMOTE_GUARD_TEST_LOCAL" "$REMOTE_GUARD_TEST" || return 1
+  send_verified_helper "$BOARD_B" domain0_remote_guard_selftest.sh "$REMOTE_GUARD_TEST_LOCAL" "$REMOTE_GUARD_TEST" || return 1
   send_verified_helper "$BOARD_A" cyclonedds_board_a.xml "$CYCLONE_XML_LOCAL" "$CYCLONE_XML_REMOTE" || return 1
   printf 'name=domain0_chatter_probe.py host_sha256=%s\n' "$(sha_local "$PROBE_LOCAL")" >> "$LOGDIR/artifact_hashes.txt"
+  printf 'name=domain0_remote_guard.sh host_sha256=%s\n' "$(sha_local "$REMOTE_GUARD_LOCAL")" >> "$LOGDIR/artifact_hashes.txt"
+  printf 'name=domain0_remote_spawn.py host_sha256=%s\n' "$(sha_local "$REMOTE_SPAWN_LOCAL")" >> "$LOGDIR/artifact_hashes.txt"
+  printf 'name=domain0_remote_guard_selftest.sh host_sha256=%s\n' "$(sha_local "$REMOTE_GUARD_TEST_LOCAL")" >> "$LOGDIR/artifact_hashes.txt"
+  printf 'name=run_domain0_chatter_smoke.sh host_sha256=%s\n' "$(sha_local "$0")" >> "$LOGDIR/artifact_hashes.txt"
   printf 'name=domain0_chatter_probe.bat host_sha256=%s\n' "$(sha_local "$PC_BATCH_LOCAL")" >> "$LOGDIR/artifact_hashes.txt"
   printf 'name=domain0_chatter_guard.ps1 host_sha256=%s\n' "$(sha_local "$PC_GUARD_LOCAL")" >> "$LOGDIR/artifact_hashes.txt"
   for path in "$PC_WS/shell_hook.bat" "$PC_WS/ros2-windows/setup.bat"; do
@@ -320,91 +338,56 @@ verify_artifacts_and_helpers() {
   done
 }
 
-parse_board_record() { # <tag>, stdin -> PID:START
+parse_board_record() { # <tag>, stdin -> PID:START:PGID:CHILD_PID:CHILD_START
   local tag="$1"
-  tr -d '\r' | sed -n "s/^D0_LAUNCH_RECORD RUN_ID=$RUN_ID NONCE=$RUN_NONCE TAG=$tag PID=\\([0-9][0-9]*\\) START=\\([0-9][0-9]*\\)$/\\1:\\2/p" | head -1
+  tr -d '\r' | sed -n "s/^D0_LAUNCH_RECORD RUN_ID=$RUN_ID NONCE=$RUN_NONCE TAG=$tag PID=\\([0-9][0-9]*\\) START=\\([0-9][0-9]*\\) PGID=\\([0-9][0-9]*\\) CHILD_PID=\\([0-9][0-9]*\\) CHILD_START=\\([0-9][0-9]*\\)$/\\1:\\2:\\3:\\4:\\5/p" | head -1
 }
 
 launch_board() { # <board> <env prefix> <payload> <log name>
-  local board="$1" env_prefix="$2" payload="$3" log="$4" tag record owner guard q_guard out raw pair pid start
+  local board="$1" env_prefix="$2" payload="$3" log="$4" tag record owner out raw pair pid start pgid child_pid child_start
   ensure_remote_owner "$board" || return 1
   LAUNCH_SEQUENCE=$((LAUNCH_SEQUENCE + 1))
   tag="${LAUNCH_SEQUENCE}_${RANDOM}_$$"
   record="$REMOTE_LOGDIR/launch/${log}.${tag}.pid"
   owner="D0_RUN_OWNER RUN_ID=$RUN_ID NONCE=$RUN_NONCE"
-  guard='
-owner_path=$1
-record_path=$2
-log_path=$3
-run_id=$4
-nonce=$5
-tag=$6
-env_prefix=$7
-payload=$8
-owner_line="D0_RUN_OWNER RUN_ID=$run_id NONCE=$nonce"
-test -f "$owner_path" && test ! -L "$owner_path" && grep -Fqx "$owner_line" "$owner_path" || exit 70
-mkdir -p "$(dirname "$record_path")" || exit 70
-test ! -e "$record_path" || exit 70
-test ! -e "$log_path" || exit 70
-printf "D0_RUN_ID=%s\\nD0_RUN_NONCE=%s\\nD0_LAUNCH_TAG=%s\\n" "$run_id" "$nonce" "$tag" > "$log_path" || exit 70
-start=$(cut -d " " -f22 /proc/$$/stat 2>/dev/null)
-case "$start" in ""|*[!0-9]*) exit 70 ;; esac
-record_line="D0_LAUNCH_RECORD RUN_ID=$run_id NONCE=$nonce TAG=$tag PID=$$ START=$start"
-(set -C; umask 077; printf "%s\\n" "$record_line" > "$record_path") 2>/dev/null || exit 70
-test -f "$record_path" && test ! -L "$record_path" && grep -Fqx "$record_line" "$record_path" || exit 70
-printf "D0_REMOTE_PID=%s:%s\\n" "$$" "$start"
-exec sh -c "$env_prefix exec $payload" >> "$log_path" 2>&1 < /dev/null
-'
-  q_guard="$(remote_quote "$guard")"
-  out="$(shell "$board" "mkdir -p $(remote_quote "$REMOTE_LOGDIR/launch") && nohup sh -c $q_guard sh $(remote_quote "$REMOTE_OWNER") $(remote_quote "$record") $(remote_quote "$REMOTE_LOGDIR/$log") $(remote_quote "$RUN_ID") $(remote_quote "$RUN_NONCE") $(remote_quote "$tag") $(remote_quote "$env_prefix") $(remote_quote "$payload") </dev/null >/dev/null 2>&1 &" || true)"
+  out="$(shell "$board" "mkdir -p $(remote_quote "$REMOTE_LOGDIR/launch") && chmod 700 $(remote_quote "$REMOTE_GUARD") && $(remote_quote "$REMOTE_PYTHON") $(remote_quote "$REMOTE_SPAWN") $(remote_quote "$REMOTE_GUARD") $(remote_quote "$REMOTE_OWNER") $(remote_quote "$record") $(remote_quote "$REMOTE_LOGDIR/$log") $(remote_quote "$RUN_ID") $(remote_quote "$RUN_NONCE") $(remote_quote "$tag") $(remote_quote "$env_prefix") $(remote_quote "$payload")" || true)"
   pair=""
   for _ in $(seq 1 30); do
     raw="$(shell "$board" "if test -f $(remote_quote "$record") && test ! -L $(remote_quote "$record"); then cat $(remote_quote "$record"); fi" || true)"
     pair="$(printf '%s' "$raw" | parse_board_record "$tag")"
-    [[ "$pair" =~ ^[0-9]+:[0-9]+$ ]] && break
+    [[ "$pair" =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[0-9]+$ ]] && break
     sleep 0.2
   done
-  pid=${pair%%:*}
-  start=${pair#*:}
-  if ! [[ "$pid" =~ ^[0-9]+$ && "$start" =~ ^[0-9]+$ ]]; then
+  IFS=':' read -r pid start pgid child_pid child_start <<< "$pair"
+  if ! [[ "$pid" =~ ^[0-9]+$ && "$start" =~ ^[0-9]+$ && "$pgid" =~ ^[0-9]+$ &&
+          "$child_pid" =~ ^[0-9]+$ && "$child_start" =~ ^[0-9]+$ && "$pid" = "$pgid" ]]; then
     echo "ERROR: no exact board launch record for $log (HDC output: $(printf '%s' "$out" | head -1))" >&2
     return 1
   fi
-  BOARD_TRACKED+=("$board|$pid|$start|$record|$tag|$log")
-  printf 'board=%s pid=%s start=%s record=%s tag=%s log=%s\n' \
-    "$board" "$pid" "$start" "$record" "$tag" "$log" >> "$LOGDIR/board_launch_records.txt"
+  BOARD_TRACKED+=("$board|$pid|$start|$pgid|$child_pid|$child_start|$record|$tag|$log")
+  printf 'board=%s pid=%s start=%s pgid=%s child_pid=%s child_start=%s record=%s tag=%s log=%s\n' \
+    "$board" "$pid" "$start" "$pgid" "$child_pid" "$child_start" "$record" "$tag" "$log" >> "$LOGDIR/board_launch_records.txt"
 }
 
-board_record_matches() { # <board> <pid> <start> <record> <tag>
+board_record_matches() { # <board> <pid> <start> <pgid> <child_pid> <child_start> <record> <tag>
   local raw expected
-  raw="$(shell "$1" "if test -f $(remote_quote "$4") && test ! -L $(remote_quote "$4"); then cat $(remote_quote "$4"); fi" || true)"
-  expected="D0_LAUNCH_RECORD RUN_ID=$RUN_ID NONCE=$RUN_NONCE TAG=$5 PID=$2 START=$3"
+  raw="$(shell "$1" "if test -f $(remote_quote "$7") && test ! -L $(remote_quote "$7"); then cat $(remote_quote "$7"); fi" || true)"
+  expected="D0_LAUNCH_RECORD RUN_ID=$RUN_ID NONCE=$RUN_NONCE TAG=$8 PID=$2 START=$3 PGID=$4 CHILD_PID=$5 CHILD_START=$6"
   printf '%s\n' "$raw" | tr -d '\r' | grep -Fqx "$expected"
 }
 
-stop_board_entry() { # board|pid|start|record|tag|log
-  local entry="$1" board pid start record tag log state
-  IFS='|' read -r board pid start record tag log <<< "$entry"
-  board_record_matches "$board" "$pid" "$start" "$record" "$tag" || {
+stop_board_entry() { # board|pid|start|pgid|child_pid|child_start|record|tag|log
+  local entry="$1" board pid start pgid child_pid child_start record tag log out
+  IFS='|' read -r board pid start pgid child_pid child_start record tag log <<< "$entry"
+  board_record_matches "$board" "$pid" "$start" "$pgid" "$child_pid" "$child_start" "$record" "$tag" || {
     echo "ERROR: refusing board cleanup with mismatched record: $entry" >&2
     return 1
   }
-  state="$(shell "$board" "if ! test -r /proc/$pid/stat; then printf GONE; else now=\$(cut -d ' ' -f22 /proc/$pid/stat); state=\$(cut -d ' ' -f3 /proc/$pid/stat); if [ \"\$now\" != $(remote_quote "$start") ]; then printf REUSED; elif [ \"\$state\" = Z ]; then printf GONE; else printf LIVE; fi; fi" | tr -d '\r\n')"
-  case "$state" in
-    GONE) return 0 ;;
-    REUSED|*) [ "$state" = LIVE ] || { echo "ERROR: refusing ambiguous board PID $entry" >&2; return 1; } ;;
+  out="$(shell "$board" "chmod 700 $(remote_quote "$REMOTE_GUARD") && $(remote_quote "$REMOTE_GUARD") --cleanup $(remote_quote "$record") $(remote_quote "$RUN_ID") $(remote_quote "$RUN_NONCE") $(remote_quote "$tag") $pid $start $pgid $child_pid $child_start" | tr -d '\r\n')"
+  case "$out" in
+    'D0_REMOTE_CLEANUP result=GONE'|'D0_REMOTE_CLEANUP result=STOPPED'|'D0_REMOTE_CLEANUP result=HARD_STOPPED') return 0 ;;
+    *) echo "ERROR: board process-group cleanup failed: ${out:-NO_MARKER} entry=$entry" >&2; return 1 ;;
   esac
-  shell "$board" "kill $pid 2>/dev/null" >/dev/null || return 1
-  for _ in $(seq 1 20); do
-    state="$(shell "$board" "if ! test -r /proc/$pid/stat; then printf GONE; else now=\$(cut -d ' ' -f22 /proc/$pid/stat); st=\$(cut -d ' ' -f3 /proc/$pid/stat); if [ \"\$now\" != $(remote_quote "$start") ]; then printf REUSED; elif [ \"\$st\" = Z ]; then printf GONE; else printf LIVE; fi; fi" | tr -d '\r\n')"
-    [ "$state" = GONE ] && return 0
-    [ "$state" = LIVE ] || return 1
-    sleep 0.5
-  done
-  shell "$board" "kill -9 $pid 2>/dev/null" >/dev/null || return 1
-  sleep 1
-  state="$(shell "$board" "if ! test -r /proc/$pid/stat || [ \"\$(cut -d ' ' -f3 /proc/$pid/stat 2>/dev/null)\" = Z ]; then printf GONE; else printf LIVE; fi" | tr -d '\r\n')"
-  [ "$state" = GONE ]
 }
 
 ensure_pc_owner() {
@@ -457,7 +440,8 @@ pc_start() { # <tag> <mode> <direction>
 }
 
 wait_pc_exit() { # <tag>
-  local tag="$1" status="$LOGDIR/pc/${tag}.status" expected
+  local tag="$1" status expected
+  status="$LOGDIR/pc/${tag}.status"
   expected="D0_PC_EXIT RUN_ID=$RUN_ID NONCE=$RUN_NONCE TAG=$tag RC=0"
   for _ in $(seq 1 90); do
     if [ -f "$status" ]; then
@@ -487,7 +471,10 @@ stop_pc_entry() { # pid|start|record|status|tag
     if ($null -eq $p) { Write-Output GONE; exit 0 }
     if ($p.StartTime.ToUniversalTime().ToFileTimeUtc() -ne [int64]$env:D0_START) { Write-Output REUSED; exit 3 }
     & taskkill.exe /PID ([int]$env:D0_PID) /T /F | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Output SIGNAL_FAILED; exit 4 }
+    if ($LASTEXITCODE -ne 0) {
+      if ($null -eq (Get-Process -Id ([int]$env:D0_PID) -ErrorAction SilentlyContinue)) { Write-Output GONE; exit 0 }
+      Write-Output SIGNAL_FAILED; exit 4
+    }
     for ($i = 0; $i -lt 20; ++$i) { Start-Sleep -Milliseconds 100; if ($null -eq (Get-Process -Id ([int]$env:D0_PID) -ErrorAction SilentlyContinue)) { Write-Output STOPPED; exit 0 } }
     Write-Output LIVE; exit 5
   ' 2>&1 || true)"
@@ -496,30 +483,45 @@ stop_pc_entry() { # pid|start|record|status|tag
 }
 
 stop_all_owned() {
-  local i rc=0
+  local i rc=0 entry
+  local -a board_remaining=()
+  local -a pc_remaining=()
   for ((i=${#BOARD_TRACKED[@]} - 1; i >= 0; --i)); do
-    stop_board_entry "${BOARD_TRACKED[$i]}" || rc=1
+    entry="${BOARD_TRACKED[$i]}"
+    if ! stop_board_entry "$entry"; then
+      board_remaining+=("$entry")
+      rc=1
+    fi
   done
-  BOARD_TRACKED=()
+  BOARD_TRACKED=("${board_remaining[@]}")
   for ((i=${#PC_TRACKED[@]} - 1; i >= 0; --i)); do
-    stop_pc_entry "${PC_TRACKED[$i]}" || rc=1
+    entry="${PC_TRACKED[$i]}"
+    if ! stop_pc_entry "$entry"; then
+      pc_remaining+=("$entry")
+      rc=1
+    fi
   done
-  PC_TRACKED=()
+  PC_TRACKED=("${pc_remaining[@]}")
   return "$rc"
 }
 
 cleanup() {
   local prior=$?
   trap - EXIT INT TERM
-  stop_all_owned >> "$LOGDIR/cleanup.txt" 2>&1 || prior=1
-  release_activity_locks >> "$LOGDIR/cleanup.txt" 2>&1 || prior=1
+  if stop_all_owned >> "$LOGDIR/cleanup.txt" 2>&1; then
+    release_activity_locks >> "$LOGDIR/cleanup.txt" 2>&1 || prior=1
+  else
+    prior=1
+    printf 'D0_ACTIVITY_LOCK_RETAINED reason=owned_process_group_not_clean\n' >> "$LOGDIR/cleanup.txt"
+  fi
   exit "$prior"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 pull_board_log() { # <board> <name>
-  local board="$1" name="$2" output="$LOGDIR/$name" tmp
+  local board="$1" name="$2" output tmp
+  output="$LOGDIR/$name"
   tmp="$output.tmp.$$.$RANDOM"
   shell "$board" "if test -f $(remote_quote "$REMOTE_LOGDIR/$name") && test ! -L $(remote_quote "$REMOTE_LOGDIR/$name") && grep -Fqx $(remote_quote "D0_RUN_ID=$RUN_ID") $(remote_quote "$REMOTE_LOGDIR/$name") && grep -Fqx $(remote_quote "D0_RUN_NONCE=$RUN_NONCE") $(remote_quote "$REMOTE_LOGDIR/$name"); then cat $(remote_quote "$REMOTE_LOGDIR/$name"); else echo D0_LOG_MISSING; fi" > "$tmp" 2>/dev/null || true
   grep -Fqx "D0_RUN_ID=$RUN_ID" "$tmp" && grep -Fqx "D0_RUN_NONCE=$RUN_NONCE" "$tmp" || {
@@ -580,10 +582,50 @@ assert_dsoftbus_trace() { # <log>
   local path="$LOGDIR/$1"
   grep -Eq '\[mdds/dsoftbus\] Socket\(' "$path" && \
     grep -Eq '\[mdds/dsoftbus\] Listen\(fd=[0-9]+\)=0' "$path" && \
-    grep -Eq '\[mdds/dsoftbus\] BindAsync\(fd=[0-9]+ peer=.*\)=0' "$path" && \
     grep -Eq '\[mdds/dsoftbus\] OnBind\(fd=[0-9]+ peer=' "$path" && \
     grep -Eq '\[mdds/dsoftbus\] SendBytes\(fd=[0-9]+ len=[0-9]+\)=0' "$path" && \
     grep -Eq '\[mdds/dsoftbus\] OnBytes\(fd=[0-9]+ len=[1-9][0-9]* peer=' "$path"
+}
+
+onbind_peer_id() { # <log>
+  grep -E '\[mdds/dsoftbus\] OnBind\(fd=[0-9]+ peer=[0-9A-Fa-f]{64}\)' "$1" | \
+    sed -n 's/.* peer=\([0-9A-Fa-f]\{64\}\)).*/\1/p' | sort -u
+}
+
+assert_dsoftbus_leg() { # <endpoint log> <gateway log> <direction>
+  local endpoint="$LOGDIR/$1" gateway="$LOGDIR/$2" direction="$3"
+  local endpoint_peer gateway_peer endpoint_local gateway_local
+  local endpoint_binds gateway_binds active active_local active_peer active_success passive_binds
+  assert_dsoftbus_trace "$1" && assert_dsoftbus_trace "$2" || return 1
+  endpoint_peer="$(onbind_peer_id "$endpoint")"
+  gateway_peer="$(onbind_peer_id "$gateway")"
+  [[ "$endpoint_peer" =~ ^[0-9A-Fa-f]{64}$ && "$gateway_peer" =~ ^[0-9A-Fa-f]{64}$ ]] || return 1
+  endpoint_local="$gateway_peer"
+  gateway_local="$endpoint_peer"
+  [ "$endpoint_local" != "$gateway_local" ] || return 1
+  endpoint_binds="$(grep -Ec '\[mdds/dsoftbus\] BindAsync\(' "$endpoint" || true)"
+  gateway_binds="$(grep -Ec '\[mdds/dsoftbus\] BindAsync\(' "$gateway" || true)"
+  if [[ "$endpoint_local" > "$gateway_local" ]]; then
+    active=endpoint
+    active_local="$endpoint_local"
+    active_peer="$gateway_local"
+    active_success="$(grep -Ec "\\[mdds/dsoftbus\\] BindAsync\\(fd=[0-9]+ peer=$active_peer\\)=0" "$endpoint" || true)"
+    passive_binds="$gateway_binds"
+  else
+    active=gateway
+    active_local="$gateway_local"
+    active_peer="$endpoint_local"
+    active_success="$(grep -Ec "\\[mdds/dsoftbus\\] BindAsync\\(fd=[0-9]+ peer=$active_peer\\)=0" "$gateway" || true)"
+    passive_binds="$endpoint_binds"
+  fi
+  printf 'D0_DIALER_DECISION direction=%s endpoint_local=%s gateway_local=%s active=%s active_success=%s endpoint_bind_calls=%s gateway_bind_calls=%s passive_bind_calls=%s result=%s\n' \
+    "$direction" "$endpoint_local" "$gateway_local" "$active" "$active_success" "$endpoint_binds" "$gateway_binds" "$passive_binds" \
+    "$([ "$active_success" -ge 1 ] && [ "$passive_binds" -eq 0 ] && echo PASS || echo FAIL)" >> "$DIALER_DECISION_LOG"
+  [ "$active_success" -ge 1 ] && [ "$passive_binds" -eq 0 ]
+}
+
+assert_board_exit() { # <log>
+  grep -Eq "^D0_REMOTE_EXIT RUN_ID=$RUN_ID NONCE=$RUN_NONCE TAG=[A-Za-z0-9_]+ RC=0$" "$LOGDIR/$1"
 }
 
 assert_gateway_transport() { # <gateway log>
@@ -630,8 +672,9 @@ run_leg_pc_to_b() {
   assert_probe_sub d0_pc_to_b_board_sub.log board_b pc_to_b || bad=1
   assert_gateway_exact d0_pc_to_b_gateway.log pc_to_b || bad=1
   assert_gateway_transport d0_pc_to_b_gateway.log || bad=1
-  assert_dsoftbus_trace d0_pc_to_b_board_sub.log || bad=1
-  assert_dsoftbus_trace d0_pc_to_b_gateway.log || bad=1
+  assert_dsoftbus_leg d0_pc_to_b_board_sub.log d0_pc_to_b_gateway.log pc_to_b || bad=1
+  assert_board_exit d0_pc_to_b_board_sub.log || bad=1
+  assert_board_exit d0_pc_to_b_gateway.log || bad=1
   printf 'D0_LEG_RESULT direction=pc_to_b count=%s result=%s\n' "$COUNT" "$([ "$bad" -eq 0 ] && echo PASS || echo FAIL)" >> "$LOGDIR/domain0_machine_result.txt"
   [ "$bad" -eq 0 ]
 }
@@ -650,8 +693,9 @@ run_leg_b_to_pc() {
   assert_probe_pub d0_b_to_pc_board_pub.log board_b b_to_pc || bad=1
   assert_gateway_exact d0_b_to_pc_gateway.log b_to_pc || bad=1
   assert_gateway_transport d0_b_to_pc_gateway.log || bad=1
-  assert_dsoftbus_trace d0_b_to_pc_board_pub.log || bad=1
-  assert_dsoftbus_trace d0_b_to_pc_gateway.log || bad=1
+  assert_dsoftbus_leg d0_b_to_pc_board_pub.log d0_b_to_pc_gateway.log b_to_pc || bad=1
+  assert_board_exit d0_b_to_pc_board_pub.log || bad=1
+  assert_board_exit d0_b_to_pc_gateway.log || bad=1
   printf 'D0_LEG_RESULT direction=b_to_pc count=%s result=%s\n' "$COUNT" "$([ "$bad" -eq 0 ] && echo PASS || echo FAIL)" >> "$LOGDIR/domain0_machine_result.txt"
   [ "$bad" -eq 0 ]
 }
@@ -666,6 +710,7 @@ preflight_pc || exit 1
 verify_artifacts_and_helpers || exit 1
 
 : > "$LOGDIR/domain0_machine_result.txt"
+: > "$DIALER_DECISION_LOG"
 run_leg_pc_to_b || exit 1
 run_leg_b_to_pc || exit 1
 printf 'D0_DOMAIN0_SMOKE_RESULT run_id=%s nonce=%s topic=%s pc_to_b=PASS b_to_pc=PASS result=PASS\n' \

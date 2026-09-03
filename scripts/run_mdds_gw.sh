@@ -1947,11 +1947,16 @@ gw_iso_contract_valid() {
   if grep -Fq "$legacy_fwm" "$source_path" || \
      ! grep -Fq 'GW_ISO_POLICY_SNAPSHOT SHA256=' "$source_path" || \
      ! grep -Fq 'POLICY_SHA256=$policy_sha POLICY_FWMARK=$fwm' "$source_path" || \
+     ! grep -Fq 'GW_ISO_POLICY_RESTORE_COLLAPSED kind=rule' "$source_path" || \
      ! grep -Fq 'GW_ISO_POLICY_RESTORE_CONFLICT' "$source_path" || \
      ! grep -Fq 'GW_ISO_ROLLBACK_TIMER_ASSOCIATION_RESTORE_FAILED' "$source_path" || \
      ! grep -Fq 'GW_ISO_ROLLBACK_TIMER_POLICY_RESTORE_FAILED' "$source_path" || \
      ! grep -Fq 'GW_ISO_RESTORE_OK address=%s policy=RESTORED association=COMPLETED timer=%s' "$source_path"; then
     echo "GW_ISO_CONTRACT FAIL missing dynamic policy snapshot or safe rollback fence" >&2
+    bad=1
+  fi
+  if ! bash scripts/mdds_e2e/test_gw_iso_policy_restore.sh "$source_path"; then
+    echo "GW_ISO_CONTRACT FAIL policy restore self-test" >&2
     bad=1
   fi
   case "$defaults" in
@@ -2447,6 +2452,30 @@ gw_iso_ensure_rule() {
       return
       ;;
     *)
+      # OpenHarmony's network manager may recreate the exact snapshotted rule
+      # while this transaction is restoring it.  `ip rule` accepts duplicate
+      # entries, so converge exact-only duplicates to one.  A selector that
+      # contains even one non-exact rule remains an unknown conflict and is
+      # never deleted here.
+      if [ "$total" -ge 2 ] && [ "$total" = "$exact" ]; then
+        removed=0
+        while [ "$total" -gt 1 ] && [ "$removed" -lt 8 ]; do
+          ip -4 rule del "$@" || return 1
+          removed=$((removed + 1))
+          total=$(gw_iso_rule_count "$selector_re")
+          exact=$(gw_iso_rule_count "$exact_re")
+          if [ "$total" != "$exact" ]; then
+            printf "GW_ISO_POLICY_RESTORE_CONFLICT kind=rule_after_collapse total=%s exact=%s removed=%s\\n" "$total" "$exact" "$removed"
+            return 1
+          fi
+        done
+        if [ "$total:$exact" = 1:1 ]; then
+          printf "GW_ISO_POLICY_RESTORE_COLLAPSED kind=rule removed=%s\\n" "$removed"
+          return 0
+        fi
+        printf "GW_ISO_POLICY_RESTORE_CONFLICT kind=rule_nonconvergent total=%s exact=%s removed=%s\\n" "$total" "$exact" "$removed"
+        return 1
+      fi
       printf "GW_ISO_POLICY_RESTORE_CONFLICT kind=rule total=%s exact=%s\\n" "$total" "$exact"
       return 1
       ;;
@@ -2501,21 +2530,15 @@ gw_iso_policy_restore() {
     mark_total=$(gw_iso_rule_count "$mark_selector")
     mark_exact_count=$(gw_iso_rule_count "$mark_exact")
     case "$mark_total:$mark_exact_count" in
-      1:1) ;;
-      0:0) gw_iso_ensure_rule "$mark_exact" "$mark_selector" pref 16000 fwmark 0/0xffff iif lo table "$policy_table_wlan" || return 1 ;;
       1:0)
         [ "$(gw_iso_rule_count "$stale_mark")" = 1 ] || {
           printf "GW_ISO_POLICY_RESTORE_CONFLICT kind=stale_mark total=%s\\n" "$mark_total"
           return 1
         }
         ip -4 rule del pref 16000 fwmark 0/0xffff iif lo table 2003 || return 1
-        gw_iso_ensure_rule "$mark_exact" "$mark_selector" pref 16000 fwmark 0/0xffff iif lo table "$policy_table_wlan" || return 1
-        ;;
-      *)
-        printf "GW_ISO_POLICY_RESTORE_CONFLICT kind=mark total=%s exact=%s\\n" "$mark_total" "$mark_exact_count"
-        return 1
         ;;
     esac
+    gw_iso_ensure_rule "$mark_exact" "$mark_selector" pref 16000 fwmark 0/0xffff iif lo table "$policy_table_wlan" || return 1
     current=$(gw_iso_policy_hash_now 2>/dev/null || true)
     if [ "$current" = "$policy_sha" ]; then
       printf "GW_ISO_POLICY_RESTORE_OK sha=%s attempts=%s\\n" "$current" "$attempt"

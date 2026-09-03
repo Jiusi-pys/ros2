@@ -61,6 +61,7 @@ LOGDIR="$LOGROOT/$RUN_ID"
 REMOTE_LOGDIR="$DEVICE_DIR/mdds_gw_runs/$RUN_ID"
 REMOTE_OWNER="$REMOTE_LOGDIR/.mdds_run_owner"
 PC_OWNER_FILE="$LOGDIR/.mdds_pc_run_owner"
+DIALER_DECISION_LOG="$LOGDIR/dialer_decisions.txt"
 PC_WS=/c/pixi_ws
 PC_BAT_DIR="$(cygpath -w "$PWD/scripts/mdds_e2e/pc")"
 if [ "$GW_ISO_STATIC_VALIDATE" -eq 0 ]; then
@@ -1809,15 +1810,62 @@ assert_gateway_c2m_sustained_history() { # <gateway-log> <topic> <exact-forwarde
 # Backend-selection text proves intent, while this trace proves the selected
 # backend actually crossed the native DSoftBus Socket/Bytes API boundary.  The
 # DSoftBus implementation logs these calls only under MDDS_DEBUG=1, which this
-# runner pins for both the gateway and board-B RMW processes.
+# runner pins for both the gateway and board-B RMW processes. BindAsync is not
+# a per-endpoint requirement: the transport deterministically elects exactly
+# one active dialer from reciprocal networkId values, while the passive peer
+# must issue no BindAsync call.
 assert_dsoftbus_socket_bytes_trace() { # <local log basename>
   local log="$1"
   grep -Eq '\[mdds/dsoftbus\] Socket\(' "$LOGDIR/$log" && \
     grep -Eq '\[mdds/dsoftbus\] Listen\(fd=[0-9]+\)=0' "$LOGDIR/$log" && \
-    grep -Eq '\[mdds/dsoftbus\] BindAsync\(fd=[0-9]+ peer=.*\)=0' "$LOGDIR/$log" && \
     grep -Eq '\[mdds/dsoftbus\] OnBind\(fd=[0-9]+ peer=' "$LOGDIR/$log" && \
     grep -Eq '\[mdds/dsoftbus\] SendBytes\(fd=[0-9]+ len=[0-9]+\)=0' "$LOGDIR/$log" && \
     grep -Eq '\[mdds/dsoftbus\] OnBytes\(fd=[0-9]+ len=[1-9][0-9]* peer=' "$LOGDIR/$log"
+}
+
+onbind_peer_id() { # <local log basename>
+  grep -E '\[mdds/dsoftbus\] OnBind\(fd=[0-9]+ peer=[0-9A-Fa-f]{64}\)' "$LOGDIR/$1" | \
+    sed -n 's/.* peer=\([0-9A-Fa-f]\{64\}\)).*/\1/p' | tr 'A-F' 'a-f' | sort -u
+}
+
+assert_dsoftbus_single_dialer_leg() { # <endpoint log> <gateway log> <label>
+  local endpoint_log="$1" gateway_log="$2" label="$3"
+  local endpoint_peer gateway_peer endpoint_local gateway_local
+  local endpoint_binds gateway_binds active active_local active_peer active_success passive_binds result
+  assert_dsoftbus_socket_bytes_trace "$endpoint_log" && \
+    assert_dsoftbus_socket_bytes_trace "$gateway_log" || return 1
+  endpoint_peer="$(onbind_peer_id "$endpoint_log")"
+  gateway_peer="$(onbind_peer_id "$gateway_log")"
+  if ! [[ "$endpoint_peer" =~ ^[0-9a-f]{64}$ && "$gateway_peer" =~ ^[0-9a-f]{64}$ ]] || \
+     [ "$endpoint_peer" = "$gateway_peer" ]; then
+    printf 'GW_DIALER_DECISION label=%s endpoint_peer=%s gateway_peer=%s result=FAIL reason=non_reciprocal_onbind_identity\n' \
+      "$label" "${endpoint_peer:-MISSING}" "${gateway_peer:-MISSING}" >> "$DIALER_DECISION_LOG"
+    return 1
+  fi
+  # Each OnBind peer value is the other participant's local networkId.
+  endpoint_local="$gateway_peer"
+  gateway_local="$endpoint_peer"
+  endpoint_binds="$(grep -Ec '\[mdds/dsoftbus\] BindAsync\(' "$LOGDIR/$endpoint_log" || true)"
+  gateway_binds="$(grep -Ec '\[mdds/dsoftbus\] BindAsync\(' "$LOGDIR/$gateway_log" || true)"
+  if [[ "$endpoint_local" > "$gateway_local" ]]; then
+    active=endpoint
+    active_local="$endpoint_local"
+    active_peer="$gateway_local"
+    active_success="$(grep -Ec "\\[mdds/dsoftbus\\] BindAsync\\(fd=[0-9]+ peer=$active_peer\\)=0" "$LOGDIR/$endpoint_log" || true)"
+    passive_binds="$gateway_binds"
+  else
+    active=gateway
+    active_local="$gateway_local"
+    active_peer="$endpoint_local"
+    active_success="$(grep -Ec "\\[mdds/dsoftbus\\] BindAsync\\(fd=[0-9]+ peer=$active_peer\\)=0" "$LOGDIR/$gateway_log" || true)"
+    passive_binds="$endpoint_binds"
+  fi
+  result=FAIL
+  [ "$active_success" -ge 1 ] && [ "$passive_binds" -eq 0 ] && result=PASS
+  printf 'GW_DIALER_DECISION label=%s endpoint_local=%s gateway_local=%s active=%s active_local=%s active_peer=%s active_success=%s endpoint_bind_calls=%s gateway_bind_calls=%s passive_bind_calls=%s result=%s\n' \
+    "$label" "$endpoint_local" "$gateway_local" "$active" "$active_local" "$active_peer" \
+    "$active_success" "$endpoint_binds" "$gateway_binds" "$passive_binds" "$result" >> "$DIALER_DECISION_LOG"
+  [ "$result" = PASS ]
 }
 
 push_gw_files() {
@@ -2904,10 +2952,8 @@ assert_gw_iso_exact_b_to_pc() {
     || { echo "   GW-ISO Board-B publisher did not prove DSoftBus-only transport" >&2; bad=1; }
   assert_gateway_dsoftbus_only_log gwiso_gw.log \
     || { echo "   GW-ISO gateway did not prove DSoftBus-only transport" >&2; bad=1; }
-  assert_dsoftbus_socket_bytes_trace gwiso_b_pub.log \
-    || { echo "   GW-ISO Board-B publisher lacks DSoftBus Socket/Bytes trace" >&2; bad=1; }
-  assert_dsoftbus_socket_bytes_trace gwiso_gw.log \
-    || { echo "   GW-ISO gateway lacks DSoftBus Socket/Bytes trace" >&2; bad=1; }
+  assert_dsoftbus_single_dialer_leg gwiso_b_pub.log gwiso_gw.log gw_iso \
+    || { echo "   GW-ISO DSoftBus leg lacks reciprocal single-dialer Socket/Bytes evidence" >&2; bad=1; }
   [ "$bad" -eq 0 ]
 }
 
@@ -3448,8 +3494,7 @@ s_gw01() {
   assert_rmw_dsoftbus_only_log gw01_b_listener.log && \
     assert_gateway_dsoftbus_only_log gw01_gw.log && \
     assert_gateway_c2m_healthy gw01_gw.log "$GW_TOPIC_CHATTER" 15 && \
-    assert_dsoftbus_socket_bytes_trace gw01_b_listener.log && \
-    assert_dsoftbus_socket_bytes_trace gw01_gw.log || transport_ok=1
+    assert_dsoftbus_single_dialer_leg gw01_b_listener.log gw01_gw.log gw01 || transport_ok=1
   [ "$n" -ge 15 ] && [ "$transport_ok" -eq 0 ]
   verdict "GW-01" $? "PC->B over DSoftBus heard=$n (>=15), transport_only=$transport_ok"
 }
@@ -3469,8 +3514,7 @@ s_gw02() {
   assert_rmw_dsoftbus_only_log gw02_talker.log && \
     assert_gateway_dsoftbus_only_log gw02_gw.log && \
     assert_gateway_m2c_healthy gw02_gw.log "$GW_TOPIC_CHATTER" 15 2 && \
-    assert_dsoftbus_socket_bytes_trace gw02_talker.log && \
-    assert_dsoftbus_socket_bytes_trace gw02_gw.log || checks_failed=1
+    assert_dsoftbus_single_dialer_leg gw02_talker.log gw02_gw.log gw02 || checks_failed=1
   [ "$n" -ge 15 ] && [ "$checks_failed" -eq 0 ]
   verdict "GW-02" $? "B->PC heard=$n (>=15), checks_failed=$checks_failed"
 }
@@ -3506,8 +3550,7 @@ s_gw03() {
     assert_gateway_dsoftbus_only_log gw03_gw.log && \
     assert_gateway_c2m_healthy gw03_gw.log "$GW_TOPIC_CHATTER" 40 && \
     assert_gateway_m2c_healthy gw03_gw.log "$GW_TOPIC_CHATTER_BACK" 40 5 && \
-    assert_dsoftbus_socket_bytes_trace gw03_b_duplex.log && \
-    assert_dsoftbus_socket_bytes_trace gw03_gw.log
+    assert_dsoftbus_single_dialer_leg gw03_b_duplex.log gw03_gw.log gw03
   verdict "GW-03" $? "bidir: PC->B received=$n1, B->PC heard=$n2 dup=$d2"
 }
 
@@ -3565,8 +3608,8 @@ s_gw04() {
     || { echo "   gateway cyclone->mdds relay was not healthy for the 847-sample sweep"; bad=1; }
   assert_rmw_dsoftbus_only_log gw04_sub.log || { echo "   B subscriber did not prove DSoftBus-only transport"; bad=1; }
   assert_gateway_dsoftbus_only_log gw04_gw.log || { echo "   gateway did not prove DSoftBus-only transport"; bad=1; }
-  assert_dsoftbus_socket_bytes_trace gw04_sub.log || { echo "   B subscriber lacks DSoftBus Socket/Bytes trace"; bad=1; }
-  assert_dsoftbus_socket_bytes_trace gw04_gw.log || { echo "   gateway lacks DSoftBus Socket/Bytes trace"; bad=1; }
+  assert_dsoftbus_single_dialer_leg gw04_sub.log gw04_gw.log gw04 \
+    || { echo "   GW-04 DSoftBus leg lacks reciprocal single-dialer Socket/Bytes evidence"; bad=1; }
   verdict "GW-04" $bad "large msgs PC->B 1KB..4MB exact/reliable (gw04_sub.log)"
 }
 
@@ -3638,10 +3681,8 @@ s_gw09() {
     || { echo "   B subscriber did not prove DSoftBus-only transport"; bad=1; }
   assert_gateway_dsoftbus_only_log gw09_gw.log \
     || { echo "   gateway did not prove DSoftBus-only transport"; bad=1; }
-  assert_dsoftbus_socket_bytes_trace gw09_sub.log \
-    || { echo "   B subscriber lacks DSoftBus Socket/Bytes trace"; bad=1; }
-  assert_dsoftbus_socket_bytes_trace gw09_gw.log \
-    || { echo "   gateway lacks DSoftBus Socket/Bytes trace"; bad=1; }
+  assert_dsoftbus_single_dialer_leg gw09_sub.log gw09_gw.log gw09 \
+    || { echo "   GW-09 DSoftBus leg lacks reciprocal single-dialer Socket/Bytes evidence"; bad=1; }
   verdict "GW-09" $bad "PC->B C2M exact $GW09_COUNT/$GW09_COUNT; bounded ACK-reclaimed history"
 }
 
@@ -3732,8 +3773,7 @@ s_gw10() {
   assert_gateway_gw10_m2c_exact gw10_gw.log "$GW_TOPIC_BIDIR_B_TO_PC" "$GW10_COUNT" || bad=1
   assert_rmw_dsoftbus_only_log gw10_b_bidir.log || bad=1
   assert_gateway_dsoftbus_only_log gw10_gw.log || bad=1
-  assert_dsoftbus_socket_bytes_trace gw10_b_bidir.log || bad=1
-  assert_dsoftbus_socket_bytes_trace gw10_gw.log || bad=1
+  assert_dsoftbus_single_dialer_leg gw10_b_bidir.log gw10_gw.log gw10 || bad=1
   verdict "GW-10" "$bad" "simultaneous PC<->B exact ${GW10_COUNT}/${GW10_COUNT} each way; CRC/order/starvation=0"
 }
 
@@ -3796,10 +3836,8 @@ s_gw11() {
     || { echo "   missing exact durable nonzero gateway exit marker" >&2; bad=1; }
   assert_gateway_dsoftbus_only_log gw11_gw.log \
     || { echo "   gateway did not prove DSoftBus-only transport in GW-11" >&2; bad=1; }
-  assert_dsoftbus_socket_bytes_trace gw11_cap_probe.log \
-    || { echo "   raw MDDS cap probe lacks DSoftBus Socket/Bytes evidence" >&2; bad=1; }
-  assert_dsoftbus_socket_bytes_trace gw11_gw.log \
-    || { echo "   gateway lacks DSoftBus Socket/Bytes evidence in GW-11" >&2; bad=1; }
+  assert_dsoftbus_single_dialer_leg gw11_cap_probe.log gw11_gw.log gw11 \
+    || { echo "   GW-11 DSoftBus leg lacks reciprocal single-dialer Socket/Bytes evidence" >&2; bad=1; }
   verdict "GW-11" "$bad" "intentional C2M cap: retained=1024, 1025th rejected, durable gateway RC!=0"
 }
 
@@ -3927,8 +3965,7 @@ s_gw05() {
     assert_rmw_dsoftbus_only_log gw05_b_loop.log && \
     assert_gateway_dsoftbus_only_log gw05_gw.log && \
     assert_gateway_m2c_healthy gw05_gw.log "$GW_TOPIC_CHATTER" 30 4 && \
-    assert_dsoftbus_socket_bytes_trace gw05_b_loop.log && \
-    assert_dsoftbus_socket_bytes_trace gw05_gw.log
+    assert_dsoftbus_single_dialer_leg gw05_b_loop.log gw05_gw.log gw05
   verdict "GW-05" $? "single-participant loop suppression: exact 30/30, real gateway mdds->cyclone=30, no echo duplicate"
 }
 
@@ -3960,9 +3997,8 @@ s_gw06() {
     assert_gateway_dsoftbus_only_log gw06_gw2.log && \
     assert_gateway_c2m_healthy gw06_gw1.log "$GW_TOPIC_CHATTER" 5 && \
     assert_gateway_c2m_healthy gw06_gw2.log "$GW_TOPIC_CHATTER" 5 && \
-    assert_dsoftbus_socket_bytes_trace gw06_b_listener.log && \
-    assert_dsoftbus_socket_bytes_trace gw06_gw1.log && \
-    assert_dsoftbus_socket_bytes_trace gw06_gw2.log
+    assert_dsoftbus_single_dialer_leg gw06_b_listener.log gw06_gw1.log gw06_before_restart && \
+    assert_dsoftbus_single_dialer_leg gw06_b_listener.log gw06_gw2.log gw06_after_restart
   verdict "GW-06" $? "restart recovery: heard before=${n1:-0} after=$n2 dup_max=$d"
 }
 
@@ -3992,8 +4028,7 @@ s_gw07() {
     assert_rmw_dsoftbus_only_log gw07_b_talker.log && \
     assert_gateway_dsoftbus_only_log gw07_gw.log && \
     assert_gateway_m2c_healthy gw07_gw.log "$GW_TOPIC_CHATTER" 1 1 && \
-    assert_dsoftbus_socket_bytes_trace gw07_b_talker.log && \
-    assert_dsoftbus_socket_bytes_trace gw07_gw.log
+    assert_dsoftbus_single_dialer_leg gw07_b_talker.log gw07_gw.log gw07
   verdict "GW-07" $? "PC ros2 CLI topic echo --once /chatter via gateway"
 }
 
@@ -4019,8 +4054,7 @@ s_gw08() {
     assert_rmw_dsoftbus_only_log gw08_b_constant_pub.log && \
     assert_gateway_dsoftbus_only_log gw08_gw.log && \
     assert_gateway_m2c_healthy gw08_gw.log "$GW_TOPIC_CHATTER" 10 2 && \
-    assert_dsoftbus_socket_bytes_trace gw08_b_constant_pub.log && \
-    assert_dsoftbus_socket_bytes_trace gw08_gw.log
+    assert_dsoftbus_single_dialer_leg gw08_b_constant_pub.log gw08_gw.log gw08
   verdict "GW-08" $? "identical String(constant): received=$exact/10 total=$total"
 }
 

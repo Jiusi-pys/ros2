@@ -60,6 +60,24 @@ if [ ${#PKGS[@]} -eq 0 ]; then
         rcl_yaml_param_parser rcl rcl_action rcl_lifecycle rclcpp test_msgs)
 fi
 
+# A narrow caller (for example the independent FastDDS baseline gate) can
+# replay exactly one CTest registration.  It is deliberately an environment
+# contract rather than a positional argument, so existing package invocations
+# retain their exact meaning.  Do not accept a selector together with multiple
+# packages: that would make a missing selector look like an unrelated package
+# pass or failure.
+ONLY_TEST="${MDDS_BOARDTEST_ONLY_TEST:-}"
+if [[ -n "$ONLY_TEST" ]]; then
+  if ! [[ "$ONLY_TEST" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    echo "ERROR: MDDS_BOARDTEST_ONLY_TEST must be one safe exact CTest name" >&2
+    exit 2
+  fi
+  if [ ${#PKGS[@]} -ne 1 ]; then
+    echo "ERROR: MDDS_BOARDTEST_ONLY_TEST requires exactly one package" >&2
+    exit 2
+  fi
+fi
+
 declare -A REQUESTED_PACKAGE_NAMES=()
 for requested_pkg in "${PKGS[@]}"; do
   if ! [[ "$requested_pkg" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
@@ -151,8 +169,8 @@ if ! command -v sleep >/dev/null 2>&1; then
   echo "ERROR: host sleep command is required for hash-verified transfer readback" >&2
   exit 2
 fi
-if ! (umask 077; set -C; printf 'BOARDTEST_RUN_ID=%s\nBOARDTEST_BOARD=%s\nBOARDTEST_RUN_NONCE=%s\n' \
-  "$RUN_ID" "$BOARD" "$RUN_NONCE" > "$LOGDIR/run.txt") 2>/dev/null; then
+if ! (umask 077; set -C; printf 'BOARDTEST_RUN_ID=%s\nBOARDTEST_BOARD=%s\nBOARDTEST_RUN_NONCE=%s\nBOARDTEST_ONLY_TEST=%s\n' \
+  "$RUN_ID" "$BOARD" "$RUN_NONCE" "${ONLY_TEST:-ALL}" > "$LOGDIR/run.txt") 2>/dev/null; then
   echo "ERROR: cannot create immutable board run record $LOGDIR/run.txt" >&2
   exit 2
 fi
@@ -890,12 +908,16 @@ for pkg in "${PKGS[@]}"; do
   echo "== $pkg: ${#exes[@]} executables, ${#libs[@]} helper libs"
   # driver script replaying the ament test fixtures
   driver="build_ohos/$pkg/run_tests_board.sh"
-  if ! pixi run python scripts/_parse_ctest_env.py \
-    "$WS_ROOT/$dir/CTestTestfile.cmake" "$pkg" "$WS_ROOT" | tr -d '\r' > "$driver"; then
+  parser_args=("$WS_ROOT/$dir/CTestTestfile.cmake" "$pkg" "$WS_ROOT")
+  if [[ -n "$ONLY_TEST" ]]; then
+    parser_args+=(--only-test "$ONLY_TEST")
+  fi
+  if ! pixi run python scripts/_parse_ctest_env.py "${parser_args[@]}" | tr -d '\r' > "$driver"; then
     echo "ERROR: failed to generate board driver for $pkg" >&2
     driver_completion_fail=1
     break
   fi
+  printf 'BOARDTEST_SELECTION package=%s selector=%s\n' "$pkg" "${ONLY_TEST:-ALL}" | tee -a "$LOGDIR/run.txt"
 
   reset_ready_manifest
   package_root="$ROS2_HOME/tests/$pkg"
@@ -1046,14 +1068,24 @@ for pkg in "${PKGS[@]}"; do
     archive_ok=0
     archive_fail=1
   fi
+  package_verdict_count=0
+  selected_verdict_count=0
   while IFS= read -r line; do
     case "$line" in
       "BOARDTEST "*" PASS"*)
+        name="$(printf '%s' "$line" | awk '{print $2}')"
+        package_verdict_count=$((package_verdict_count+1))
+        [[ -z "$ONLY_TEST" || "$name" != "$ONLY_TEST" ]] || selected_verdict_count=$((selected_verdict_count+1))
         total_pass=$((total_pass+1)) ;;
       "BOARDTEST "*" SKIP"*)
+        name="$(printf '%s' "$line" | awk '{print $2}')"
+        package_verdict_count=$((package_verdict_count+1))
+        [[ -z "$ONLY_TEST" || "$name" != "$ONLY_TEST" ]] || selected_verdict_count=$((selected_verdict_count+1))
         total_skip=$((total_skip+1)) ;;
       BOARDTEST*FAIL*)
         name="$(printf '%s' "$line" | awk '{print $2}')"
+        package_verdict_count=$((package_verdict_count+1))
+        [[ -z "$ONLY_TEST" || "$name" != "$ONLY_TEST" ]] || selected_verdict_count=$((selected_verdict_count+1))
         if is_known_skip "$pkg/$name"; then
           total_skip=$((total_skip+1))
           echo "   SKIP(known) $pkg/$name"
@@ -1065,6 +1097,10 @@ for pkg in "${PKGS[@]}"; do
         ;;
     esac
   done <<< "$out"
+  if [[ -n "$ONLY_TEST" && ( "$package_verdict_count" -ne 1 || "$selected_verdict_count" -ne 1 ) ]]; then
+    echo "ERROR: selected CTest result is not exactly one matching BOARDTEST verdict for $pkg/$ONLY_TEST" >&2
+    driver_completion_fail=1
+  fi
   if [ "$terminal_record_ok" -ne 1 ] || [ "$terminal_rc_ok" -ne 1 ] || [ "$archive_ok" -ne 1 ]; then
     echo "ERROR: terminal/READY/archive provenance or terminal RC failed for $pkg; retaining activity lock and stopping later packages" >&2
     break

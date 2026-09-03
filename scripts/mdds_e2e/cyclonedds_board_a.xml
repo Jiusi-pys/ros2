@@ -18,6 +18,12 @@
            Send buffer left at default: wmem_max is only 256KB and cyclone
            fails domain creation when min is ungrantable. -->
       <SocketReceiveBufferSize min="16MB"/>
+      <!-- The gateway's Cyclone C2M reader has a 32-sample ResourceLimits
+           payload. Bound each incoming serialized sample as well, including
+           CDR envelope overhead above the 8 MiB GW sweep body. This is a
+           process-level safety ceiling; the reader's 32-sample limit remains
+           endpoint-local and enforces reliable backpressure. -->
+      <MaxSampleSize>9437184 B</MaxSampleSize>
     </Internal>
     <Discovery>
       <Peers>

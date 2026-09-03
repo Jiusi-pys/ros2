@@ -26,17 +26,22 @@
 #          real DSoftBus calls Socket/Listen/BindAsync/OnBind/SendBytes/OnBytes
 #   DS-07  board A -> board B DSoftBus-only fragmentation sweep: 1 KiB through
 #          8 MiB, exact per-size count with lost/reorder/crc all zero
+#   DS-08  launcher pending-cleanup fault injection: a pre-exec record-write
+#          failure must never run a payload, and a valid remote PID:start
+#          record hidden from every launch read must still be identity-fenced
+#          and stopped during pending cleanup
 #
 # Cleanup kills ONLY the exact PIDs recorded by this run (boards: a persistent
 # run-scoped pid:start record written before the best-effort REMOTE_PID token;
 # PC: an owned cmd.exe PID and its child tree). No pkill -f, command-line PID
 # scanning, or taskkill /IM.
 #
-#   ./scripts/run_mdds_dsb.sh [ds01 ... ds07 | ds03_ack_burst | all]
+#   ./scripts/run_mdds_dsb.sh [ds01 ... ds08 | ds03_ack_burst | all]
 #
-# `all` includes DS-03-ACK-BURST.  It remains a directed regression rather
-# than one of the normative DS-01..07 identifiers, but a final "all" run may
-# not silently omit the ACK-fence proof.
+# `all` includes DS-03-ACK-BURST and DS-08.  The ACK-burst remains a directed
+# regression rather than one of the normative DS-01..08 identifiers, but a
+# final "all" run may not silently omit either its ACK-fence proof or the
+# pending-cleanup fault boundary.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 source "$PWD/scripts/lib/mdds_msys_env.sh" || {
@@ -283,6 +288,14 @@ PC_START_TICKS=""  # Windows FILETIME UTC; fences PID reuse during cleanup
 PC_RECORD_FILE=""
 REMOTE_RECORD_READ_ATTEMPTS=0
 PC_RECORD_READ_ATTEMPTS=0
+# The normal transcript paths remain stable for existing gates.  DS-08 replaces
+# them temporarily with fresh, run-local transcripts so its injected evidence
+# cannot be satisfied by an earlier scenario's appended line.
+LAUNCH_FAULT_LOG="$LOGDIR/launch_fault_injection.txt"
+PENDING_CLEANUP_LOG="$LOGDIR/pending_cleanup_records.txt"
+# Non-empty only after DS-08 has created its assertion transcript.  The EXIT
+# handler appends the final activity-lock release outcome to this same evidence.
+DS08_ASSERTIONS_LOG=""
 
 parse_pid_token() { # stdin -> one REMOTE_PID=pid:start token, if any
   tr -d '\r' | sed -n 's/.*REMOTE_PID=\([0-9][0-9]*:[0-9][0-9]*\).*/\1/p' | head -1
@@ -315,13 +328,13 @@ read_remote_pid_record() { # <board> <record-path>; print verified pid:start aft
     REMOTE_RECORD_READ_ATTEMPTS=$((REMOTE_RECORD_READ_ATTEMPTS + 1))
     if [ "$DROP_ALL_RECORD_READS" = 1 ]; then
       printf 'event=inject-drop-all-remote-record-reads board=%s record=%s attempt=%s\n' \
-        "$board" "$record_path" "$attempt" >> "$LOGDIR/launch_fault_injection.txt"
+        "$board" "$record_path" "$attempt" >> "$LAUNCH_FAULT_LOG"
       sleep 1
       continue
     fi
     if [ "$DROP_FIRST_RECORD_READ" = 1 ] && [ "$REMOTE_RECORD_READ_ATTEMPTS" -eq 1 ]; then
       printf 'event=inject-drop-first-remote-record-read board=%s record=%s\n' "$board" "$record_path" \
-        >> "$LOGDIR/launch_fault_injection.txt"
+        >> "$LAUNCH_FAULT_LOG"
       sleep 1
       continue
     fi
@@ -411,7 +424,7 @@ launch() { # launch <board> <env-prefix> <cmd> <log>; remote pid -> $LAST_PID
     echo "   ERROR: no signed persistent launch record for [$3] (terminal=${terminal:-unresolved}); hdc output: $(echo "$out" | tr -d '\r' | head -3)" >&2
     return 1
   fi
-  printf 'board=%s run_id=%s nonce=%s pid=%s start=%s source=%s remote_record=%s intent=%s log=%s\\n' \
+  printf 'board=%s run_id=%s nonce=%s pid=%s start=%s source=%s remote_record=%s intent=%s log=%s\n' \
     "$1" "$RUN_ID" "$RUN_NONCE" "$pid" "$start" "$record_source" "$record_path" "$intent_path" "$4" \
     >> "$LOGDIR/launch_records.txt"
   if [ "$record_source" = remote-record ]; then
@@ -430,8 +443,8 @@ cleanup_pending_launch_record() { # <board> <remote-record-path>
   # A missing record is never success by itself: only a guard-written,
   # signed pre-exec terminal status proves no payload can still appear.
   out=$(shell "$board" "intent='MDDS_LAUNCH_INTENT RUN_ID=$RUN_ID NONCE=$RUN_NONCE'; cancel='MDDS_LAUNCH_CANCEL RUN_ID=$RUN_ID NONCE=$RUN_NONCE'; if ! grep -Fqx \"\$intent\" '$intent_path' 2>/dev/null; then echo PENDING_INTENT_INVALID; exit 2; fi; if test -e '$cancel_path' && ! grep -Fqx \"\$cancel\" '$cancel_path'; then echo PENDING_CANCEL_CONFLICT; exit 3; fi; if ! printf '%s\\n' \"\$cancel\" > '$cancel_path' || ! grep -Fqx \"\$cancel\" '$cancel_path'; then echo PENDING_CANCEL_WRITE_FAILED; exit 4; fi; i=0; while [ \$i -lt 10 ]; do if test -f '$record_path'; then record=\$(tr -d '\\r\\n' < '$record_path' 2>/dev/null); prefix='MDDS_LAUNCH_RECORD RUN_ID=$RUN_ID NONCE=$RUN_NONCE PID='; case \"\$record\" in \"\$prefix\"*) rest=\${record#\"\$prefix\"}; pid=\${rest%% START=*}; start=\${rest#* START=} ;; *) echo PENDING_RECORD_INVALID; exit 5 ;; esac; case \"\$pid\" in ''|*[!0-9]*) echo PENDING_RECORD_INVALID; exit 5 ;; esac; case \"\$start\" in ''|*[!0-9]*) echo PENDING_RECORD_INVALID; exit 5 ;; esac; if test ! -r /proc/\$pid/stat; then echo PENDING_RECORD_GONE; exit 0; fi; current=\$(cut -d ' ' -f22 /proc/\$pid/stat); state=\$(cut -d ' ' -f3 /proc/\$pid/stat); if [ \"\$current\" != \"\$start\" ]; then echo PENDING_RECORD_REUSED; exit 6; fi; if [ \"\$state\" = Z ]; then echo PENDING_RECORD_GONE; exit 0; fi; kill \"\$pid\" 2>/dev/null || { echo PENDING_RECORD_SIGNAL_FAILED; exit 7; }; sleep 2; if test ! -r /proc/\$pid/stat || [ \"\$(cut -d ' ' -f3 /proc/\$pid/stat)\" = Z ]; then echo PENDING_RECORD_STOPPED; exit 0; fi; kill -9 \"\$pid\" 2>/dev/null || { echo PENDING_RECORD_SIGNAL_FAILED; exit 7; }; sleep 1; if test ! -r /proc/\$pid/stat || [ \"\$(cut -d ' ' -f3 /proc/\$pid/stat)\" = Z ]; then echo PENDING_RECORD_STOPPED; exit 0; fi; echo PENDING_RECORD_LIVE; exit 8; fi; if test -f '$status_path'; then status=\$(tr -d '\\r\\n' < '$status_path'); case \"\$status\" in 'MDDS_LAUNCH_STATUS RUN_ID=$RUN_ID NONCE=$RUN_NONCE STATE=CANCELLED_PREEXEC') echo PENDING_RECORD_CANCELLED_PREEXEC; exit 0 ;; 'MDDS_LAUNCH_STATUS RUN_ID=$RUN_ID NONCE=$RUN_NONCE STATE=RECORD_WRITE_FAILED') echo PENDING_RECORD_WRITE_FAILED_PREEXEC; exit 0 ;; 'MDDS_LAUNCH_STATUS RUN_ID=$RUN_ID NONCE=$RUN_NONCE STATE=INTENT_INVALID') echo PENDING_RECORD_INTENT_INVALID_PREEXEC; exit 0 ;; *) echo PENDING_STATUS_INVALID; exit 5 ;; esac; fi; i=\$((i+1)); sleep 1; done; echo PENDING_RECORD_UNRESOLVED; exit 9" || true)
-  printf 'board=%s remote_record=%s result=%s\\n' "$board" "$record_path" \
-    "$(printf '%s' "$out" | tr -d '\r\n')" >> "$LOGDIR/pending_cleanup_records.txt"
+  printf 'board=%s remote_record=%s result=%s\n' "$board" "$record_path" \
+    "$(printf '%s' "$out" | tr -d '\r\n')" >> "$PENDING_CLEANUP_LOG"
   case "$out" in
     *PENDING_RECORD_GONE*|*PENDING_RECORD_STOPPED*|*PENDING_RECORD_CANCELLED_PREEXEC*|*PENDING_RECORD_WRITE_FAILED_PREEXEC*|*PENDING_RECORD_INTENT_INVALID_PREEXEC*)
       return 0 ;;
@@ -578,7 +591,7 @@ read_pc_pid_record() { # <record-file>; print verified guard pid:start after bou
     PC_RECORD_READ_ATTEMPTS=$((PC_RECORD_READ_ATTEMPTS + 1))
     if [ "$DROP_FIRST_RECORD_READ" = 1 ] && [ "$PC_RECORD_READ_ATTEMPTS" -eq 1 ]; then
       printf 'event=inject-drop-first-pc-record-read record=%s\n' "$record_file" \
-        >> "$LOGDIR/launch_fault_injection.txt"
+        >> "$LAUNCH_FAULT_LOG"
       sleep 1
       continue
     fi
@@ -761,7 +774,7 @@ pc_cleanup_pending_record() {
   ' 2>&1 || true)
   unset MDDS_PC_RECORD MDDS_PC_CANCEL MDDS_PC_STATUS MDDS_PC_INTENT
   printf 'local_record=%s result=%s\n' "$record_file" \
-    "$(printf '%s' "$out" | tr -d '\r\n')" >> "$LOGDIR/pending_cleanup_records.txt"
+    "$(printf '%s' "$out" | tr -d '\r\n')" >> "$PENDING_CLEANUP_LOG"
   case "$out" in
     *PENDING_PC_RECORD_GONE*|*PENDING_PC_RECORD_STOPPED*|*PENDING_PC_RECORD_CANCELLED_PREEXEC*|*PENDING_PC_RECORD_WRITE_FAILED_PREEXEC*|*PENDING_PC_RECORD_INTENT_INVALID_PREEXEC*)
       PENDING_PC_RECORD=""
@@ -1055,10 +1068,14 @@ push_dsb_files() {
 verify_final_artifacts() {
   local local_path name board remote want got
   : > "$LOGDIR/artifact_hashes.txt"
-  for name in libmdds.so librmw_mdds.so ohos_dsoftbus.env mdds_gateway; do
+  for name in libmdds.so librmw_mdds.so librmw_cyclonedds_cpp.so ohos_dsoftbus.env mdds_gateway; do
     case "$name" in
       libmdds.so) local_path="install_ohos/lib/libmdds.so"; remote="$DEVICE_DIR/lib/libmdds.so" ;;
       librmw_mdds.so) local_path="install_ohos/lib/librmw_mdds.so"; remote="$DEVICE_DIR/lib/librmw_mdds.so" ;;
+      librmw_cyclonedds_cpp.so)
+        local_path="install_ohos/lib/librmw_cyclonedds_cpp.so"
+        remote="$DEVICE_DIR/lib/librmw_cyclonedds_cpp.so"
+        ;;
       ohos_dsoftbus.env)
         local_path="install_ohos/share/rmw_mdds/config/ohos_dsoftbus.env"
         remote="$DEVICE_DIR/share/rmw_mdds/config/ohos_dsoftbus.env"
@@ -1070,8 +1087,8 @@ verify_final_artifacts() {
       return 1
     fi
     want=$(sha256_local "$local_path")
-    # Gateway is not a board-B test dependency; libraries are.
-    for board in "$BOARD_A" $([ "$name" = mdds_gateway ] || echo "$BOARD_B"); do
+    # Gateway and its Cyclone-specific RMW are not board-B test dependencies.
+    for board in "$BOARD_A" $([ "$name" = mdds_gateway ] || [ "$name" = librmw_cyclonedds_cpp.so ] || echo "$BOARD_B"); do
       got=$(sha256_remote "$board" "$remote")
       printf '%s board=%s local=%s remote=%s\n' "$name" "$board" "$want" "${got:-MISSING}" \
         | tee -a "$LOGDIR/artifact_hashes.txt"
@@ -1515,6 +1532,142 @@ s_ds07() {
   verdict "DS-07" $bad "A->B DSoftBus DATA_FRAG exact 1KiB-8MiB (ds07_sub.log)"
 }
 
+s_ds08() {
+  # The launcher is the only entity that can authoritatively associate a
+  # remote payload with this run.  Exercise both sides of its pending-record
+  # contract without invoking ROS or a broad process search:
+  #
+  #  A) a guard that cannot persist its PID:start record must prove it never
+  #     execs the marker payload, then be retired through its signed pre-exec
+  #     status;
+  #  B) a guard that DID persist a valid record but whose host-side identity
+  #     recovery reads and stdout token are deliberately unavailable must
+  #     remain pending and be stopped only after cleanup verifies that exact
+  #     PID and proc-start tuple.
+  cleanup_dsb || return 1
+  local bad=0 saved_fail="$FAIL_LAUNCH_RECORD_WRITE"
+  local saved_drop_all="$DROP_ALL_RECORD_READS"
+  local saved_drop_first="$DROP_FIRST_RECORD_READ"
+  local saved_suppress="$SUPPRESS_LAUNCH_TOKEN"
+  local saved_fault_log="$LAUNCH_FAULT_LOG"
+  local saved_pending_cleanup_log="$PENDING_CLEANUP_LOG"
+  local saved_ds08_assertions_log="$DS08_ASSERTIONS_LOG"
+  local write_fail_marker="$REMOTE_LOGDIR/ds08a_payload_ran"
+  local write_fail_record="$REMOTE_LOGDIR/launch/ds08a_payload.log.$RUN_NONCE.pid"
+  local expected_record="$REMOTE_LOGDIR/launch/ds08b_payload.log.$RUN_NONCE.pid"
+  local attempt expected_fault_line
+  DS08_ASSERTIONS_LOG="$LOGDIR/ds08_assertions.txt"
+  LAUNCH_FAULT_LOG="$LOGDIR/ds08_fault_injection.txt"
+  PENDING_CLEANUP_LOG="$LOGDIR/ds08_pending_cleanup_records.txt"
+  if ! : > "$DS08_ASSERTIONS_LOG" || ! : > "$LAUNCH_FAULT_LOG" || ! : > "$PENDING_CLEANUP_LOG"; then
+    echo "ERROR: cannot create fresh DS-08 evidence transcripts" >&2
+    LAUNCH_FAULT_LOG="$saved_fault_log"
+    PENDING_CLEANUP_LOG="$saved_pending_cleanup_log"
+    DS08_ASSERTIONS_LOG="$saved_ds08_assertions_log"
+    return 1
+  fi
+
+  # DS-08A: the status path is the only safe proof of a pre-exec record-write
+  # fault.  The marker would exist if the guard ever reached the payload.
+  FAIL_LAUNCH_RECORD_WRITE=1
+  DROP_ALL_RECORD_READS=0
+  DROP_FIRST_RECORD_READ=0
+  SUPPRESS_LAUNCH_TOKEN=0
+  export MDDS_TEST_FAIL_LAUNCH_RECORD_WRITE="$FAIL_LAUNCH_RECORD_WRITE"
+  export MDDS_TEST_DROP_ALL_RECORD_READS="$DROP_ALL_RECORD_READS"
+  export MDDS_TEST_DROP_FIRST_RECORD_READ="$DROP_FIRST_RECORD_READ"
+  export MDDS_TEST_SUPPRESS_LAUNCH_TOKEN="$SUPPRESS_LAUNCH_TOKEN"
+  if launch "$BOARD_A" "" "touch $write_fail_marker" ds08a_payload.log; then
+    echo "DS08A unexpected-launch-success" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  else
+    echo "DS08A launch-rejected-as-expected" | tee -a "$DS08_ASSERTIONS_LOG"
+  fi
+  if ! cleanup_pending_launch_records; then
+    echo "DS08A pending-cleanup-failed" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  fi
+  if [ "$(grep -Fxc "board=$BOARD_A remote_record=$write_fail_record result=PENDING_RECORD_WRITE_FAILED_PREEXEC" "$PENDING_CLEANUP_LOG" 2>/dev/null || true)" -ne 1 ]; then
+    echo "DS08A missing-exact-preexec-status" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  fi
+  if [[ "$(shell "$BOARD_A" "if test ! -e '$write_fail_marker'; then echo DS08A_PAYLOAD_ABSENT; else echo DS08A_PAYLOAD_RAN; fi" | tr -d '\r\n')" != "DS08A_PAYLOAD_ABSENT" ]]; then
+    echo "DS08A payload-ran-after-record-write-failure" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  else
+    echo "DS08A payload-absent" | tee -a "$DS08_ASSERTIONS_LOG"
+  fi
+
+  # DS-08B: hide stdout and every host-side persistent-record read.  The
+  # sleeper remains live until cleanup discovers the record itself, validates
+  # PID:start, and stops that exact process.
+  FAIL_LAUNCH_RECORD_WRITE=0
+  DROP_ALL_RECORD_READS=1
+  DROP_FIRST_RECORD_READ=0
+  SUPPRESS_LAUNCH_TOKEN=1
+  export MDDS_TEST_FAIL_LAUNCH_RECORD_WRITE="$FAIL_LAUNCH_RECORD_WRITE"
+  export MDDS_TEST_DROP_ALL_RECORD_READS="$DROP_ALL_RECORD_READS"
+  export MDDS_TEST_DROP_FIRST_RECORD_READ="$DROP_FIRST_RECORD_READ"
+  export MDDS_TEST_SUPPRESS_LAUNCH_TOKEN="$SUPPRESS_LAUNCH_TOKEN"
+  if launch "$BOARD_B" "" "sleep 120" ds08b_payload.log; then
+    echo "DS08B unexpected-launch-success" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  else
+    echo "DS08B launch-read-loss-as-expected" | tee -a "$DS08_ASSERTIONS_LOG"
+  fi
+  for attempt in 1 2 3; do
+    expected_fault_line="event=inject-drop-all-remote-record-reads board=$BOARD_B record=$expected_record attempt=$attempt"
+    if [ "$(grep -Fxc "$expected_fault_line" "$LAUNCH_FAULT_LOG" 2>/dev/null || true)" -ne 1 ]; then
+      echo "DS08B missing-exact-dropped-record-read attempt=$attempt" | tee -a "$DS08_ASSERTIONS_LOG"
+      bad=1
+    fi
+  done
+  if [ "$(grep -Fc "event=inject-drop-all-remote-record-reads board=$BOARD_B record=$expected_record" "$LAUNCH_FAULT_LOG" 2>/dev/null || true)" -ne 3 ]; then
+    echo "DS08B unexpected-dropped-record-read-count" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  fi
+  if ! cleanup_pending_launch_records; then
+    echo "DS08B pending-cleanup-failed" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  fi
+  if [ "$(grep -Fxc "board=$BOARD_B remote_record=$expected_record result=PENDING_RECORD_STOPPED" "$PENDING_CLEANUP_LOG" 2>/dev/null || true)" -ne 1 ]; then
+    echo "DS08B missing-exact-identity-fenced-stop" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  else
+    echo "DS08B identity-fenced-stop" | tee -a "$DS08_ASSERTIONS_LOG"
+  fi
+  # This must be empty after each directed subcase.  Leaving a record here
+  # would make the EXIT trap retain the activity locks rather than claiming a
+  # clean gate completion.
+  if [ -n "$PENDING_LAUNCH_RECORDS" ] || [ -n "$TRACKED" ]; then
+    echo "DS08 residual-owned-records" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  fi
+  if [[ " ${ACTIVITY_LOCKED_BOARDS[*]} " != *" $BOARD_A "* || " ${ACTIVITY_LOCKED_BOARDS[*]} " != *" $BOARD_B "* ]]; then
+    echo "DS08 missing-owned-activity-lock" | tee -a "$DS08_ASSERTIONS_LOG"
+    bad=1
+  else
+    # Do not release and reacquire here: another scenario may follow DS-08.
+    # The EXIT handler owns the one final release transaction and appends its
+    # PASS/FAIL result below, preserving the lock across the whole invocation.
+    echo "DS08 activity-lock-release=DEFERRED_TO_EXIT_TRAP" | tee -a "$DS08_ASSERTIONS_LOG"
+  fi
+  grep -Eq 'PENDING_(INTENT_INVALID|CANCEL_CONFLICT|CANCEL_WRITE_FAILED|STATUS_INVALID|RECORD_INVALID|RECORD_REUSED|RECORD_SIGNAL_FAILED|RECORD_LIVE|RECORD_UNRESOLVED)' \
+    "$PENDING_CLEANUP_LOG" \
+    && { echo "DS08 unsafe-pending-cleanup-result" | tee -a "$DS08_ASSERTIONS_LOG"; bad=1; }
+  FAIL_LAUNCH_RECORD_WRITE="$saved_fail"
+  DROP_ALL_RECORD_READS="$saved_drop_all"
+  DROP_FIRST_RECORD_READ="$saved_drop_first"
+  SUPPRESS_LAUNCH_TOKEN="$saved_suppress"
+  export MDDS_TEST_FAIL_LAUNCH_RECORD_WRITE="$FAIL_LAUNCH_RECORD_WRITE"
+  export MDDS_TEST_DROP_ALL_RECORD_READS="$DROP_ALL_RECORD_READS"
+  export MDDS_TEST_DROP_FIRST_RECORD_READ="$DROP_FIRST_RECORD_READ"
+  export MDDS_TEST_SUPPRESS_LAUNCH_TOKEN="$SUPPRESS_LAUNCH_TOKEN"
+  LAUNCH_FAULT_LOG="$saved_fault_log"
+  PENDING_CLEANUP_LOG="$saved_pending_cleanup_log"
+  verdict "DS-08" $bad "pending launch cleanup: preexec write failure + hidden valid PID:start record"
+}
+
 # --- main --------------------------------------------------------------------
 
 cleanup_dsb() {
@@ -1526,6 +1679,11 @@ cleanup_dsb() {
   return "$rc"
 }
 
+record_ds08_lock_release() { # <PASS|FAIL|NOT_ATTEMPTED_*>
+  [ -n "$DS08_ASSERTIONS_LOG" ] || return 0
+  printf 'DS08 activity-lock-release=%s\n' "$1" >> "$DS08_ASSERTIONS_LOG"
+}
+
 on_dsb_exit() {
   local rc=$? cleanup_ok=1
   trap - EXIT
@@ -1534,10 +1692,21 @@ on_dsb_exit() {
     echo "ERROR: DSoftBus gate cleanup was incomplete; retained identity records prevent an unsafe kill" >&2
     cleanup_ok=0
     rc=1
+    if ! record_ds08_lock_release NOT_ATTEMPTED_CLEANUP_FAILED; then
+      echo "ERROR: cannot record DS-08 activity-lock cleanup failure" >&2
+      rc=1
+    fi
   fi
   if (( cleanup_ok == 1 )); then
     if ! release_activity_locks; then
       echo "ERROR: DSoftBus activity-lock cleanup was incomplete; a fail-closed lock remains" >&2
+      rc=1
+      if ! record_ds08_lock_release FAIL; then
+        echo "ERROR: cannot record DS-08 activity-lock release failure" >&2
+        rc=1
+      fi
+    elif ! record_ds08_lock_release PASS; then
+      echo "ERROR: cannot record DS-08 activity-lock release success" >&2
       rc=1
     fi
   else
@@ -1553,6 +1722,9 @@ on_dsb_signal() {
   if ! cleanup_dsb; then
     echo "ERROR: cleanup after signal was incomplete; records were retained" >&2
     cleanup_ok=0
+  fi
+  if ! record_ds08_lock_release NOT_ATTEMPTED_SIGNAL; then
+    echo "ERROR: cannot record DS-08 signal-path activity-lock outcome" >&2
   fi
   if (( cleanup_ok == 1 )); then
     echo "ERROR: retaining DSoftBus activity locks after signal despite successful cleanup; explicit operator recovery is required" >&2
@@ -1571,7 +1743,7 @@ if [ $# -eq 0 ] || [ "$1" = all ]; then
   # Keep the normative suite and the directed ACK-fence regression together in
   # the default final invocation.  Reports still identify the latter
   # separately as DS-03-ACK-BURST rather than relabeling DS-01..07.
-  set -- ds01 ds02 ds03 ds03_ack_burst ds04 ds05 ds06 ds07
+  set -- ds01 ds02 ds03 ds03_ack_burst ds04 ds05 ds06 ds07 ds08
 fi
 REQUESTED_SCENARIOS=" $* "
 # DS-03 hands a leading-slash ROS topic from Git Bash through native

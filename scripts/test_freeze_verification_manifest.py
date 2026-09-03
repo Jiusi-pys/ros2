@@ -83,6 +83,7 @@ class GitStabilityTests(unittest.TestCase):
         ros2 = make_repo(self.root, "ros2")
         mdds = make_repo(self.root, "mdds")
         rmw_mdds = make_repo(self.root, "rmw_mdds")
+        rmw_cyclonedds = make_repo(self.root, "rmw_cyclonedds")
         inputs = self.root / "inputs"
         logs = self.root / "logs"
         artifacts = self.root / "artifacts"
@@ -116,6 +117,7 @@ class GitStabilityTests(unittest.TestCase):
         artifact_paths = {
             "libmdds": artifacts / "libmdds.so",
             "librmw_mdds": artifacts / "librmw_mdds.so",
+            "librmw_cyclonedds_cpp": artifacts / "librmw_cyclonedds_cpp.so",
             "mdds_gateway": artifacts / "mdds_gateway",
         }
         for artifact in artifact_paths.values():
@@ -129,6 +131,7 @@ class GitStabilityTests(unittest.TestCase):
             "--repo", f"ros2={ros2}",
             "--repo", f"mdds={mdds}",
             "--repo", f"rmw_mdds={rmw_mdds}",
+            "--repo", f"rmw_cyclonedds={rmw_cyclonedds}",
             "--gateway-profile", str(profile),
         ]
         for name in sorted(evidence_inputs):
@@ -183,6 +186,41 @@ class GitStabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "untracked_inventory"):
             freezer.assert_git_state_stable("mdds", before, after)
 
+    def test_bundle_verification_rejects_a_different_requested_head(self) -> None:
+        first_head = freezer.git_object_id(
+            freezer.run(["git", "rev-parse", "HEAD"], self.repo),
+            "first test head",
+        )
+        bundle_out = self.root / "bundle-out"
+        (bundle_out / "source" / "mdds").mkdir(parents=True)
+        bundle = freezer.create_and_verify_git_bundle("mdds", self.repo, bundle_out, first_head)
+        (self.repo / "tracked.txt").write_text("second commit\n", encoding="utf-8")
+        git(self.repo, "add", "tracked.txt")
+        git(self.repo, "commit", "-m", "second")
+        second_head = freezer.git_object_id(
+            freezer.run(["git", "rev-parse", "HEAD"], self.repo),
+            "second test head",
+        )
+        second_tree = freezer.git_object_id(
+            freezer.run(["git", "rev-parse", f"{second_head}^{{tree}}"], self.repo),
+            "second test tree",
+        )
+        second_commit_graph = freezer.run(
+            ["git", "rev-list", "--topo-order", "--parents", second_head],
+            self.repo,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "does not advertise requested HEAD"):
+            freezer.verify_git_bundle(
+                "mdds",
+                bundle_out / Path(bundle["path"]),
+                second_head,
+                second_tree,
+                freezer.sha256_bytes(second_commit_graph),
+                len(second_commit_graph.splitlines()),
+                bundle["advertised_refs"],
+            )
+
     def test_main_seals_unchanged_repositories(self) -> None:
         argv, out, _ = self.make_collection_fixture()
         with (
@@ -200,12 +238,101 @@ class GitStabilityTests(unittest.TestCase):
         stability = manifest["repository_stability"]
         self.assertEqual(stability["result"], "PER_REPOSITORY_SEQUENTIAL_RECHECK_MATCHED")
         self.assertEqual(stability["scope"], "per-repository")
-        self.assertEqual(stability["capture_order"], ["mdds", "rmw_mdds", "ros2"])
-        self.assertEqual(stability["recheck_order"], ["mdds", "rmw_mdds", "ros2"])
+        self.assertEqual(stability["capture_order"], ["mdds", "rmw_cyclonedds", "rmw_mdds", "ros2"])
+        self.assertEqual(stability["recheck_order"], ["mdds", "rmw_cyclonedds", "rmw_mdds", "ros2"])
         self.assertFalse(stability["cross_repository_snapshot_atomic"])
         self.assertFalse(stability["cross_repository_write_lock_held"])
         self.assertIn("No cross-repository write lock was held", stability["warning"])
+        repositories = {record["name"]: record for record in manifest["repositories"]}
+        self.assertEqual(set(repositories), freezer.REQUIRED_REPOSITORIES)
+        copied_artifacts = {record["name"]: record for record in manifest["copied"]["artifacts"]}
+        self.assertEqual(set(copied_artifacts), freezer.REQUIRED_ARTIFACTS)
+        for name, basename in freezer.REQUIRED_ARTIFACT_BASENAMES.items():
+            self.assertEqual(Path(copied_artifacts[name]["copied"]).name, basename)
+        for name, record in repositories.items():
+            bundle = record["git_bundle"]
+            bundle_path = out / Path(bundle["path"])
+            self.assertTrue(bundle_path.is_file())
+            self.assertEqual(bundle["sha256"], freezer.sha256_file(bundle_path))
+            verification = bundle["verification"]
+            self.assertEqual(
+                verification["result"],
+                "FRESH_BARE_REPOSITORY_FETCHED_EXACT_HEAD_AND_TREE",
+            )
+            self.assertEqual(verification["expected_head"], record["head"])
+            self.assertEqual(verification["fetched_head"], record["head"])
+            self.assertEqual(verification["fetched_tree"], verification["expected_tree"])
+            self.assertEqual(
+                verification["fetched_reachable_commit_graph_sha256"],
+                verification["expected_reachable_commit_graph_sha256"],
+            )
+            # Re-run the verification from the sealed bundle to ensure a fresh
+            # repository can still fetch/read back the requested source state.
+            self.assertEqual(
+                freezer.verify_git_bundle(
+                    name,
+                    bundle_path,
+                    verification["expected_head"],
+                    verification["expected_tree"],
+                    verification["expected_reachable_commit_graph_sha256"],
+                    verification["reachable_commit_count"],
+                    bundle["advertised_refs"],
+                )["result"],
+                "FRESH_BARE_REPOSITORY_FETCHED_EXACT_HEAD_AND_TREE",
+            )
         self.assertTrue((out.parent / f"{out.name}.tar").is_file())
+
+    def test_main_rejects_missing_required_repository_or_artifact(self) -> None:
+        argv, _, _ = self.make_collection_fixture()
+        for option, required_names in (
+            ("--repo", freezer.REQUIRED_REPOSITORIES),
+            ("--artifact", freezer.REQUIRED_ARTIFACTS),
+        ):
+            for missing_name in sorted(required_names):
+                missing_argv = list(argv)
+                assignment_index = next(
+                    index
+                    for index, entry in enumerate(missing_argv)
+                    if entry.startswith(f"{missing_name}=")
+                    and missing_argv[index - 1] == option
+                )
+                del missing_argv[assignment_index - 1:assignment_index + 1]
+                out = self.root / f"missing-{option[2:]}-{missing_name}"
+                missing_argv[missing_argv.index("--out") + 1] = str(out)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "argv", missing_argv),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(stderr),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    freezer.main()
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(missing_name, stderr.getvalue())
+                self.assertFalse(out.exists())
+
+    def test_main_rejects_unexpected_repository_or_artifact(self) -> None:
+        argv, _, _ = self.make_collection_fixture()
+        cases = (
+            ("--repo", f"unexpected_repo={self.repo}", "unexpected_repo"),
+            ("--artifact", f"unexpected_artifact={self.root / 'unexpected.so'}", "unexpected_artifact"),
+        )
+        for option, assignment, unexpected_name in cases:
+            extra_argv = list(argv)
+            extra_argv.extend((option, assignment))
+            out = self.root / f"unexpected-{option[2:]}"
+            extra_argv[extra_argv.index("--out") + 1] = str(out)
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(sys, "argv", extra_argv),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                freezer.main()
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn(unexpected_name, stderr.getvalue())
+            self.assertFalse(out.exists())
 
     def test_main_rejects_each_missing_required_input(self) -> None:
         argv, _, _ = self.make_collection_fixture()

@@ -5,25 +5,27 @@ This deliberately does *not* call the result immutable: a local directory and
 SHA-256 checksums are tamper-evident only after their digest is retained by an
 independent system (for example a signed release record or WORM store).
 
-The collector requires exactly the ros2, mdds, and rmw_mdds worktrees; the
-three delivery artifacts with their expected basenames; named script/config
+The collector requires exactly the ros2, mdds, rmw_mdds, and rmw_cyclonedds
+worktrees; the four delivery artifacts with their expected basenames; named script/config
 inputs; the raw-ANNOUNCE and per-gate evidence inputs required by this release
 contract; seven named raw logs; seven named command logs; and the gateway
-profile whose bytes are deployed.  It records worktrees exactly as they stood
-at collection time, including binary diffs and hashes for every non-ignored
-untracked file.  All copied inputs and archive contents are symlink-free so
-the resulting bundle is self-contained.
+profile whose bytes are deployed.  For every captured worktree it also creates
+a Git bundle of the requested HEAD and validates it in a new bare repository
+by fetching and comparing the commit, tree, and reachable commit graph.  It records worktrees
+exactly as they stood at collection time, including binary diffs and hashes for
+every non-ignored untracked file.  All copied inputs and archive contents are
+symlink-free so the resulting bundle is self-contained.
 Output is outside the ROS workspace by design, so the evidence directory
 cannot add a self-referential untracked entry.
 
 ``--out`` is create-only and may not be inside a directory that already
 contains ``manifest.v1.json``.  This prevents a later collection from being
-mistaken for an addition to an immutable prior bundle.  Each repository state
+mistaken for an addition to a prior sealed bundle.  Each repository state
 is captured and then re-read sequentially before this script writes
 ``manifest.v1.json``; a changed HEAD, status, diff, or untracked inventory
 aborts without creating a seemingly valid manifest.  The collector does not
 hold a cross-repository write lock, so these per-repository comparisons are
-not an atomic snapshot of all three worktrees at one instant.
+not an atomic snapshot of all four worktrees at one instant.
 """
 
 from __future__ import annotations
@@ -45,11 +47,12 @@ from typing import Any, Iterable
 
 
 CHUNK = 1024 * 1024
-REQUIRED_REPOSITORIES = frozenset({"ros2", "mdds", "rmw_mdds"})
-REQUIRED_ARTIFACTS = frozenset({"libmdds", "librmw_mdds", "mdds_gateway"})
+REQUIRED_REPOSITORIES = frozenset({"ros2", "mdds", "rmw_mdds", "rmw_cyclonedds"})
+REQUIRED_ARTIFACTS = frozenset({"libmdds", "librmw_mdds", "librmw_cyclonedds_cpp", "mdds_gateway"})
 REQUIRED_ARTIFACT_BASENAMES = {
     "libmdds": "libmdds.so",
     "librmw_mdds": "librmw_mdds.so",
+    "librmw_cyclonedds_cpp": "librmw_cyclonedds_cpp.so",
     "mdds_gateway": "mdds_gateway",
 }
 REQUIRED_GATEWAY_PROFILE_BASENAME = "mdds_gateway_ohos_dsoftbus.conf"
@@ -413,6 +416,169 @@ def write_git_snapshot(
     }
 
 
+def git_object_id(output: bytes, label: str) -> str:
+    """Decode and sanity-check an object id emitted by Git."""
+    value = output.decode("ascii", "strict").strip()
+    if len(value) not in {40, 64} or any(character not in "0123456789abcdef" for character in value):
+        raise RuntimeError(f"Git returned an invalid object id for {label}: {value!r}")
+    return value
+
+
+def parse_git_bundle_heads(output: bytes, label: str) -> list[dict[str, str]]:
+    """Parse ``git bundle list-heads`` without accepting malformed records."""
+    heads: list[dict[str, str]] = []
+    for line in output.decode("utf-8", "strict").splitlines():
+        object_id, separator, reference = line.partition(" ")
+        if not separator or not reference or reference != reference.strip():
+            raise RuntimeError(f"malformed git bundle ref for {label}: {line!r}")
+        heads.append({"object": git_object_id(object_id.encode("ascii"), label), "ref": reference})
+    if not heads:
+        raise RuntimeError(f"git bundle has no advertised refs: {label}")
+    return heads
+
+
+def verify_git_bundle(
+    name: str,
+    bundle_path: Path,
+    expected_head: str,
+    expected_tree: str,
+    expected_commit_graph_sha256: str,
+    expected_commit_count: int,
+    advertised_refs: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Prove a bundle reconstructs the requested commit and tree in a new repo."""
+    matching_refs = [entry["ref"] for entry in advertised_refs if entry["object"] == expected_head]
+    if not matching_refs:
+        raise RuntimeError(
+            f"git bundle does not advertise requested HEAD for {name}: {expected_head}")
+
+    selected_ref = matching_refs[0]
+    verification_ref = f"refs/mdds-verification/{safe_name(name)}/captured-head"
+    with tempfile.TemporaryDirectory(prefix=f"mdds-manifest-{safe_name(name)}-bundle-") as temporary:
+        verifier = Path(temporary) / "fresh.git"
+        run(["git", "init", "--bare", "--quiet", str(verifier)], Path(temporary))
+        # ``verify`` checks the bundle's object graph in a repository with no
+        # local object/database help.  Fetch/readback then proves the exact
+        # advertised ref can reconstruct the requested source commit and tree.
+        run(["git", "bundle", "verify", str(bundle_path)], verifier)
+        run(
+            ["git", "fetch", "--no-tags", str(bundle_path), f"{selected_ref}:{verification_ref}"],
+            verifier,
+        )
+        fetched_head = git_object_id(
+            run(["git", "rev-parse", "--verify", verification_ref], verifier),
+            f"{name} fresh bundle head",
+        )
+        fetched_tree = git_object_id(
+            run(["git", "rev-parse", f"{verification_ref}^{{tree}}"], verifier),
+            f"{name} fresh bundle tree",
+        )
+        fetched_commit_graph = run(
+            ["git", "rev-list", "--topo-order", "--parents", verification_ref],
+            verifier,
+        )
+        fetched_commit_graph_sha256 = sha256_bytes(fetched_commit_graph)
+        fetched_commit_count = len(fetched_commit_graph.splitlines())
+        run(["git", "fsck", "--no-reflogs", "--full"], verifier)
+    if (
+        fetched_head != expected_head
+        or fetched_tree != expected_tree
+        or fetched_commit_graph_sha256 != expected_commit_graph_sha256
+        or fetched_commit_count != expected_commit_count
+    ):
+        raise RuntimeError(
+            f"fresh bundle readback mismatch for {name}: "
+            f"expected_head={expected_head} fetched_head={fetched_head} "
+            f"expected_tree={expected_tree} fetched_tree={fetched_tree} "
+            f"expected_commit_graph_sha256={expected_commit_graph_sha256} "
+            f"fetched_commit_graph_sha256={fetched_commit_graph_sha256} "
+            f"expected_commit_count={expected_commit_count} fetched_commit_count={fetched_commit_count}")
+    return {
+        "result": "FRESH_BARE_REPOSITORY_FETCHED_EXACT_HEAD_AND_TREE",
+        "expected_head": expected_head,
+        "expected_tree": expected_tree,
+        "selected_advertised_ref": selected_ref,
+        "fetched_head": fetched_head,
+        "fetched_tree": fetched_tree,
+        "expected_reachable_commit_graph_sha256": expected_commit_graph_sha256,
+        "fetched_reachable_commit_graph_sha256": fetched_commit_graph_sha256,
+        "reachable_commit_count": expected_commit_count,
+        "object_graph": "git bundle verify plus git fsck --no-reflogs --full",
+    }
+
+
+def create_and_verify_git_bundle(
+    name: str,
+    repo: Path,
+    out: Path,
+    expected_head: str,
+) -> dict[str, Any]:
+    """Create a complete HEAD bundle and prove it imports in a fresh bare repo.
+
+    The source commit and tree are resolved by object id, rather than the
+    mutable ``HEAD`` spelling, so a branch movement during collection cannot
+    silently change what the bundle represents.  The caller's final worktree
+    stability recheck remains the authority that rejects such a movement.
+    """
+    expected_head = git_object_id(expected_head.encode("ascii"), f"{name} expected HEAD")
+    source_head = git_object_id(
+        run(["git", "rev-parse", "--verify", f"{expected_head}^{{commit}}"], repo),
+        f"{name} source commit",
+    )
+    if source_head != expected_head:
+        raise RuntimeError(
+            f"source commit resolution changed for {name}: expected={expected_head} actual={source_head}")
+    expected_tree = git_object_id(
+        run(["git", "rev-parse", f"{expected_head}^{{tree}}"], repo),
+        f"{name} source tree",
+    )
+    expected_commit_graph = run(
+        ["git", "rev-list", "--topo-order", "--parents", expected_head],
+        repo,
+    )
+    expected_commit_graph_sha256 = sha256_bytes(expected_commit_graph)
+    expected_commit_count = len(expected_commit_graph.splitlines())
+
+    bundle_path = out / "source" / safe_name(name) / "source.bundle"
+    if exists_or_link(bundle_path):
+        raise FileExistsError(f"refusing to overwrite git bundle: {bundle_path}")
+    assert_no_symlink_components(bundle_path.parent, f"{name} git bundle destination")
+    # ``git bundle create`` only advertises named refs.  Build the bundle in a
+    # throw-away bare clone with a synthetic ref pinned to the captured object;
+    # this avoids writing a temporary ref into the source worktree and avoids
+    # re-resolving a mutable branch name such as HEAD.
+    source_ref = f"refs/mdds-verification-source/{safe_name(name)}/captured-head"
+    with tempfile.TemporaryDirectory(prefix=f"mdds-manifest-{safe_name(name)}-bundle-source-") as temporary:
+        bundle_source = Path(temporary) / "bundle-source.git"
+        run(["git", "clone", "--bare", "--no-local", "--quiet", str(repo), str(bundle_source)], Path(temporary))
+        run(["git", "cat-file", "-e", f"{expected_head}^{{commit}}"], bundle_source)
+        run(["git", "update-ref", source_ref, expected_head], bundle_source)
+        run(["git", "bundle", "create", str(bundle_path), source_ref], bundle_source)
+    if classify_non_symlink_path(bundle_path, f"{name} git bundle") != "file":
+        raise RuntimeError(f"git bundle is not a regular file: {bundle_path}")
+    advertised_refs = parse_git_bundle_heads(
+        run(["git", "bundle", "list-heads", str(bundle_path)], repo),
+        name,
+    )
+    verification = verify_git_bundle(
+        name,
+        bundle_path,
+        expected_head,
+        expected_tree,
+        expected_commit_graph_sha256,
+        expected_commit_count,
+        advertised_refs,
+    )
+
+    return {
+        "path": bundle_path.relative_to(out).as_posix(),
+        "sha256": sha256_file(bundle_path),
+        "size": bundle_path.stat().st_size,
+        "advertised_refs": advertised_refs,
+        "verification": verification,
+    }
+
+
 def git_snapshot(name: str, repo: Path, out: Path) -> dict[str, Any]:
     """Compatibility helper for callers that only need to serialize one state."""
     return write_git_snapshot(name, repo, out, capture_git_state(repo))
@@ -665,9 +831,8 @@ def validate_gateway_profile(raw_path: str) -> Path:
 def existing_manifest_ancestor(path: Path) -> Path | None:
     """Return an existing ancestor that carries a prior manifest, if any.
 
-    Treat any regular ``manifest.v1.json`` as a sealed-bundle boundary rather
-    than attempting to infer whether a caller considers it immutable.  This is
-    deliberately fail-closed: a new collection must be a sibling of an
+    Treat any regular ``manifest.v1.json`` as a sealed-bundle boundary.  This
+    is deliberately fail-closed: a new collection must be a sibling of an
     existing bundle, never a child of it.
     """
     current = lexical_absolute(path)
@@ -775,7 +940,7 @@ def main() -> int:
         default=[],
         metavar="NAME=PATH",
         type=lambda value: parse_assignment(value, "--repo"),
-        help="exactly ros2=PATH, mdds=PATH, and rmw_mdds=PATH",
+        help="exactly ros2=PATH, mdds=PATH, rmw_mdds=PATH, and rmw_cyclonedds=PATH",
     )
     parser.add_argument(
         "--input",
@@ -805,7 +970,8 @@ def main() -> int:
         type=lambda value: parse_assignment(value, "--artifact"),
         help=(
             "exactly libmdds=.../libmdds.so, librmw_mdds=.../librmw_mdds.so, "
-            "and mdds_gateway=.../mdds_gateway"
+            "librmw_cyclonedds_cpp=.../librmw_cyclonedds_cpp.so, and "
+            "mdds_gateway=.../mdds_gateway"
         ),
     )
     parser.add_argument(
@@ -850,10 +1016,21 @@ def main() -> int:
             name: capture_git_state(repository_paths[name])
             for name in repository_order
         }
-        repos = [
-            write_git_snapshot(name, repository_paths[name], out, initial_states[name])
-            for name in repository_order
-        ]
+        repos: list[dict[str, Any]] = []
+        for name in repository_order:
+            repository_record = write_git_snapshot(
+                name,
+                repository_paths[name],
+                out,
+                initial_states[name],
+            )
+            repository_record["git_bundle"] = create_and_verify_git_bundle(
+                name,
+                repository_paths[name],
+                out,
+                repository_record["head"],
+            )
+            repos.append(repository_record)
         copied: dict[str, list[dict[str, Any]]] = {"inputs": [], "raw_logs": [], "command_logs": [], "artifacts": []}
         for name, raw, _ in sorted(inputs):
             copied_input = copy_input(

@@ -134,6 +134,7 @@ test_tree=\"\$device_root/tests/\"
 gateway_path=\"\$device_root/lib/mdds_gateway/mdds_gateway\"
 libmdds_path=\"\$device_root/lib/libmdds.so\"
 librmw_path=\"\$device_root/lib/librmw_mdds.so\"
+librmw_cyclonedds_path=\"\$device_root/lib/librmw_cyclonedds_cpp.so\"
 known_dsoftbus=\$(printf '%s%s' dsoftbus _probe)
 known_e2e=\$(printf '%s%s' mdds _e2e)
 known_participant=\$(printf '%s%s' test_ participant)
@@ -188,6 +189,14 @@ for map in /proc/[0-9]*/maps; do
     grep_rc=\$?
     if test \"\$grep_rc\" -ne 1; then
       exit 45
+    fi
+  fi
+  if grep -F \"\$librmw_cyclonedds_path\" \"\$map\" >/dev/null 2>&1; then
+    mapped=1
+  else
+    grep_rc=\$?
+    if test \"\$grep_rc\" -ne 1; then
+      exit 48
     fi
   fi
   if test \"\$mapped\" -eq 1; then
@@ -248,9 +257,23 @@ printf 'MDDS_DEPLOY_QUIESCENCE_PROBE_OK\\n'" | tr -d '\r')"; then
 }
 
 require_all_quiescent() {
-  local board
+  # HDC can occasionally return an empty/partial shell reply while the board
+  # remains healthy (notably during a /proc scan).  Never treat that as a
+  # pass, but retry the same read-only probe a bounded number of times before
+  # aborting the transaction.  A later commit still requires a fresh success
+  # probe immediately before its atomic replacement.
+  local board attempt
   for board in "$BOARD_A" "$BOARD_B"; do
-    require_quiescent "$board" || return 1
+    for attempt in 1 2 3; do
+      if require_quiescent "$board"; then
+        break
+      fi
+      if (( attempt == 3 )); then
+        return 1
+      fi
+      printf 'DEPLOY_QUIESCENCE_RETRY board=%s attempt=%s next_attempt=%s\n' \
+        "$board" "$attempt" "$((attempt + 1))" >&2
+    done
   done
 }
 
@@ -347,6 +370,23 @@ verify_local_artifacts() {
     printf 'DEPLOY_LOCAL_ARTIFACT name=%s board=%s path=%s sha256=%s\n' \
       "${TARGET_LABEL[$index]}" "${TARGET_BOARD[$index]}" "${TARGET_RELATIVE[$index]}" "$want"
   done
+}
+
+target_want_by_label() {
+  # target_want_by_label <label> <board> <relative-path>
+  # Keep reporting tied to the declared target rather than its incidental
+  # array position: deployment targets evolve as runtime dependencies are
+  # added.
+  local label="$1" board="$2" relative="$3" index
+  for index in "${!TARGET_LABEL[@]}"; do
+    if [[ "${TARGET_LABEL[$index]}" = "$label" &&
+      "${TARGET_BOARD[$index]}" = "$board" &&
+      "${TARGET_RELATIVE[$index]}" = "$relative" ]]; then
+      printf '%s' "${TARGET_WANT[$index]}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 stage_target() {
@@ -565,6 +605,7 @@ main() {
   # evidence manifest and later gateway test records.
   add_target libmdds "$BOARD_A" "install_ohos/lib/libmdds.so" "lib/libmdds.so" data || return 2
   add_target librmw_mdds "$BOARD_A" "install_ohos/lib/librmw_mdds.so" "lib/librmw_mdds.so" data || return 2
+  add_target librmw_cyclonedds_cpp "$BOARD_A" "install_ohos/lib/librmw_cyclonedds_cpp.so" "lib/librmw_cyclonedds_cpp.so" data || return 2
   add_target rmw_mdds_dsoftbus_profile "$BOARD_A" "install_ohos/share/rmw_mdds/config/ohos_dsoftbus.env" "share/rmw_mdds/config/ohos_dsoftbus.env" data || return 2
   add_target libmdds "$BOARD_B" "install_ohos/lib/libmdds.so" "lib/libmdds.so" data || return 2
   add_target librmw_mdds "$BOARD_B" "install_ohos/lib/librmw_mdds.so" "lib/librmw_mdds.so" data || return 2
@@ -639,8 +680,14 @@ main() {
     echo "ERROR: deployment committed, but one or more deploy locks could not be released" >&2
     return 6
   fi
+  local gateway_profile_sha
+  if ! gateway_profile_sha="$(target_want_by_label mdds_gateway_profile "$BOARD_A" \
+      "share/mdds_gateway/mdds_gateway_ohos_dsoftbus.conf")"; then
+    echo "ERROR: gateway profile target disappeared from deployment plan" >&2
+    return 6
+  fi
   printf 'DEPLOY_GATEWAY_PROFILE board=%s path=%s sha256=%s runtime_status=NOT_EXECUTED_BY_DEPLOY\n' \
-    "$BOARD_A" "share/mdds_gateway/mdds_gateway_ohos_dsoftbus.conf" "${TARGET_WANT[7]}"
+    "$BOARD_A" "share/mdds_gateway/mdds_gateway_ohos_dsoftbus.conf" "$gateway_profile_sha"
   printf 'DEPLOY_COMPLETE run_id=%s stage_root=%s rollback_root=%s\n' "$RUN_ID" "$STAGE_ROOT" "$ROLLBACK_ROOT"
 }
 

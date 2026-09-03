@@ -21,7 +21,32 @@ import sys
 ROS2_HOME = "/data/local/tmp/ros2"
 TIMEOUT = "180"
 
-ctest_file, pkg, ws_root = sys.argv[1], sys.argv[2], sys.argv[3]
+def parse_args(argv):
+    """Return the optional exact CTest selector without broadening execution.
+
+    Board test callers normally replay every CTest entry in one package.  A
+    baseline/exemption gate needs a narrower, auditable mode: it may select one
+    safe CTest name, but it must never silently fall back to all tests when the
+    name is misspelled.
+    """
+    if len(argv) == 4:
+        return argv[1], argv[2], argv[3], None
+    if len(argv) == 6 and argv[4] == "--only-test":
+        only_test = argv[5]
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", only_test):
+            raise ValueError("--only-test must be a safe CTest name")
+        return argv[1], argv[2], argv[3], only_test
+    raise ValueError(
+        "usage: _parse_ctest_env.py <CTestTestfile.cmake> <package> <workspace> "
+        "[--only-test <exact-ctest-name>]"
+    )
+
+
+try:
+    ctest_file, pkg, ws_root, only_test = parse_args(sys.argv)
+except ValueError as exc:
+    print(f"ERROR: {exc}", file=sys.stderr)
+    sys.exit(2)
 ws_root = ws_root.replace("\\", "/")
 build_base = f"{ws_root}/build_ohos"
 pkg_build = f"{build_base}/{pkg}"
@@ -59,7 +84,6 @@ def verdict_line(name):
 
 
 text = open(ctest_file, encoding="utf-8").read()
-header()
 seen = set()
 tests = list(re.finditer(r"add_test\(\[=\[(.+?)\]=\]\s*(.+?)\)\r?\n", text, re.S))
 # plain add_test(NAME x COMMAND exe) form (no run_test.py wrapper)
@@ -70,11 +94,22 @@ tests += [m for m in re.finditer(
 tests += [m for m in re.finditer(
     r'add_test\((?:\[=\[)?"?([\w.-]+)"?(?:\]=\])?\s+(.+?)\)\r?\n', text, re.S)
     if not any(t.group(1) == m.group(1) for t in tests)]
+
+if only_test is not None and not any(m.group(1) == only_test for m in tests):
+    print(
+        f"ERROR: requested CTest selector is absent from {ctest_file}: {only_test}",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+header()
 for m in tests:
     name, args_blob = m.group(1), m.group(2)
     if name in seen:
         continue
     seen.add(name)
+    if only_test is not None and name != only_test:
+        continue
     try:
         args = shlex.split(args_blob.replace('"[=[', '"').replace(']=]"', '"'))
     except ValueError:

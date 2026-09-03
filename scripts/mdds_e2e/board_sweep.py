@@ -299,7 +299,11 @@ def run_sub(args):
         if seq <= st.max_seq:
             st.reorder += 1
         else:
-            st.lost += seq - st.max_seq - 1
+            missing = seq - st.max_seq - 1
+            if missing:
+                print(f'SWEEP-SUB-GAP size={size} expected={st.max_seq + 1} got={seq} '
+                      f'missing={missing}', flush=True)
+            st.lost += missing
             st.max_seq = seq
         if st.received % 60 == 0:
             print(f'SWEEP-SUB-PROGRESS size={size} seq={seq} received={st.received}',

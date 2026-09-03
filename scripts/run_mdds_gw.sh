@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # mdds_gateway (L3) e2e orchestrator: PC (rmw_cyclonedds_cpp) <-> mdds_gateway
-# on board A <-> mdds domain (boards A/B, rmw_mdds). Scenarios GW-01..GW-08 of
+# on board A <-> mdds domain (boards A/B, rmw_mdds). Scenarios GW-01..GW-11 of
 # docs/designs/mdds_test_plan.md. The PC side runs generated .bat files under
 # C:\pixi_ws (Jazzy binary install, unicast cyclonedds toward board A).
 #
-#   ./scripts/run_mdds_gw.sh [gw01 ... gw08 | all]
-# default/all: gw01 gw02 gw03 gw04 gw05 gw06 gw07 gw08
+#   ./scripts/run_mdds_gw.sh [gw01 ... gw11 | gw_iso | all]
+# default/all: gw01 gw02 gw03 gw04 gw05 gw06 gw07 gw08 gw09 gw10 gw11
+# `gw_iso` is deliberately excluded from `all`: it temporarily removes Board
+# B's 192.168.8.111/24 address and therefore requires an explicit maintenance
+# window invocation.  `--validate-gw-iso-contract` performs no HDC action.
 #
 # Every board process launched here gets a persistent run-scoped PID:start
 # record before its best-effort stdout token is emitted. Cleanup never searches
@@ -50,13 +53,19 @@ case "$RUN_NONCE" in
 esac
 export MDDS_RUN_ID="$RUN_ID"
 export MDDS_RUN_NONCE="$RUN_NONCE"
+GW_ISO_STATIC_VALIDATE=0
+if [[ "$#" -eq 1 && "$1" = "--validate-gw-iso-contract" ]]; then
+  GW_ISO_STATIC_VALIDATE=1
+fi
 LOGDIR="$LOGROOT/$RUN_ID"
 REMOTE_LOGDIR="$DEVICE_DIR/mdds_gw_runs/$RUN_ID"
 REMOTE_OWNER="$REMOTE_LOGDIR/.mdds_run_owner"
 PC_OWNER_FILE="$LOGDIR/.mdds_pc_run_owner"
 PC_WS=/c/pixi_ws
 PC_BAT_DIR="$(cygpath -w "$PWD/scripts/mdds_e2e/pc")"
-mkdir -p "$LOGDIR"
+if [ "$GW_ISO_STATIC_VALIDATE" -eq 0 ]; then
+  mkdir -p "$LOGDIR"
+fi
 
 # Every run has an isolated topic namespace.  The IDs are constrained above to
 # characters valid in ROS names and in the tiny config renderer below.  Fixed
@@ -68,6 +77,50 @@ GW_TOPIC_CHATTER_BACK="$GW_TOPIC_PREFIX/chatter_back"
 GW_TOPIC_SWEEP="$GW_TOPIC_PREFIX/sweep"
 GW_TOPIC_LAT_REQ="$GW_TOPIC_PREFIX/lat_req"
 GW_TOPIC_LAT_RSP="$GW_TOPIC_PREFIX/lat_rsp"
+GW_TOPIC_BIDIR_PC_TO_B="$GW_TOPIC_PREFIX/bidir_pc_to_b"
+GW_TOPIC_BIDIR_B_TO_PC="$GW_TOPIC_PREFIX/bidir_b_to_pc"
+# GW-09 intentionally reuses the already-rendered sweep route.  The route is
+# unique per RUN_ID + nonce and every gateway process is reset between
+# scenarios, so this does not allow one scenario's samples to satisfy another.
+GW09_COUNT=4096
+GW09_SIZE=1024
+GW09_RATE_HZ=10
+GW09_CYCLONE_DEPTH=1024
+# A CycloneDDS endpoint match makes the gateway subscription visible, but it
+# does not make the newly discovered transport path synchronously writable.
+# Keep a finite, recorded settle interval before sequence 0 so a VOLATILE head
+# sample cannot turn this history-lifecycle gate into a discovery-race test.
+GW09_PUBLISH_SETTLE_MS=3000
+GW09_BOARD_IDLE_TIMEOUT_S=90
+GW09_POLL_ATTEMPTS=65
+# GW-10 is a simultaneous PC<->B stress gate.  Both endpoints publish 4096
+# 1-KiB samples at the same time; the intentionally modest 25 Hz cap leaves
+# reliable repair headroom while crossing the old 1024-message C2M lifetime
+# failure point four times in each direction.
+GW10_COUNT=4096
+GW10_SIZE=1024
+GW10_RATE_HZ=25
+GW10_DEPTH=1024
+GW10_MATCH_TIMEOUT_S=60
+GW10_SETTLE_MS=3000
+GW10_STARVATION_TIMEOUT_S=45
+GW10_OVERALL_TIMEOUT_S=360
+GW10_POLL_ATTEMPTS=90
+# GW-11 is the deliberate opposite of GW-09/GW-10: a test-only raw MDDS
+# reader accepts data but drops only its ACKNACK frames. The real gateway
+# Writer must retain exactly 1024 unacknowledged samples, reject number 1025,
+# and exit nonzero through a wrapper-owned durable status record.
+GW11_COUNT=1025
+GW11_SIZE=1024
+GW11_RATE_HZ=25
+GW11_CYCLONE_DEPTH=1024
+GW11_PUBLISH_SETTLE_MS=3000
+GW11_PROBE_TIMEOUT_S=120
+GW11_EXIT_POLL_ATTEMPTS=100
+GW11_PROBE_LOCAL="build_ohos/mdds/mdds_history_cap_probe"
+GW11_PROBE_REMOTE="$DEVICE_DIR/mdds_e2e/mdds_history_cap_probe"
+GW11_WRAPPER_LOCAL="scripts/mdds_e2e/gw11_gateway_exit_wrapper.sh"
+GW11_WRAPPER_REMOTE="$DEVICE_DIR/mdds_e2e/gw11_gateway_exit_wrapper.sh"
 GW_CONFIG_TEMPLATE="scripts/mdds_e2e/mdds_gateway_test.conf"
 GW_CONFIG_LOCAL="$LOGDIR/mdds_gateway_test.rendered.conf"
 # GW e2e has a dedicated CycloneDDS domain.  Keep it distinct from production
@@ -76,6 +129,45 @@ GW_CONFIG_LOCAL="$LOGDIR/mdds_gateway_test.rendered.conf"
 # either gate.
 GW_CYCLONE_DOMAIN=47
 GW_MDDS_DOMAIN=44
+
+# GW-ISO is a narrowly scoped, reversible topology gate.  These are fixed
+# deployment facts, not caller-controlled environment variables: accepting a
+# shell fragment or a different target address here would make a safety gate
+# mutate an unreviewed interface.  The gate disables only this reviewed wlan0
+# link and its one IPv4 address; link-down on this OpenHarmony image also
+# removes the three named policy routes/rules below, so those exact prechecked
+# entries are restored transactionally. No Board-A address is ever modified.
+GW_ISO_WLAN_IF=wlan0
+GW_ISO_WLAN_IP=192.168.8.111
+GW_ISO_WLAN_CIDR=192.168.8.111/24
+GW_ISO_WLAN_GATEWAY=192.168.8.1
+GW_ISO_POLICY_TABLE_DIRECT=99
+GW_ISO_POLICY_TABLE_WLAN=2006
+GW_ISO_ETH_IF=eth1
+GW_ISO_ETH_CIDR=192.168.77.202/24
+GW_ISO_BOARD_A_ETH_IP=192.168.77.201
+GW_ISO_PC_IP=192.168.8.101
+GW_ISO_TCP_PORT=39091
+GW_ISO_ROLLBACK_SECONDS=180
+GW_ISO_REMOTE_DIR="$REMOTE_LOGDIR/network_isolation"
+GW_ISO_REMOTE_ROLLBACK_RECORD="$GW_ISO_REMOTE_DIR/rollback.arm"
+GW_ISO_REMOTE_ROLLBACK_LOG="$GW_ISO_REMOTE_DIR/rollback.log"
+GW_ISO_REMOTE_POLICY_SNAPSHOT="$GW_ISO_REMOTE_DIR/policy.snapshot"
+GW_ISO_LOCAL_DIR="$LOGDIR/network_isolation"
+GW_ISO_ACTIVE=0
+GW_ISO_ROLLBACK_ARMED=0
+GW_ISO_ROLLBACK_PID=""
+GW_ISO_ROLLBACK_START=""
+# The OpenHarmony network service assigns the wlan policy fwmark dynamically.
+# It is discovered from the reviewed pre-state, then fenced into every restore.
+GW_ISO_WLAN_FWMARK=""
+GW_ISO_POLICY_SHA256=""
+GW_ISO_POLICY_SETTLE_ATTEMPTS=12
+
+# A destructive-by-design topology gate must never become an implicit part of
+# the ordinary GW-01..09 suite.  Keep its selection in one array so the
+# no-board contract self-test can assert that omission deterministically.
+DEFAULT_GW_SCENARIOS=(gw01 gw02 gw03 gw04 gw05 gw06 gw07 gw08 gw09 gw10 gw11)
 
 # Test-only launcher fault injection: simulate an HDC stdout/token loss after
 # a successful remote launch.  launch() must recover from the persistent
@@ -1302,18 +1394,21 @@ render_gateway_config() {
     -e "s|@GW_TOPIC_SWEEP@|$GW_TOPIC_SWEEP|g" \
     -e "s|@GW_TOPIC_LAT_REQ@|$GW_TOPIC_LAT_REQ|g" \
     -e "s|@GW_TOPIC_LAT_RSP@|$GW_TOPIC_LAT_RSP|g" \
+    -e "s|@GW_TOPIC_BIDIR_PC_TO_B@|$GW_TOPIC_BIDIR_PC_TO_B|g" \
+    -e "s|@GW_TOPIC_BIDIR_B_TO_PC@|$GW_TOPIC_BIDIR_B_TO_PC|g" \
     "$GW_CONFIG_TEMPLATE" > "$tmp"; then
     rm -f "$tmp"
     echo "ERROR: could not render gateway config" >&2
     return 1
   fi
-  if grep -Eq '@GW_TOPIC_(CHATTER|CHATTER_BACK|SWEEP|LAT_REQ|LAT_RSP)@' "$tmp"; then
+  if grep -Eq '@GW_TOPIC_(CHATTER|CHATTER_BACK|SWEEP|LAT_REQ|LAT_RSP|BIDIR_PC_TO_B|BIDIR_B_TO_PC)@' "$tmp"; then
     rm -f "$tmp"
     echo "ERROR: gateway config retained an unexpanded topic placeholder" >&2
     return 1
   fi
   for topic in "$GW_TOPIC_CHATTER" "$GW_TOPIC_CHATTER_BACK" "$GW_TOPIC_SWEEP" \
-    "$GW_TOPIC_LAT_REQ" "$GW_TOPIC_LAT_RSP"; do
+    "$GW_TOPIC_LAT_REQ" "$GW_TOPIC_LAT_RSP" "$GW_TOPIC_BIDIR_PC_TO_B" \
+    "$GW_TOPIC_BIDIR_B_TO_PC"; do
     if [ "$(grep -Fxc "topic = $topic" "$tmp")" -ne 1 ]; then
       rm -f "$tmp"
       echo "ERROR: rendered gateway config is missing or duplicates topic $topic" >&2
@@ -1373,6 +1468,30 @@ send_verified_helper() { # <board> <label> <local-file> <remote-file>
   record_helper_transfer "$label" "$board" "$local_path" "$remote" "$want" "$got" VERIFIED || return 1
 }
 
+# GW-11 transfers two test-only executable inputs after the ordinary helpers:
+# a raw MDDS ACK-suppressing reader for Board B and an exit-code wrapper for
+# Board A.  The binary is intentionally built under mdds' BUILD_TESTING tree,
+# never installed or used by the production gateway.  Reuse the same strict
+# regular-file + SHA-256 transfer contract as every interpreted helper.
+prepare_gw11_helpers() {
+  local out
+  send_verified_helper "$BOARD_A" gw11_gateway_exit_wrapper \
+    "$GW11_WRAPPER_LOCAL" "$GW11_WRAPPER_REMOTE" || return 1
+  out=$(shell "$BOARD_A" "if chmod 700 '$GW11_WRAPPER_REMOTE' && test -f '$GW11_WRAPPER_REMOTE' && test ! -L '$GW11_WRAPPER_REMOTE' && test -x '$GW11_WRAPPER_REMOTE'; then printf GW11_WRAPPER_EXECUTABLE; else printf GW11_WRAPPER_NOT_EXECUTABLE; fi" || true)
+  out=$(printf '%s' "$out" | tr -d '\r\n')
+  printf 'label=gw11_gateway_exit_wrapper board=%s remote=%s executable_result=%s\n' \
+    "$BOARD_A" "$GW11_WRAPPER_REMOTE" "${out:-NO_SENTINEL}" >> "$LOGDIR/helper_transfer_transcript.txt"
+  [ "$out" = GW11_WRAPPER_EXECUTABLE ] || return 1
+
+  send_verified_helper "$BOARD_B" gw11_history_cap_probe \
+    "$GW11_PROBE_LOCAL" "$GW11_PROBE_REMOTE" || return 1
+  out=$(shell "$BOARD_B" "if chmod 700 '$GW11_PROBE_REMOTE' && test -f '$GW11_PROBE_REMOTE' && test ! -L '$GW11_PROBE_REMOTE' && test -x '$GW11_PROBE_REMOTE'; then printf GW11_PROBE_EXECUTABLE; else printf GW11_PROBE_NOT_EXECUTABLE; fi" || true)
+  out=$(printf '%s' "$out" | tr -d '\r\n')
+  printf 'label=gw11_history_cap_probe board=%s remote=%s executable_result=%s\n' \
+    "$BOARD_B" "$GW11_PROBE_REMOTE" "${out:-NO_SENTINEL}" >> "$LOGDIR/helper_transfer_transcript.txt"
+  [ "$out" = GW11_PROBE_EXECUTABLE ]
+}
+
 verify_final_artifacts() {
   local local_path name board remote want got
   : > "$LOGDIR/artifact_hashes.txt"
@@ -1380,7 +1499,7 @@ verify_final_artifacts() {
   # configuration: it selects the strict DSoftBus-only deployment profile.
   # Treat it as an artifact so a stale/modified profile cannot turn a green
   # gateway run into evidence for a different transport configuration.
-  for name in libmdds.so librmw_mdds.so ohos_dsoftbus.env mdds_gateway; do
+  for name in libmdds.so librmw_mdds.so librmw_cyclonedds_cpp.so ohos_dsoftbus.env mdds_gateway; do
     case "$name" in
       libmdds.so)
         local_path="install_ohos/lib/libmdds.so"
@@ -1389,6 +1508,10 @@ verify_final_artifacts() {
       librmw_mdds.so)
         local_path="install_ohos/lib/librmw_mdds.so"
         remote="$DEVICE_DIR/lib/librmw_mdds.so"
+        ;;
+      librmw_cyclonedds_cpp.so)
+        local_path="install_ohos/lib/librmw_cyclonedds_cpp.so"
+        remote="$DEVICE_DIR/lib/librmw_cyclonedds_cpp.so"
         ;;
       ohos_dsoftbus.env)
         local_path="install_ohos/share/rmw_mdds/config/ohos_dsoftbus.env"
@@ -1404,8 +1527,8 @@ verify_final_artifacts() {
       return 1
     fi
     want=$(sha256_local "$local_path")
-    # Board B never runs mdds_gateway in the configured A-gateway topology.
-    for board in "$BOARD_A" $([ "$name" = mdds_gateway ] || echo "$BOARD_B"); do
+    # Board B never runs the gateway or its Cyclone-specific RMW in this topology.
+    for board in "$BOARD_A" $([ "$name" = mdds_gateway ] || [ "$name" = librmw_cyclonedds_cpp.so ] || echo "$BOARD_B"); do
       got=$(sha256_remote "$board" "$remote")
       printf '%s board=%s local=%s remote=%s\n' "$name" "$board" "$want" "${got:-MISSING}" \
         | tee -a "$LOGDIR/artifact_hashes.txt"
@@ -1499,6 +1622,7 @@ assert_gateway_m2c_healthy() {
 assert_gateway_c2m_healthy() {
   local log="$1" topic="$2" min_forwarded="$3"
   local path final_line forwarded terminal write_rejections callback_exceptions invalid_messages pre_activation sample_rejections byte_rejections
+  local ingress_sample_rejections ingress_byte_rejections ingress_oversize_rejections cyclone_message_lost
   if ! [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$topic" =~ ^/[A-Za-z0-9_/-]+$ && \
           "$min_forwarded" =~ ^[1-9][0-9]*$ ]]; then
     echo "   ERROR: invalid gateway cyclone->mdds health assertion arguments" >&2
@@ -1518,21 +1642,165 @@ assert_gateway_c2m_healthy() {
   pre_activation=$(sed -n 's/.*c2m_pre_activation_drops=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
   sample_rejections=$(sed -n 's/.*c2m_history_sample_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
   byte_rejections=$(sed -n 's/.*c2m_history_byte_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  ingress_sample_rejections=$(sed -n 's/.*c2m_ingress_sample_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  ingress_byte_rejections=$(sed -n 's/.*c2m_ingress_byte_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  ingress_oversize_rejections=$(sed -n 's/.*c2m_ingress_oversize_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  cyclone_message_lost=$(sed -n 's/.*c2m_cyclone_message_lost=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
   if ! [[ "$forwarded" =~ ^[0-9]+$ && "$terminal" =~ ^[0-9]+$ && \
-          "$write_rejections" =~ ^[0-9]+$ && "$callback_exceptions" =~ ^[0-9]+$ && \
-          "$invalid_messages" =~ ^[0-9]+$ && "$pre_activation" =~ ^[0-9]+$ && \
-          "$sample_rejections" =~ ^[0-9]+$ && "$byte_rejections" =~ ^[0-9]+$ ]]; then
+           "$write_rejections" =~ ^[0-9]+$ && "$callback_exceptions" =~ ^[0-9]+$ && \
+           "$invalid_messages" =~ ^[0-9]+$ && "$pre_activation" =~ ^[0-9]+$ && \
+           "$sample_rejections" =~ ^[0-9]+$ && "$byte_rejections" =~ ^[0-9]+$ && \
+           "$ingress_sample_rejections" =~ ^[0-9]+$ && "$ingress_byte_rejections" =~ ^[0-9]+$ && \
+           "$ingress_oversize_rejections" =~ ^[0-9]+$ && "$cyclone_message_lost" =~ ^[0-9]+$ ]]; then
     echo "   $log: malformed final cyclone->mdds counters for $topic" >&2
     return 1
   fi
   if (( forwarded < min_forwarded || terminal != 0 || write_rejections != 0 ||
-        callback_exceptions != 0 || invalid_messages != 0 || pre_activation != 0 ||
-        sample_rejections != 0 || byte_rejections != 0 )); then
+         callback_exceptions != 0 || invalid_messages != 0 || pre_activation != 0 ||
+         sample_rejections != 0 || byte_rejections != 0 ||
+         ingress_sample_rejections != 0 || ingress_byte_rejections != 0 ||
+         ingress_oversize_rejections != 0 || cyclone_message_lost != 0 )); then
     echo "   $log: unhealthy cyclone->mdds final for $topic: $final_line" >&2
     return 1
   fi
   if grep -Eq 'cyclone->mdds terminal failure|mdds_gateway: terminal executor failure|terminal bridge failure' "$path"; then
     echo "   $log: terminal cyclone->mdds failure was logged" >&2
+    return 1
+  fi
+  if ! grep -Fq 'applied subscription resource limits: max_samples=32 max_instances=1 max_samples_per_instance=32' "$path" || \
+     ! grep -Fq "$topic cyclone->mdds reader QoS: KEEP_ALL resource_limits(max_samples=32 max_instances=1 max_samples_per_instance=32)" "$path"; then
+    echo "   $log: missing applied C2M Cyclone reader resource-limit evidence for $topic" >&2
+    return 1
+  fi
+  return 0
+}
+
+# A local Cyclone match is insufficient for a C2M reliability gate: the MDDS
+# writer must first have a committed remote reader and a current association.
+# Waiting for both prevents a VOLATILE head sample from being mistaken for an
+# ACK-reclamation result.  The association status is writer-owned telemetry
+# refreshed by the gateway's alive timer, not a gateway shadow ledger.
+wait_gateway_c2m_reader_association() { # <gateway-log> <topic>
+  local log="$1" topic="$2" marker
+  if ! [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$topic" =~ ^/[A-Za-z0-9_/-]+$ ]]; then
+    echo "   ERROR: invalid C2M reader-association wait arguments" >&2
+    return 1
+  fi
+  marker=$(shell "$BOARD_A" \
+    "i=0; while [ \$i -lt 45 ]; do if grep -F '$topic alive: ' '$REMOTE_LOGDIR/$log' 2>/dev/null | grep -Eq 'active_associations=[1-9][0-9]*'; then echo GW_C2M_READER_ASSOCIATION_READY; exit 0; fi; i=\$((i+1)); sleep 1; done; echo GW_C2M_READER_ASSOCIATION_TIMEOUT" \
+    | tr -d '\r')
+  [[ "$marker" == *GW_C2M_READER_ASSOCIATION_READY* ]]
+}
+
+# GW-10 holds Board B's outbound publisher after it has created both local
+# endpoints, until the PC endpoint has announced its own inbound subscription.
+# The release file is single-use, exact-token, regular, and atomically revealed
+# with a same-directory hard link; this prevents a volatile B->PC head loss
+# from degenerating into an unobserved launcher race.
+prepare_gw10_board_barrier() { # <release path> <token>
+  local release_path="$1" token="$2" owner_line out
+  [[ "$release_path" == "$REMOTE_LOGDIR/"* && "$token" =~ ^[A-Za-z0-9_-]{1,200}$ ]] || return 1
+  ensure_remote_owner "$BOARD_B" || return 1
+  owner_line="MDDS_RUN_OWNER RUN_ID=$RUN_ID NONCE=$RUN_NONCE"
+  out=$(shell "$BOARD_B" \
+    "if test -d '$REMOTE_LOGDIR' && test ! -L '$REMOTE_LOGDIR' && test -f '$REMOTE_OWNER' && test ! -L '$REMOTE_OWNER' && grep -Fqx '$owner_line' '$REMOTE_OWNER' && ! test -e '$release_path' && ! test -L '$release_path' && ! test -e '$release_path.tmp' && ! test -L '$release_path.tmp'; then printf GW10_BARRIER_PATH_CLEAR; else printf GW10_BARRIER_PATH_CONFLICT; fi" \
+    | tr -d '\r\n')
+  [[ "$out" == GW10_BARRIER_PATH_CLEAR ]]
+}
+
+commit_gw10_board_barrier() { # <release path> <token>
+  local release_path="$1" token="$2" expected out
+  [[ "$release_path" == "$REMOTE_LOGDIR/"* && "$token" =~ ^[A-Za-z0-9_-]{1,200}$ ]] || return 1
+  expected="GW10_BIDIR_RELEASE token=$token"
+  out=$(shell "$BOARD_B" \
+    "release='$release_path'; tmp='$release_path.tmp'; expected='$expected'; if ! test -d '$REMOTE_LOGDIR' || test -L '$REMOTE_LOGDIR' || test -e \"\$release\" || test -L \"\$release\" || test -e \"\$tmp\" || test -L \"\$tmp\"; then printf GW10_BARRIER_CONFLICT; exit 2; fi; umask 077; if ! printf '%s\\n' \"\$expected\" > \"\$tmp\" || ! test -f \"\$tmp\" || test -L \"\$tmp\" || ! grep -Fqx \"\$expected\" \"\$tmp\"; then rm -f \"\$tmp\"; printf GW10_BARRIER_STAGE_FAILED; exit 3; fi; if ln \"\$tmp\" \"\$release\" 2>/dev/null && test -f \"\$release\" && test ! -L \"\$release\" && grep -Fqx \"\$expected\" \"\$release\"; then rm -f \"\$tmp\"; printf GW10_BARRIER_COMMITTED; else rm -f \"\$tmp\"; printf GW10_BARRIER_COMMIT_FAILED; exit 4; fi" \
+    | tr -d '\r\n')
+  [[ "$out" == GW10_BARRIER_COMMITTED ]]
+}
+
+wait_gw10_board_barrier_ready() { # <board log> <token>
+  local log="$1" token="$2" marker
+  [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$token" =~ ^[A-Za-z0-9_-]{1,200}$ ]] || return 1
+  marker=$(shell "$BOARD_B" \
+    "i=0; while [ \$i -lt 60 ]; do if grep -Eq '^GW10_ENDPOINT_BARRIER_READY role=board_b token=$token local_subs=[1-9][0-9]*$' '$REMOTE_LOGDIR/$log' 2>/dev/null; then echo GW10_BARRIER_READY; exit 0; fi; if grep -Eq '^GW10_(STARVATION|ENDPOINT_ERROR|ENDPOINT_RESULT .*result=FAIL)' '$REMOTE_LOGDIR/$log' 2>/dev/null; then echo GW10_BARRIER_FAILED; exit 0; fi; i=\$((i+1)); sleep 1; done; echo GW10_BARRIER_TIMEOUT" \
+    | tr -d '\r')
+  [[ "$marker" == *GW10_BARRIER_READY* ]]
+}
+
+wait_gw10_pc_matched() { # <PC log>
+  local log="$1" i
+  [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ ]] || return 1
+  for i in $(seq 1 60); do
+    if grep -Eq '^GW10_ENDPOINT_MATCHED role=pc local_subs=[1-9][0-9]* ' "$LOGDIR/$log" 2>/dev/null; then
+      return 0
+    fi
+    if grep -Eq '^GW10_(STARVATION|ENDPOINT_ERROR|ENDPOINT_RESULT .*result=FAIL)' "$LOGDIR/$log" 2>/dev/null; then
+      return 1
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+assert_gw10_board_release_order() { # <board log> <token>
+  local log="$1" token="$2" path
+  [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$token" =~ ^[A-Za-z0-9_-]{1,200}$ ]] || return 1
+  path="$LOGDIR/$log"
+  grep -Fqx "GW10_ENDPOINT_BARRIER_READY role=board_b token=$token local_subs=1" "$path" 2>/dev/null || \
+    grep -Eq "^GW10_ENDPOINT_BARRIER_READY role=board_b token=$token local_subs=[1-9][0-9]*$" "$path" || return 1
+  grep -Fqx "GW10_ENDPOINT_BARRIER_RELEASED role=board_b token=$token" "$path" || return 1
+  awk -v release="GW10_ENDPOINT_BARRIER_RELEASED role=board_b token=$token" '
+    $0 == release { seen = 1; next }
+    /^GW10_PUB_PROGRESS role=board_b / && !seen { exit 1 }
+    END { exit seen ? 0 : 1 }
+  ' "$path"
+}
+
+# Verify that the writer's retained history stayed at a bounded steady state
+# after the stream crossed the old 1024-send lifetime failure point.  A late
+# checkpoint must account for all but at most half the real 1024-sample cap as
+# ACK-reclaimed, while retaining fewer than that half-cap.  Requiring several
+# independent checkpoints rules out a single lucky post-drain observation.
+assert_gateway_c2m_sustained_history() { # <gateway-log> <topic> <exact-forwarded>
+  local log="$1" topic="$2" expected="$3"
+  local path final_line forwarded retained reclaimed active callbacks enqueued high_samples high_bytes late_good=0
+  if ! [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$topic" =~ ^/[A-Za-z0-9_/-]+$ && \
+          "$expected" =~ ^[1-9][0-9]*$ ]]; then
+    echo "   ERROR: invalid sustained C2M assertion arguments" >&2
+    return 1
+  fi
+  assert_gateway_c2m_healthy "$log" "$topic" "$expected" || return 1
+  path="$LOGDIR/$log"
+  final_line=$(grep -F "$topic final:" "$path" 2>/dev/null | tail -n 1)
+  forwarded=$(sed -n 's/.*cyclone->mdds=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  if ! [[ "$forwarded" =~ ^[0-9]+$ ]] || [ "$forwarded" -ne "$expected" ]; then
+    echo "   $log: C2M final forward count is not exact $expected: ${final_line:-MISSING}" >&2
+    return 1
+  fi
+  callbacks=$(sed -n 's/.*c2m_ingress(callbacks=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  enqueued=$(sed -n 's/.* enqueued=\([0-9][0-9]*\) queued_samples=.*/\1/p' <<< "$final_line")
+  high_samples=$(sed -n 's/.*high_water_samples=\([0-9][0-9]*\).*/\1/p' <<< "$final_line")
+  high_bytes=$(sed -n 's/.*high_water_bytes=\([0-9][0-9]*\)).*/\1/p' <<< "$final_line")
+  if ! [[ "$callbacks" =~ ^[0-9]+$ && "$enqueued" =~ ^[0-9]+$ && \
+           "$high_samples" =~ ^[0-9]+$ && "$high_bytes" =~ ^[0-9]+$ ]] || \
+     [ "$callbacks" -ne "$expected" ] || [ "$enqueued" -ne "$expected" ] || \
+     (( high_samples > 128 || high_bytes > 33554432 )); then
+    echo "   $log: C2M ingress accounting is not exact/bounded for $topic: ${final_line:-MISSING}" >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    forwarded=$(sed -n 's/.*cyclone->mdds forwarded=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+    retained=$(sed -n 's/.*retained_samples=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+    reclaimed=$(sed -n 's/.*ack_reclaimed_samples=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+    active=$(sed -n 's/.*active_associations=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+    if [[ "$forwarded" =~ ^[0-9]+$ && "$retained" =~ ^[0-9]+$ && \
+          "$reclaimed" =~ ^[0-9]+$ && "$active" =~ ^[0-9]+$ ]] && \
+       (( forwarded >= 3072 && retained < 512 && reclaimed >= forwarded - 512 && active >= 1 )); then
+      late_good=$((late_good + 1))
+    fi
+  done < <(grep -F "$topic cyclone->mdds forwarded=" "$path" 2>/dev/null || true)
+  if (( late_good < 3 )); then
+    echo "   $log: no stable ACK-reclaimed C2M history platform after 3072 sends (late checkpoints=$late_good)" >&2
     return 1
   fi
   return 0
@@ -1557,7 +1825,7 @@ push_gw_files() {
   render_gateway_config || return 1
   local board file
   for board in "$BOARD_A" "$BOARD_B"; do
-    for file in board_sweep.py publish_constant.py gw_dsoftbus_probe.py; do
+    for file in board_sweep.py bidir_sweep.py publish_constant.py gw_dsoftbus_probe.py network_tcp_probe.py; do
       send_verified_helper "$board" "$file" "scripts/mdds_e2e/$file" \
         "$DEVICE_DIR/mdds_e2e/$file" || return 1
     done
@@ -1575,11 +1843,1074 @@ push_gw_files() {
     printf 'template=%s sha256=%s\n' "$GW_CONFIG_TEMPLATE" "$template_sha"
     printf 'rendered=%s sha256=%s mdds_transport=dsoftbus cyclone_domain_id=%s mdds_domain_id=%s\n' \
       "$GW_CONFIG_LOCAL" "$config_sha" "$GW_CYCLONE_DOMAIN" "$GW_MDDS_DOMAIN"
-    printf 'topics chatter=%s chatter_back=%s sweep=%s lat_req=%s lat_rsp=%s\n' \
+    printf 'topics chatter=%s chatter_back=%s sweep=%s lat_req=%s lat_rsp=%s bidir_pc_to_b=%s bidir_b_to_pc=%s\n' \
       "$GW_TOPIC_CHATTER" "$GW_TOPIC_CHATTER_BACK" "$GW_TOPIC_SWEEP" \
-      "$GW_TOPIC_LAT_REQ" "$GW_TOPIC_LAT_RSP"
+      "$GW_TOPIC_LAT_REQ" "$GW_TOPIC_LAT_RSP" "$GW_TOPIC_BIDIR_PC_TO_B" \
+      "$GW_TOPIC_BIDIR_B_TO_PC"
   } > "$LOGDIR/gateway_config_evidence.txt"
 }
+
+# GW-ISO is an explicit maintenance-window topology gate. Its contract check
+# deliberately does not create a log directory, acquire locks, or invoke HDC:
+# it is a source/launcher self-test that can run in CI on a host without boards.
+gw_iso_contract_valid() {
+  local bad=0 path defaults source_path legacy_fwm
+  source_path="${BASH_SOURCE[0]}"
+  legacy_fwm='0x1006'"4/0x1ffff"
+  defaults=" ${DEFAULT_GW_SCENARIOS[*]} "
+  if [ "$GW_ISO_WLAN_IF" != "wlan0" ] || [ "$GW_ISO_WLAN_IP" != "192.168.8.111" ] || \
+     [ "$GW_ISO_WLAN_CIDR" != "192.168.8.111/24" ] || [ "$GW_ISO_WLAN_GATEWAY" != "192.168.8.1" ] || \
+     [ "$GW_ISO_POLICY_TABLE_DIRECT" != 99 ] || [ "$GW_ISO_POLICY_TABLE_WLAN" != 2006 ] || \
+     [ "$GW_ISO_ETH_IF" != "eth1" ] || [ "$GW_ISO_ETH_CIDR" != "192.168.77.202/24" ] || \
+     [ "$GW_ISO_BOARD_A_ETH_IP" != "192.168.77.201" ] || [ "$GW_ISO_PC_IP" != "192.168.8.101" ]; then
+    echo "GW_ISO_CONTRACT FAIL unexpected fixed topology constant" >&2
+    bad=1
+  fi
+  if ! [[ "$GW_ISO_TCP_PORT" =~ ^[0-9]+$ ]] || (( GW_ISO_TCP_PORT < 1024 || GW_ISO_TCP_PORT > 65535 )); then
+    echo "GW_ISO_CONTRACT FAIL invalid bounded TCP port" >&2
+    bad=1
+  fi
+  if ! [[ "$GW_ISO_ROLLBACK_SECONDS" =~ ^[0-9]+$ ]] || \
+     (( GW_ISO_ROLLBACK_SECONDS < 90 || GW_ISO_ROLLBACK_SECONDS > 600 )); then
+    echo "GW_ISO_CONTRACT FAIL invalid rollback duration" >&2
+    bad=1
+  fi
+  if ! [[ "$GW_ISO_POLICY_SETTLE_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || \
+     (( GW_ISO_POLICY_SETTLE_ATTEMPTS < 3 || GW_ISO_POLICY_SETTLE_ATTEMPTS > 60 )); then
+    echo "GW_ISO_CONTRACT FAIL invalid bounded policy settle attempts" >&2
+    bad=1
+  fi
+  for path in scripts/mdds_e2e/network_tcp_probe.py \
+              scripts/mdds_e2e/pc/gw_iso_tcp_listener.bat \
+              scripts/mdds_e2e/pc/gw_pc_sweep_sub_gw.bat; do
+    if [ ! -f "$path" ] || [ -L "$path" ]; then
+      echo "GW_ISO_CONTRACT FAIL missing or symlinked helper: $path" >&2
+      bad=1
+    fi
+  done
+  if ! grep -Fq 'GW_ISO_TCP_PROBE' scripts/mdds_e2e/network_tcp_probe.py || \
+     ! grep -Fq "192.168.8.101" scripts/mdds_e2e/pc/gw_iso_tcp_listener.bat || \
+     ! grep -Fq 'GW_ISO_TCP_LISTENER READY' scripts/mdds_e2e/pc/gw_iso_tcp_listener.bat || \
+     ! grep -Fq 'set ROS_DOMAIN_ID=47' scripts/mdds_e2e/pc/gw_pc_sweep_sub_gw.bat || \
+     ! grep -Fq 'board_sweep.py --mode sub' scripts/mdds_e2e/pc/gw_pc_sweep_sub_gw.bat; then
+    echo "GW_ISO_CONTRACT FAIL helper content does not bind the reviewed topology" >&2
+    bad=1
+  fi
+  if grep -Fq "$legacy_fwm" "$source_path" || \
+     ! grep -Fq 'GW_ISO_POLICY_SNAPSHOT SHA256=' "$source_path" || \
+     ! grep -Fq 'POLICY_SHA256=$policy_sha POLICY_FWMARK=$fwm' "$source_path" || \
+     ! grep -Fq 'GW_ISO_POLICY_RESTORE_CONFLICT' "$source_path" || \
+     ! grep -Fq 'GW_ISO_ROLLBACK_TIMER_POLICY_RESTORE_FAILED' "$source_path" || \
+     ! grep -Fq 'GW_ISO_RESTORE_OK address=%s policy=RESTORED timer=%s' "$source_path"; then
+    echo "GW_ISO_CONTRACT FAIL missing dynamic policy snapshot or safe rollback fence" >&2
+    bad=1
+  fi
+  case "$defaults" in
+    *" gw_iso "*)
+      echo "GW_ISO_CONTRACT FAIL gw_iso must not be in default/all" >&2
+      bad=1
+      ;;
+  esac
+  if (( bad != 0 )); then
+    return 1
+  fi
+  echo "GW_ISO_CONTRACT PASS rollback_s=$GW_ISO_ROLLBACK_SECONDS explicit_only=1 helpers=3"
+}
+
+# Save raw host-side IPv4 facts before and after the temporary address change.
+# The evidence makes no universal routing claim: it records all PC IPv4 routes
+# visible to this process, while the bounded TCP probe below is the actual
+# direct-reachability negative control.
+capture_gw_iso_pc_network() { # <pre|post>
+  local phase="$1" path
+  [[ "$phase" =~ ^(pre|post)$ ]] || return 1
+  mkdir -p "$GW_ISO_LOCAL_DIR" || return 1
+  path="$GW_ISO_LOCAL_DIR/pc_${phase}_network.log"
+  {
+    printf 'GW_ISO_PC_NETWORK_BEGIN phase=%s run_id=%s nonce=%s\n' "$phase" "$RUN_ID" "$RUN_NONCE"
+    powershell -NoProfile -NonInteractive -Command '
+      $ErrorActionPreference = "Stop"
+      "GW_ISO_PC_GET_NET_IPADDRESS_BEGIN"
+      Get-NetIPAddress -AddressFamily IPv4 | Sort-Object InterfaceIndex,IPAddress |
+        Format-Table -AutoSize InterfaceAlias,InterfaceIndex,IPAddress,PrefixLength,AddressState
+      "GW_ISO_PC_GET_NET_IPADDRESS_END"
+      "GW_ISO_PC_GET_NET_ROUTE_BEGIN"
+      Get-NetRoute -AddressFamily IPv4 | Sort-Object InterfaceIndex,DestinationPrefix,RouteMetric |
+        Format-Table -AutoSize InterfaceAlias,InterfaceIndex,DestinationPrefix,NextHop,RouteMetric,PolicyStore
+      "GW_ISO_PC_GET_NET_ROUTE_END"
+    ' || echo 'GW_ISO_PC_POWERSHELL_COLLECTION_FAILED'
+    echo 'GW_ISO_PC_IPCONFIG_BEGIN'
+    ipconfig /all || echo 'GW_ISO_PC_IPCONFIG_COLLECTION_FAILED'
+    echo 'GW_ISO_PC_IPCONFIG_END'
+    echo 'GW_ISO_PC_ROUTE_PRINT_BEGIN'
+    route print -4 || echo 'GW_ISO_PC_ROUTE_PRINT_COLLECTION_FAILED'
+    echo 'GW_ISO_PC_ROUTE_PRINT_END'
+    printf 'GW_ISO_PC_NETWORK_COMPLETE phase=%s run_id=%s nonce=%s\n' "$phase" "$RUN_ID" "$RUN_NONCE"
+  } > "$path" 2>&1
+  grep -Fqx "GW_ISO_PC_NETWORK_BEGIN phase=$phase run_id=$RUN_ID nonce=$RUN_NONCE" "$path" && \
+    grep -Fqx "GW_ISO_PC_NETWORK_COMPLETE phase=$phase run_id=$RUN_ID nonce=$RUN_NONCE" "$path" && \
+    ! grep -Fq 'GW_ISO_PC_POWERSHELL_COLLECTION_FAILED' "$path"
+}
+
+# HDC does not reliably propagate a remote command's status. Board collection
+# therefore has begin/complete sentinels within the captured raw output, and
+# includes route lookups plus interface byte/packet counters for a later
+# before/after eth1-activity assertion.
+capture_gw_iso_board_network() { # <board> <a_pre|b_pre|b_isolated|a_post|b_post|b_restored>
+  local board="$1" label="$2" raw path capture_script
+  [[ "$label" =~ ^(a_pre|b_pre|b_isolated|a_post|b_post|b_restored)$ ]] || return 1
+  ensure_remote_owner "$board" || return 1
+  mkdir -p "$GW_ISO_LOCAL_DIR" || return 1
+  raw="$GW_ISO_LOCAL_DIR/board_${label}_network.raw"
+  path="$GW_ISO_LOCAL_DIR/board_${label}_network.log"
+  capture_script='
+label=$1
+serial=$2
+run_id=$3
+nonce=$4
+pc_ip=$5
+board_a_eth_ip=$6
+wlan_if=$7
+eth_if=$8
+printf "GW_ISO_BOARD_NETWORK_BEGIN label=%s serial=%s run_id=%s nonce=%s\\n" "$label" "$serial" "$run_id" "$nonce"
+echo GW_ISO_ADDR_BEGIN
+ip -4 -o addr show 2>&1 || true
+echo GW_ISO_ADDR_END
+echo GW_ISO_WLAN_LINK_BEGIN
+ip link show dev "$wlan_if" 2>&1 || true
+if test -r "/sys/class/net/$wlan_if/operstate"; then
+  IFS= read -r operstate < "/sys/class/net/$wlan_if/operstate" || operstate=READ_FAILED
+  printf "GW_ISO_WLAN_OPERSTATE dev=%s value=%s\\n" "$wlan_if" "$operstate"
+else
+  printf "GW_ISO_WLAN_OPERSTATE dev=%s value=UNREADABLE\\n" "$wlan_if"
+fi
+echo GW_ISO_WLAN_LINK_END
+echo GW_ISO_ROUTE_TABLE_ALL_BEGIN
+ip -4 route show table all 2>&1 || true
+echo GW_ISO_ROUTE_TABLE_ALL_END
+echo GW_ISO_RULE_BEGIN
+ip -4 rule show 2>&1 || true
+echo GW_ISO_RULE_END
+echo GW_ISO_NEIGH_BEGIN
+ip -4 neigh show 2>&1 || true
+echo GW_ISO_NEIGH_END
+echo GW_ISO_ROUTE_TO_PC_BEGIN
+ip -4 route get "$pc_ip" 2>&1 || true
+echo GW_ISO_ROUTE_TO_PC_END
+echo GW_ISO_ROUTE_TO_BOARD_A_BEGIN
+ip -4 route get "$board_a_eth_ip" 2>&1 || true
+echo GW_ISO_ROUTE_TO_BOARD_A_END
+for dev in "$wlan_if" "$eth_if"; do
+  for stat in rx_bytes tx_bytes rx_packets tx_packets; do
+    file="/sys/class/net/$dev/statistics/$stat"
+    if test -r "$file"; then
+      value=$(cat "$file" 2>/dev/null || true)
+      case "$value" in
+        ""|*[!0-9]*) printf "GW_ISO_COUNTER dev=%s stat=%s value=INVALID\\n" "$dev" "$stat" ;;
+        *) printf "GW_ISO_COUNTER dev=%s stat=%s value=%s\\n" "$dev" "$stat" "$value" ;;
+      esac
+    else
+      printf "GW_ISO_COUNTER dev=%s stat=%s value=MISSING\\n" "$dev" "$stat"
+    fi
+  done
+done
+printf "GW_ISO_BOARD_NETWORK_COMPLETE label=%s serial=%s run_id=%s nonce=%s\\n" "$label" "$serial" "$run_id" "$nonce"
+'
+  shell "$board" "sh -c $(remote_sh_quote "$capture_script") sh $(remote_sh_quote "$label") $(remote_sh_quote "$board") $(remote_sh_quote "$RUN_ID") $(remote_sh_quote "$RUN_NONCE") $(remote_sh_quote "$GW_ISO_PC_IP") $(remote_sh_quote "$GW_ISO_BOARD_A_ETH_IP") $(remote_sh_quote "$GW_ISO_WLAN_IF") $(remote_sh_quote "$GW_ISO_ETH_IF")" > "$raw" 2>&1 || true
+  tr -d '\r' < "$raw" > "$path"
+  rm -f "$raw"
+  grep -Fqx "GW_ISO_BOARD_NETWORK_BEGIN label=$label serial=$board run_id=$RUN_ID nonce=$RUN_NONCE" "$path" && \
+    grep -Fqx "GW_ISO_BOARD_NETWORK_COMPLETE label=$label serial=$board run_id=$RUN_ID nonce=$RUN_NONCE" "$path"
+}
+
+# Verify only the declared topology. Pre/post checks intentionally fail on an
+# unexpected second 192.168.8.x address instead of deleting it: the gate is
+# authorised to disable precisely 192.168.8.111/24 and its already-validated
+# wlan0 link on Board B, nothing else.
+check_gw_iso_board_b_state() { # <pre|isolated|restored>
+  local mode="$1" raw path state_script expected fwm state_hash
+  [[ "$mode" =~ ^(pre|isolated|restored)$ ]] || return 1
+  ensure_remote_owner "$BOARD_B" || return 1
+  mkdir -p "$GW_ISO_LOCAL_DIR" || return 1
+  raw="$GW_ISO_LOCAL_DIR/board_b_${mode}_state.raw"
+  path="$GW_ISO_LOCAL_DIR/board_b_${mode}_state.log"
+  expected="GW_ISO_STATE_${mode}_PASS"
+  state_script='
+mode=$1
+wlan_if=$2
+wlan_ip=$3
+wlan_cidr=$4
+eth_if=$5
+eth_cidr=$6
+pc_ip=$7
+board_a_eth_ip=$8
+wlan_gateway=$9
+policy_table_direct=${10}
+policy_table_wlan=${11}
+expected_fwm=${12}
+expected_policy_sha=${13}
+bad=0
+if ! command -v ip >/dev/null 2>&1; then
+  echo GW_ISO_STATE_FAIL reason=ip_missing
+  exit 70
+fi
+count_cidr() {
+  iface=$1
+  cidr=$2
+  count=0
+  while IFS= read -r line; do
+    case "$line" in *" inet $cidr "*|*" inet $cidr") count=$((count + 1)) ;; esac
+  done <<EOF
+$(ip -4 -o addr show dev "$iface" 2>/dev/null)
+EOF
+  printf "%s\\n" "$count"
+}
+count_eight_subnet() {
+  count=0
+  while IFS= read -r line; do
+    case "$line" in *" inet 192.168.8."*) count=$((count + 1)) ;; esac
+  done <<EOF
+$(ip -4 -o addr show 2>/dev/null)
+EOF
+  printf "%s\\n" "$count"
+}
+wlan_exact=$(count_cidr "$wlan_if" "$wlan_cidr")
+eight_total=$(count_eight_subnet)
+eth_exact=$(count_cidr "$eth_if" "$eth_cidr")
+wlan_operstate=unreadable
+if test -r "/sys/class/net/$wlan_if/operstate"; then
+  IFS= read -r wlan_operstate < "/sys/class/net/$wlan_if/operstate" || true
+fi
+wlan_link_show=$(ip link show dev "$wlan_if" 2>/dev/null || true)
+case "$wlan_link_show" in
+  *"<UP,"*|*",UP,"*|*",UP>"*) wlan_link_admin_up=1 ;;
+  *) wlan_link_admin_up=0 ;;
+esac
+pc_route=$(ip -4 route get "$pc_ip" 2>&1)
+pc_rc=$?
+a_route=$(ip -4 route get "$board_a_eth_ip" 2>&1)
+a_rc=$?
+count_route_prefix() {
+  table=$1
+  prefix=$2
+  count=0
+  while IFS= read -r line; do
+    case "$line" in "$prefix"*) count=$((count + 1)) ;; esac
+  done <<EOF
+$(ip -4 route show table "$table" 2>/dev/null)
+EOF
+  printf "%s\\n" "$count"
+}
+count_rule_fragment() {
+  fragment=$1
+  count=0
+  while IFS= read -r line; do
+    case "$line" in *"$fragment"*) count=$((count + 1)) ;; esac
+  done <<EOF
+$(ip -4 rule show 2>/dev/null)
+EOF
+  printf "%s\\n" "$count"
+}
+actual_fwm=INVALID
+fwm_candidates=0
+while IFS= read -r line; do
+  case "$line" in
+    *"fwmark "*"/0x1ffff iif lo lookup $policy_table_wlan"*)
+      candidate=
+      for token in $line; do
+        case "$token" in 0x*/0x1ffff) candidate=$token ;; esac
+      done
+      case "$candidate" in
+        0x[0-9a-fA-F]*/0x1ffff)
+          actual_fwm=$candidate
+          fwm_candidates=$((fwm_candidates + 1))
+          ;;
+      esac
+      ;;
+  esac
+done <<EOF
+$(ip -4 rule show 2>/dev/null)
+EOF
+direct_routes=$(count_route_prefix "$policy_table_direct" "192.168.8.0/24 dev $wlan_if proto static")
+direct_targets=$(count_route_prefix "$policy_table_direct" "192.168.8.0/24 ")
+wlan_defaults=$(count_route_prefix "$policy_table_wlan" "default via $wlan_gateway dev $wlan_if proto static")
+wlan_default_targets=$(count_route_prefix "$policy_table_wlan" "default ")
+wlan_routes=$(count_route_prefix "$policy_table_wlan" "192.168.8.0/24 dev $wlan_if proto static")
+wlan_targets=$(count_route_prefix "$policy_table_wlan" "192.168.8.0/24 ")
+fwm_rows=$(count_rule_fragment "fwmark $actual_fwm ")
+oif_rows=$(count_rule_fragment "iif lo oif $wlan_if")
+oif_exact=$(count_rule_fragment "iif lo oif $wlan_if lookup $policy_table_wlan")
+mark_rows=$(count_rule_fragment "fwmark 0/0xffff iif lo")
+mark_exact=$(count_rule_fragment "fwmark 0/0xffff iif lo lookup $policy_table_wlan")
+policy_ok=1
+if [ "$direct_routes" != 1 ] || [ "$direct_targets" != 1 ] || \
+   [ "$wlan_defaults" != 1 ] || [ "$wlan_default_targets" != 1 ] || \
+   [ "$wlan_routes" != 1 ] || [ "$wlan_targets" != 1 ] || \
+   [ "$fwm_candidates" != 1 ] || [ "$fwm_rows" != 1 ] || \
+   [ "$oif_rows" != 1 ] || [ "$oif_exact" != 1 ] || \
+   [ "$mark_rows" != 1 ] || [ "$mark_exact" != 1 ]; then
+  policy_ok=0
+fi
+if [ "$expected_fwm" != "-" ] && [ "$actual_fwm" != "$expected_fwm" ]; then
+  policy_ok=0
+fi
+policy_hash=INVALID
+if [ "$policy_ok" = 1 ]; then
+  policy_hash=$(printf "GW_ISO_POLICY_V1\\nDIRECT_ROUTE=192.168.8.0/24 dev %s table %s proto static\\nWLAN_DEFAULT=default via %s dev %s table %s proto static\\nWLAN_ROUTE=192.168.8.0/24 dev %s table %s proto static\\nRULE_FWMARK=%s\\nRULE_OIF=lo:%s:%s\\nRULE_MARK0=0/0xffff:lo:%s\\n" "$wlan_if" "$policy_table_direct" "$wlan_gateway" "$wlan_if" "$policy_table_wlan" "$wlan_if" "$policy_table_wlan" "$actual_fwm" "$wlan_if" "$policy_table_wlan" "$policy_table_wlan" | sha256sum 2>/dev/null | cut -d " " -f1)
+  case "$policy_hash" in
+    ????????*) ;;
+    *) policy_ok=0 ;;
+  esac
+fi
+if [ "$expected_policy_sha" != "-" ] && [ "$policy_hash" != "$expected_policy_sha" ]; then
+  policy_ok=0
+fi
+printf "GW_ISO_STATE_FACT mode=%s wlan_exact=%s eight_total=%s eth_exact=%s wlan_operstate=%s wlan_link_admin_up=%s pc_route_rc=%s\\n" "$mode" "$wlan_exact" "$eight_total" "$eth_exact" "$wlan_operstate" "$wlan_link_admin_up" "$pc_rc"
+printf "GW_ISO_STATE_WLAN_FWMARK mode=%s value=%s candidates=%s\\n" "$mode" "$actual_fwm" "$fwm_candidates"
+printf "GW_ISO_STATE_POLICY mode=%s complete=%s direct_table=%s wlan_table=%s hash=%s expected_hash=%s\\n" "$mode" "$policy_ok" "$policy_table_direct" "$policy_table_wlan" "$policy_hash" "$expected_policy_sha"
+printf "GW_ISO_STATE_ROUTE_PC %s\\n" "$pc_route"
+printf "GW_ISO_STATE_ROUTE_A %s\\n" "$a_route"
+if [ "$eth_exact" != 1 ] || [ "$a_rc" -ne 0 ] || ! printf "%s\\n" "$a_route" | grep -Fq "dev $eth_if" || ! printf "%s\\n" "$a_route" | grep -Fq "src ${eth_cidr%/*}"; then
+  echo GW_ISO_STATE_FAIL reason=eth1_route_or_address
+  bad=1
+fi
+case "$mode" in
+  pre|restored)
+    if [ "$wlan_exact" != 1 ] || [ "$eight_total" != 1 ] || [ "$wlan_link_admin_up" != 1 ] || [ "$policy_ok" != 1 ] || [ "$pc_rc" -ne 0 ] || ! printf "%s\\n" "$pc_route" | grep -Fq "dev $wlan_if" || ! printf "%s\\n" "$pc_route" | grep -Fq "src $wlan_ip"; then
+      echo GW_ISO_STATE_FAIL reason=expected_direct_pc_path_missing
+      bad=1
+    fi
+    ;;
+  isolated)
+    # These policy tables can return a default eth1 route for a PC
+    # address even though that L2 segment has no route to the PC.  The exact
+    # TCP negative control below proves reachability; this check proves it is
+    # no longer a direct wlan0 route.
+    if [ "$wlan_exact" != 0 ] || [ "$eight_total" != 0 ] || [ "$wlan_link_admin_up" != 0 ] || { [ "$pc_rc" -eq 0 ] && { ! printf "%s\\n" "$pc_route" | grep -Fq "dev $eth_if" || ! printf "%s\\n" "$pc_route" | grep -Fq "src ${eth_cidr%/*}"; }; }; then
+      echo GW_ISO_STATE_FAIL reason=pc_route_still_reachable_or_unproven
+      bad=1
+    fi
+    ;;
+esac
+if [ "$bad" -ne 0 ]; then
+  exit 71
+fi
+printf "GW_ISO_STATE_%s_PASS\\n" "$mode"
+'
+  shell "$BOARD_B" "sh -c $(remote_sh_quote "$state_script") sh $(remote_sh_quote "$mode") $(remote_sh_quote "$GW_ISO_WLAN_IF") $(remote_sh_quote "$GW_ISO_WLAN_IP") $(remote_sh_quote "$GW_ISO_WLAN_CIDR") $(remote_sh_quote "$GW_ISO_ETH_IF") $(remote_sh_quote "$GW_ISO_ETH_CIDR") $(remote_sh_quote "$GW_ISO_PC_IP") $(remote_sh_quote "$GW_ISO_BOARD_A_ETH_IP") $(remote_sh_quote "$GW_ISO_WLAN_GATEWAY") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_DIRECT") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_WLAN") $(remote_sh_quote "${GW_ISO_WLAN_FWMARK:--}") $(remote_sh_quote "${GW_ISO_POLICY_SHA256:--}")" > "$raw" 2>&1 || true
+  tr -d '\r' < "$raw" > "$path"
+  rm -f "$raw"
+  grep -Fqx "$expected" "$path" || return 1
+  if [ "$mode" = pre ]; then
+    fwm=$(sed -n 's/^GW_ISO_STATE_WLAN_FWMARK mode=pre value=\(0x[0-9A-Fa-f][0-9A-Fa-f]*\/0x1ffff\) candidates=1$/\1/p' "$path" | head -1)
+    [[ "$fwm" =~ ^0x[0-9A-Fa-f]+/0x1ffff$ ]] || return 1
+    GW_ISO_WLAN_FWMARK="$fwm"
+  fi
+  if [ "$mode" = restored ]; then
+    state_hash=$(sed -n 's/^GW_ISO_STATE_POLICY mode=restored .* hash=\([0-9a-f][0-9a-f]*\) expected_hash=.*/\1/p' "$path" | head -1)
+    [ "$state_hash" = "$GW_ISO_POLICY_SHA256" ] || return 1
+  fi
+}
+
+# Persist a canonical, deliberately narrow description of the reviewed policy
+# plane before mutating wlan0.  This is not raw `ip` output and is never
+# executed: it merely binds the dynamic wlan fwmark and the three approved
+# routes/rules to the timer and to the post-restore readback hash.
+snapshot_gw_iso_board_b_policy() {
+  local snapshot_script raw path sha fwm
+  [ -n "$GW_ISO_WLAN_FWMARK" ] || return 1
+  [[ "$GW_ISO_WLAN_FWMARK" =~ ^0x[0-9A-Fa-f]+/0x1ffff$ ]] || return 1
+  ensure_remote_owner "$BOARD_B" || return 1
+  mkdir -p "$GW_ISO_LOCAL_DIR" || return 1
+  raw="$GW_ISO_LOCAL_DIR/policy_pre_snapshot.raw"
+  path="$GW_ISO_LOCAL_DIR/policy_pre_snapshot.log"
+  snapshot_script='
+dir=$1
+snapshot=$2
+iface=$3
+gateway=$4
+policy_table_direct=$5
+policy_table_wlan=$6
+fwm=$7
+case "$fwm" in 0x[0-9a-fA-F]*/0x1ffff) ;; *) echo GW_ISO_POLICY_SNAPSHOT_INVALID_FWMARK; exit 70 ;; esac
+if ! mkdir -p "$dir" || test -L "$dir" || test ! -d "$dir"; then
+  echo GW_ISO_POLICY_SNAPSHOT_DIRECTORY_FAILED
+  exit 69
+fi
+if test -e "$snapshot" || test -L "$snapshot"; then
+  echo GW_ISO_POLICY_SNAPSHOT_CONFLICT
+  exit 71
+fi
+# The caller has just completed the full policy precheck. Repeat the
+# ownership-critical properties immediately before sealing the snapshot.
+if ! ip -4 route show table "$policy_table_direct" 2>/dev/null | grep -Fq "192.168.8.0/24 dev $iface proto static" || \
+   ! ip -4 route show table "$policy_table_wlan" 2>/dev/null | grep -Fq "default via $gateway dev $iface proto static" || \
+   ! ip -4 route show table "$policy_table_wlan" 2>/dev/null | grep -Fq "192.168.8.0/24 dev $iface proto static" || \
+   ! ip -4 rule show 2>/dev/null | grep -Fq "fwmark $fwm iif lo lookup $policy_table_wlan" || \
+   ! ip -4 rule show 2>/dev/null | grep -Fq "iif lo oif $iface lookup $policy_table_wlan" || \
+   ! ip -4 rule show 2>/dev/null | grep -Fq "fwmark 0/0xffff iif lo lookup $policy_table_wlan"; then
+  echo GW_ISO_POLICY_SNAPSHOT_PRECHECK_CHANGED
+  exit 72
+fi
+if ! (umask 077; set -C; printf "GW_ISO_POLICY_V1\\nDIRECT_ROUTE=192.168.8.0/24 dev %s table %s proto static\\nWLAN_DEFAULT=default via %s dev %s table %s proto static\\nWLAN_ROUTE=192.168.8.0/24 dev %s table %s proto static\\nRULE_FWMARK=%s\\nRULE_OIF=lo:%s:%s\\nRULE_MARK0=0/0xffff:lo:%s\\n" "$iface" "$policy_table_direct" "$gateway" "$iface" "$policy_table_wlan" "$iface" "$policy_table_wlan" "$fwm" "$iface" "$policy_table_wlan" "$policy_table_wlan" > "$snapshot") 2>/dev/null; then
+  echo GW_ISO_POLICY_SNAPSHOT_WRITE_FAILED
+  exit 73
+fi
+if test ! -f "$snapshot" || test -L "$snapshot"; then
+  echo GW_ISO_POLICY_SNAPSHOT_VERIFY_FAILED
+  exit 74
+fi
+sha=$(sha256sum "$snapshot" 2>/dev/null | cut -d " " -f1)
+case "$sha" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+  *) echo GW_ISO_POLICY_SNAPSHOT_HASH_FAILED; exit 75 ;;
+esac
+printf "GW_ISO_POLICY_SNAPSHOT SHA256=%s FWMARK=%s\\n" "$sha" "$fwm"
+'
+  shell "$BOARD_B" "sh -c $(remote_sh_quote "$snapshot_script") sh $(remote_sh_quote "$GW_ISO_REMOTE_DIR") $(remote_sh_quote "$GW_ISO_REMOTE_POLICY_SNAPSHOT") $(remote_sh_quote "$GW_ISO_WLAN_IF") $(remote_sh_quote "$GW_ISO_WLAN_GATEWAY") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_DIRECT") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_WLAN") $(remote_sh_quote "$GW_ISO_WLAN_FWMARK")" > "$raw" 2>&1 || true
+  tr -d '\r' < "$raw" > "$path"
+  rm -f "$raw"
+  sha=$(sed -n 's/^GW_ISO_POLICY_SNAPSHOT SHA256=\([0-9a-f][0-9a-f]*\) FWMARK=0x[0-9A-Fa-f][0-9A-Fa-f]*\/0x1ffff$/\1/p' "$path" | head -1)
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  fwm=$(sed -n 's/^GW_ISO_POLICY_SNAPSHOT SHA256=[0-9a-f][0-9a-f]* FWMARK=\(0x[0-9A-Fa-f][0-9A-Fa-f]*\/0x1ffff\)$/\1/p' "$path" | head -1)
+  [ "$fwm" = "$GW_ISO_WLAN_FWMARK" ] || return 1
+  GW_ISO_POLICY_SHA256="$sha"
+  # Capture the sealed remote contents and an independent remote readback hash.
+  shell "$BOARD_B" "if test -f $(remote_sh_quote "$GW_ISO_REMOTE_POLICY_SNAPSHOT") && test ! -L $(remote_sh_quote "$GW_ISO_REMOTE_POLICY_SNAPSHOT"); then cat $(remote_sh_quote "$GW_ISO_REMOTE_POLICY_SNAPSHOT"); sha256sum $(remote_sh_quote "$GW_ISO_REMOTE_POLICY_SNAPSHOT") | cut -d ' ' -f1; fi" > "$GW_ISO_LOCAL_DIR/policy_pre_snapshot_readback.raw" 2>&1 || true
+  tr -d '\r' < "$GW_ISO_LOCAL_DIR/policy_pre_snapshot_readback.raw" > "$GW_ISO_LOCAL_DIR/policy_pre_snapshot_readback.log"
+  rm -f "$GW_ISO_LOCAL_DIR/policy_pre_snapshot_readback.raw"
+  grep -Fqx "$GW_ISO_POLICY_SHA256" "$GW_ISO_LOCAL_DIR/policy_pre_snapshot_readback.log" || return 1
+  printf 'run_id=%s nonce=%s policy_snapshot=%s policy_sha256=%s fwm=%s\n' \
+    "$RUN_ID" "$RUN_NONCE" "$GW_ISO_REMOTE_POLICY_SNAPSHOT" "$GW_ISO_POLICY_SHA256" "$GW_ISO_WLAN_FWMARK" \
+    > "$GW_ISO_LOCAL_DIR/policy_snapshot_identity.txt"
+}
+
+# Printed into each short-lived Board-B recovery shell. It takes only the
+# canonical, prechecked values supplied by the host; it never parses or
+# executes saved route output. All selectors are deliberately narrow so an
+# unexpected network-manager change remains a fail-closed recovery conflict.
+gw_iso_remote_policy_restore_lib() {
+  cat <<'GW_ISO_POLICY_LIB_EOF'
+gw_iso_policy_input_valid() {
+  [ "$iface" = wlan0 ] && [ "$gateway" = 192.168.8.1 ] && [ "$policy_table_direct" = 99 ] && [ "$policy_table_wlan" = 2006 ] || return 1
+  case "$fwm" in 0x[0-9a-fA-F]*/0x1ffff) ;; *) return 1 ;; esac
+  [ "${#policy_sha}" -eq 64 ] || return 1
+  case "$policy_sha" in *[!0-9a-f]*|"") return 1 ;; esac
+  case "$policy_attempts" in ""|*[!0-9]*|0) return 1 ;; esac
+  return 0
+}
+gw_iso_policy_snapshot_valid() {
+  test -f "$snapshot" && test ! -L "$snapshot" || return 1
+  actual=$(sha256sum "$snapshot" 2>/dev/null | cut -d " " -f1)
+  [ "$actual" = "$policy_sha" ]
+}
+gw_iso_route_count() {
+  table=$1
+  re=$2
+  count=0
+  while IFS= read -r line; do
+    if printf "%s\\n" "$line" | grep -Eq "$re"; then count=$((count + 1)); fi
+  done <<GW_ISO_ROUTE_EOF
+$(ip -4 route show table "$table" 2>/dev/null)
+GW_ISO_ROUTE_EOF
+  printf "%s\\n" "$count"
+}
+gw_iso_rule_count() {
+  re=$1
+  count=0
+  while IFS= read -r line; do
+    if printf "%s\\n" "$line" | grep -Eq "$re"; then count=$((count + 1)); fi
+  done <<GW_ISO_RULE_EOF
+$(ip -4 rule show 2>/dev/null)
+GW_ISO_RULE_EOF
+  printf "%s\\n" "$count"
+}
+gw_iso_ensure_route() {
+  table=$1
+  exact_re=$2
+  selector_re=$3
+  shift 3
+  total=$(gw_iso_route_count "$table" "$selector_re")
+  exact=$(gw_iso_route_count "$table" "$exact_re")
+  case "$total:$exact" in
+    1:1) return 0 ;;
+    0:0)
+      ip -4 route add "$@" || return 1
+      total=$(gw_iso_route_count "$table" "$selector_re")
+      exact=$(gw_iso_route_count "$table" "$exact_re")
+      [ "$total:$exact" = 1:1 ]
+      return
+      ;;
+    *)
+      printf "GW_ISO_POLICY_RESTORE_CONFLICT kind=route table=%s total=%s exact=%s\\n" "$table" "$total" "$exact"
+      return 1
+      ;;
+  esac
+}
+gw_iso_ensure_rule() {
+  exact_re=$1
+  selector_re=$2
+  shift 2
+  total=$(gw_iso_rule_count "$selector_re")
+  exact=$(gw_iso_rule_count "$exact_re")
+  case "$total:$exact" in
+    1:1) return 0 ;;
+    0:0)
+      ip -4 rule add "$@" || return 1
+      total=$(gw_iso_rule_count "$selector_re")
+      exact=$(gw_iso_rule_count "$exact_re")
+      [ "$total:$exact" = 1:1 ]
+      return
+      ;;
+    *)
+      printf "GW_ISO_POLICY_RESTORE_CONFLICT kind=rule total=%s exact=%s\\n" "$total" "$exact"
+      return 1
+      ;;
+  esac
+}
+gw_iso_policy_hash_now() {
+  direct_exact="^192\\.168\\.8\\.0/24 dev $iface proto static"
+  direct_selector="^192\\.168\\.8\\.0/24 "
+  default_exact="^default via $gateway dev $iface proto static"
+  default_selector="^default "
+  wlan_exact="^192\\.168\\.8\\.0/24 dev $iface proto static"
+  wlan_selector="^192\\.168\\.8\\.0/24 "
+  fwm_exact="^11000:.*fwmark $fwm iif lo lookup $policy_table_wlan$"
+  fwm_selector="^11000:.*fwmark [^ ]*/0x1ffff iif lo lookup $policy_table_wlan$"
+  oif_exact="^12000:.*iif lo oif $iface lookup $policy_table_wlan$"
+  oif_selector="^12000:.*iif lo oif $iface lookup [0-9][0-9]*$"
+  mark_exact="^16000:.*fwmark 0/0xffff iif lo lookup $policy_table_wlan$"
+  mark_selector="^16000:.*fwmark 0/0xffff iif lo lookup [0-9][0-9]*$"
+  [ "$(gw_iso_route_count "$policy_table_direct" "$direct_selector"):$(gw_iso_route_count "$policy_table_direct" "$direct_exact")" = 1:1 ] || return 1
+  [ "$(gw_iso_route_count "$policy_table_wlan" "$default_selector"):$(gw_iso_route_count "$policy_table_wlan" "$default_exact")" = 1:1 ] || return 1
+  [ "$(gw_iso_route_count "$policy_table_wlan" "$wlan_selector"):$(gw_iso_route_count "$policy_table_wlan" "$wlan_exact")" = 1:1 ] || return 1
+  [ "$(gw_iso_rule_count "$fwm_selector"):$(gw_iso_rule_count "$fwm_exact")" = 1:1 ] || return 1
+  [ "$(gw_iso_rule_count "$oif_selector"):$(gw_iso_rule_count "$oif_exact")" = 1:1 ] || return 1
+  [ "$(gw_iso_rule_count "$mark_selector"):$(gw_iso_rule_count "$mark_exact")" = 1:1 ] || return 1
+  printf "GW_ISO_POLICY_V1\\nDIRECT_ROUTE=192.168.8.0/24 dev %s table %s proto static\\nWLAN_DEFAULT=default via %s dev %s table %s proto static\\nWLAN_ROUTE=192.168.8.0/24 dev %s table %s proto static\\nRULE_FWMARK=%s\\nRULE_OIF=lo:%s:%s\\nRULE_MARK0=0/0xffff:lo:%s\\n" "$iface" "$policy_table_direct" "$gateway" "$iface" "$policy_table_wlan" "$iface" "$policy_table_wlan" "$fwm" "$iface" "$policy_table_wlan" "$policy_table_wlan" | sha256sum 2>/dev/null | cut -d " " -f1
+}
+gw_iso_policy_restore() {
+  gw_iso_policy_input_valid && gw_iso_policy_snapshot_valid || return 1
+  direct_exact="^192\\.168\\.8\\.0/24 dev $iface proto static"
+  direct_selector="^192\\.168\\.8\\.0/24 "
+  default_exact="^default via $gateway dev $iface proto static"
+  default_selector="^default "
+  fwm_exact="^11000:.*fwmark $fwm iif lo lookup $policy_table_wlan$"
+  fwm_selector="^11000:.*fwmark [^ ]*/0x1ffff iif lo lookup $policy_table_wlan$"
+  oif_exact="^12000:.*iif lo oif $iface lookup $policy_table_wlan$"
+  oif_selector="^12000:.*iif lo oif $iface lookup [0-9][0-9]*$"
+  mark_exact="^16000:.*fwmark 0/0xffff iif lo lookup $policy_table_wlan$"
+  mark_selector="^16000:.*fwmark 0/0xffff iif lo lookup [0-9][0-9]*$"
+  stale_mark="^16000:.*fwmark 0/0xffff iif lo lookup 2003$"
+  attempt=1
+  while [ "$attempt" -le "$policy_attempts" ]; do
+    current=$(gw_iso_policy_hash_now 2>/dev/null || true)
+    if [ "$current" = "$policy_sha" ]; then
+      printf "GW_ISO_POLICY_RESTORE_OK sha=%s attempts=%s\\n" "$current" "$attempt"
+      return 0
+    fi
+    gw_iso_ensure_route "$policy_table_direct" "$direct_exact" "$direct_selector" 192.168.8.0/24 dev "$iface" table "$policy_table_direct" proto static || return 1
+    gw_iso_ensure_route "$policy_table_wlan" "$default_exact" "$default_selector" default via "$gateway" dev "$iface" table "$policy_table_wlan" proto static || return 1
+    gw_iso_ensure_route "$policy_table_wlan" "$direct_exact" "$direct_selector" 192.168.8.0/24 dev "$iface" table "$policy_table_wlan" proto static || return 1
+    gw_iso_ensure_rule "$fwm_exact" "$fwm_selector" pref 11000 fwmark "$fwm" iif lo table "$policy_table_wlan" || return 1
+    gw_iso_ensure_rule "$oif_exact" "$oif_selector" pref 12000 iif lo oif "$iface" table "$policy_table_wlan" || return 1
+    mark_total=$(gw_iso_rule_count "$mark_selector")
+    mark_exact_count=$(gw_iso_rule_count "$mark_exact")
+    case "$mark_total:$mark_exact_count" in
+      1:1) ;;
+      0:0) gw_iso_ensure_rule "$mark_exact" "$mark_selector" pref 16000 fwmark 0/0xffff iif lo table "$policy_table_wlan" || return 1 ;;
+      1:0)
+        [ "$(gw_iso_rule_count "$stale_mark")" = 1 ] || {
+          printf "GW_ISO_POLICY_RESTORE_CONFLICT kind=stale_mark total=%s\\n" "$mark_total"
+          return 1
+        }
+        ip -4 rule del pref 16000 fwmark 0/0xffff iif lo table 2003 || return 1
+        gw_iso_ensure_rule "$mark_exact" "$mark_selector" pref 16000 fwmark 0/0xffff iif lo table "$policy_table_wlan" || return 1
+        ;;
+      *)
+        printf "GW_ISO_POLICY_RESTORE_CONFLICT kind=mark total=%s exact=%s\\n" "$mark_total" "$mark_exact_count"
+        return 1
+        ;;
+    esac
+    current=$(gw_iso_policy_hash_now 2>/dev/null || true)
+    if [ "$current" = "$policy_sha" ]; then
+      printf "GW_ISO_POLICY_RESTORE_OK sha=%s attempts=%s\\n" "$current" "$attempt"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  printf "GW_ISO_POLICY_RESTORE_FAILED expected_sha=%s\\n" "$policy_sha"
+  return 1
+}
+GW_ISO_POLICY_LIB_EOF
+}
+
+# Arm the Board-B safety net before deleting anything. The timer has a
+# PID:start identity plus a hash-sealed policy snapshot in a run-owned record.
+# It restores the reviewed address and policy after the bounded delay, even if
+# this host process is interrupted before normal cleanup can run.
+arm_gw_iso_rollback() {
+  local timer_script timer_suffix policy_lib arm_script raw path pair
+  [ "$GW_ISO_ROLLBACK_ARMED" -eq 0 ] || return 0
+  [[ "$GW_ISO_WLAN_FWMARK" =~ ^0x[0-9A-Fa-f]+/0x1ffff$ && "$GW_ISO_POLICY_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  ensure_remote_owner "$BOARD_B" || return 1
+  mkdir -p "$GW_ISO_LOCAL_DIR" || return 1
+  raw="$GW_ISO_LOCAL_DIR/rollback_arm.raw"
+  path="$GW_ISO_LOCAL_DIR/rollback_arm.log"
+  timer_script='
+record=$1
+run_id=$2
+nonce=$3
+iface=$4
+cidr=$5
+address=$6
+delay=$7
+snapshot=$8
+policy_sha=$9
+gateway=${10}
+policy_table_direct=${11}
+policy_table_wlan=${12}
+fwm=${13}
+policy_attempts=${14}
+self_pid=$$
+self_start=$(cut -d " " -f22 "/proc/$$/stat" 2>/dev/null || true)
+'
+  policy_lib=$(gw_iso_remote_policy_restore_lib)
+  timer_suffix='
+expected="GW_ISO_ROLLBACK_ARMED RUN_ID=$run_id NONCE=$nonce PID=$self_pid START=$self_start IFACE=$iface CIDR=$cidr POLICY_SHA256=$policy_sha POLICY_FWMARK=$fwm GATEWAY=$gateway DIRECT_TABLE=$policy_table_direct WLAN_TABLE=$policy_table_wlan"
+sleep "$delay"
+printf "GW_ISO_ROLLBACK_TIMER_WAKE pid=%s start=%s delay_s=%s\\n" "$self_pid" "$self_start" "$delay"
+if test -f "$record" && test ! -L "$record" && [ "$(cat "$record" 2>/dev/null)" = "$expected" ]; then
+  if ! ip link set dev "$iface" up; then
+    echo GW_ISO_ROLLBACK_TIMER_LINK_UP_FAILED
+    exit 0
+  fi
+  exact=0
+  while IFS= read -r line; do
+    case "$line" in *" inet $cidr "*|*" inet $cidr") exact=$((exact + 1)) ;; esac
+  done <<EOF
+$(ip -4 -o addr show dev "$iface" 2>/dev/null)
+EOF
+  case "$exact" in
+    0)
+      if ! ip address add "$cidr" dev "$iface"; then
+        echo GW_ISO_ROLLBACK_TIMER_RESTORE_FAILED
+        exit 0
+      fi
+      address_state=ADDED
+      ;;
+    1) address_state=ALREADY_PRESENT ;;
+    *) echo GW_ISO_ROLLBACK_TIMER_DUPLICATE_ADDRESS; exit 0 ;;
+  esac
+  if gw_iso_policy_restore; then
+    printf "GW_ISO_ROLLBACK_TIMER_RESTORED address=%s policy=RESTORED\\n" "$address_state"
+  else
+    echo GW_ISO_ROLLBACK_TIMER_POLICY_RESTORE_FAILED
+  fi
+else
+  echo GW_ISO_ROLLBACK_TIMER_DISARMED_OR_NOT_OWNED
+fi
+'
+  timer_script="${timer_script}
+${policy_lib}
+${timer_suffix}"
+  arm_script='
+dir=$1
+record=$2
+rollback_log=$3
+run_id=$4
+nonce=$5
+iface=$6
+cidr=$7
+address=$8
+delay=$9
+snapshot=${10}
+policy_sha=${11}
+gateway=${12}
+policy_table_direct=${13}
+policy_table_wlan=${14}
+fwm=${15}
+policy_attempts=${16}
+timer_script=${17}
+mkdir -p "$dir" || exit 70
+if test -L "$dir" || test -e "$record" || test -L "$record" || test -e "$rollback_log" || test -L "$rollback_log"; then
+  echo GW_ISO_ROLLBACK_ARM_CONFLICT
+  exit 71
+fi
+nohup sh -c "$timer_script" sh "$record" "$run_id" "$nonce" "$iface" "$cidr" "$address" "$delay" "$snapshot" "$policy_sha" "$gateway" "$policy_table_direct" "$policy_table_wlan" "$fwm" "$policy_attempts" > "$rollback_log" 2>&1 < /dev/null &
+timer_pid=$!
+timer_start=
+for attempt in 1 2 3; do
+  if test -r "/proc/$timer_pid/stat"; then
+    timer_start=$(cut -d " " -f22 "/proc/$timer_pid/stat" 2>/dev/null || true)
+    case "$timer_start" in ""|*[!0-9]*) ;; *) break ;; esac
+  fi
+  sleep 1
+done
+case "$timer_start" in
+  ""|*[!0-9]*)
+    echo GW_ISO_ROLLBACK_ARM_TIMER_IDENTITY_INVALID
+    exit 72
+    ;;
+esac
+expected="GW_ISO_ROLLBACK_ARMED RUN_ID=$run_id NONCE=$nonce PID=$timer_pid START=$timer_start IFACE=$iface CIDR=$cidr POLICY_SHA256=$policy_sha POLICY_FWMARK=$fwm GATEWAY=$gateway DIRECT_TABLE=$policy_table_direct WLAN_TABLE=$policy_table_wlan"
+if ! (umask 077; set -C; printf "%s\\n" "$expected" > "$record") 2>/dev/null; then
+  current=$(cut -d " " -f22 "/proc/$timer_pid/stat" 2>/dev/null || true)
+  [ "$current" = "$timer_start" ] && kill "$timer_pid" 2>/dev/null || true
+  echo GW_ISO_ROLLBACK_ARM_RECORD_WRITE_FAILED
+  exit 73
+fi
+if test ! -f "$record" || test -L "$record" || [ "$(cat "$record" 2>/dev/null)" != "$expected" ]; then
+  current=$(cut -d " " -f22 "/proc/$timer_pid/stat" 2>/dev/null || true)
+  [ "$current" = "$timer_start" ] && kill "$timer_pid" 2>/dev/null || true
+  echo GW_ISO_ROLLBACK_ARM_RECORD_VERIFY_FAILED
+  exit 74
+fi
+current=$(cut -d " " -f22 "/proc/$timer_pid/stat" 2>/dev/null || true)
+if [ "$current" != "$timer_start" ]; then
+  echo GW_ISO_ROLLBACK_ARM_TIMER_GONE
+  exit 75
+fi
+printf "GW_ISO_ROLLBACK_ARMED PID=%s START=%s\\n" "$timer_pid" "$timer_start"
+'
+  shell "$BOARD_B" "sh -c $(remote_sh_quote "$arm_script") sh $(remote_sh_quote "$GW_ISO_REMOTE_DIR") $(remote_sh_quote "$GW_ISO_REMOTE_ROLLBACK_RECORD") $(remote_sh_quote "$GW_ISO_REMOTE_ROLLBACK_LOG") $(remote_sh_quote "$RUN_ID") $(remote_sh_quote "$RUN_NONCE") $(remote_sh_quote "$GW_ISO_WLAN_IF") $(remote_sh_quote "$GW_ISO_WLAN_CIDR") $(remote_sh_quote "$GW_ISO_WLAN_IP") $(remote_sh_quote "$GW_ISO_ROLLBACK_SECONDS") $(remote_sh_quote "$GW_ISO_REMOTE_POLICY_SNAPSHOT") $(remote_sh_quote "$GW_ISO_POLICY_SHA256") $(remote_sh_quote "$GW_ISO_WLAN_GATEWAY") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_DIRECT") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_WLAN") $(remote_sh_quote "$GW_ISO_WLAN_FWMARK") $(remote_sh_quote "$GW_ISO_POLICY_SETTLE_ATTEMPTS") $(remote_sh_quote "$timer_script")" > "$raw" 2>&1 || true
+  tr -d '\r' < "$raw" > "$path"
+  rm -f "$raw"
+  pair=$(sed -n 's/^GW_ISO_ROLLBACK_ARMED PID=\([0-9][0-9]*\) START=\([0-9][0-9]*\)$/\1:\2/p' "$path" | head -1)
+  if ! [[ "$pair" =~ ^[0-9]+:[0-9]+$ ]]; then
+    echo "   ERROR: Board-B rollback timer did not publish an exact PID:start record" >&2
+    return 1
+  fi
+  GW_ISO_ROLLBACK_PID=${pair%%:*}
+  GW_ISO_ROLLBACK_START=${pair#*:}
+  GW_ISO_ROLLBACK_ARMED=1
+  printf 'run_id=%s nonce=%s board=%s rollback_pid=%s rollback_start=%s record=%s delay_s=%s policy_sha256=%s fwm=%s\n' \
+    "$RUN_ID" "$RUN_NONCE" "$BOARD_B" "$GW_ISO_ROLLBACK_PID" "$GW_ISO_ROLLBACK_START" \
+    "$GW_ISO_REMOTE_ROLLBACK_RECORD" "$GW_ISO_ROLLBACK_SECONDS" "$GW_ISO_POLICY_SHA256" "$GW_ISO_WLAN_FWMARK" >> "$GW_ISO_LOCAL_DIR/rollback_identity.txt"
+}
+
+# This is the only mutation in GW-ISO. It refuses a missing/duplicate target
+# and refuses to act unless the exact timer record belongs to this run.
+remove_gw_iso_board_b_wlan_address() {
+  local delete_script raw path expected
+  [ "$GW_ISO_ROLLBACK_ARMED" -eq 1 ] || return 1
+  [[ "$GW_ISO_ROLLBACK_PID" =~ ^[0-9]+$ && "$GW_ISO_ROLLBACK_START" =~ ^[0-9]+$ ]] || return 1
+  mkdir -p "$GW_ISO_LOCAL_DIR" || return 1
+  raw="$GW_ISO_LOCAL_DIR/address_delete.raw"
+  path="$GW_ISO_LOCAL_DIR/address_delete.log"
+  expected="GW_ISO_ROLLBACK_ARMED RUN_ID=$RUN_ID NONCE=$RUN_NONCE PID=$GW_ISO_ROLLBACK_PID START=$GW_ISO_ROLLBACK_START IFACE=$GW_ISO_WLAN_IF CIDR=$GW_ISO_WLAN_CIDR POLICY_SHA256=$GW_ISO_POLICY_SHA256 POLICY_FWMARK=$GW_ISO_WLAN_FWMARK GATEWAY=$GW_ISO_WLAN_GATEWAY DIRECT_TABLE=$GW_ISO_POLICY_TABLE_DIRECT WLAN_TABLE=$GW_ISO_POLICY_TABLE_WLAN"
+  delete_script='
+record=$1
+expected=$2
+iface=$3
+cidr=$4
+if test ! -f "$record" || test -L "$record" || [ "$(cat "$record" 2>/dev/null)" != "$expected" ]; then
+  echo GW_ISO_ADDRESS_DELETE_NOT_ARMED
+  exit 70
+fi
+if ! ip link set dev "$iface" down; then
+  echo GW_ISO_WLAN_LINK_DISABLE_FAILED
+  exit 71
+fi
+link_show=$(ip link show dev "$iface" 2>/dev/null || true)
+case "$link_show" in
+  *"<UP,"*|*",UP,"*|*",UP>"*) link_admin_up=1 ;;
+  *) link_admin_up=0 ;;
+esac
+if [ "$link_admin_up" != 0 ]; then
+  printf "GW_ISO_WLAN_LINK_DISABLE_VERIFY_FAILED admin_up=%s\\n" "$link_admin_up"
+  exit 72
+fi
+count=0
+while IFS= read -r line; do
+  case "$line" in *" inet $cidr "*|*" inet $cidr") count=$((count + 1)) ;; esac
+done <<EOF
+$(ip -4 -o addr show dev "$iface" 2>/dev/null)
+EOF
+case "$count" in
+  0)
+    # This OpenHarmony network stack flushes the reviewed address when wlan0
+    # is administratively down. That already meets the isolation condition.
+    echo GW_ISO_ADDRESS_ABSENT_AFTER_LINK_DISABLE
+    ;;
+  1)
+    if ! ip address del "$cidr" dev "$iface"; then
+      echo GW_ISO_ADDRESS_DELETE_COMMAND_FAILED
+      exit 74
+    fi
+    ;;
+  *)
+    printf "GW_ISO_ADDRESS_DELETE_REFUSED count=%s\\n" "$count"
+    exit 73
+    ;;
+esac
+count=0
+while IFS= read -r line; do
+  case "$line" in *" inet $cidr "*|*" inet $cidr") count=$((count + 1)) ;; esac
+done <<EOF
+$(ip -4 -o addr show dev "$iface" 2>/dev/null)
+EOF
+if [ "$count" != 0 ]; then
+  printf "GW_ISO_ADDRESS_DELETE_VERIFY_FAILED count=%s\\n" "$count"
+  exit 75
+fi
+echo GW_ISO_WLAN_LINK_DISABLED
+echo GW_ISO_ADDRESS_REMOVED
+'
+  shell "$BOARD_B" "sh -c $(remote_sh_quote "$delete_script") sh $(remote_sh_quote "$GW_ISO_REMOTE_ROLLBACK_RECORD") $(remote_sh_quote "$expected") $(remote_sh_quote "$GW_ISO_WLAN_IF") $(remote_sh_quote "$GW_ISO_WLAN_CIDR")" > "$raw" 2>&1 || true
+  tr -d '\r' < "$raw" > "$path"
+  rm -f "$raw"
+  if ! grep -Fqx 'GW_ISO_WLAN_LINK_DISABLED' "$path" || ! grep -Fqx 'GW_ISO_ADDRESS_REMOVED' "$path"; then
+    return 1
+  fi
+  GW_ISO_ACTIVE=1
+}
+
+
+# Restore address and policy first, then disarm second. A reused PID is never
+# signalled; the function fails closed if it cannot prove the hash-sealed
+# policy restoration and disarm of the run-owned timer record.
+restore_gw_iso_network() {
+  local restore_script policy_lib raw path expected
+  if [ "$GW_ISO_ACTIVE" -eq 0 ] && [ "$GW_ISO_ROLLBACK_ARMED" -eq 0 ]; then
+    return 0
+  fi
+  [[ "$GW_ISO_ROLLBACK_PID" =~ ^[0-9]+$ && "$GW_ISO_ROLLBACK_START" =~ ^[0-9]+$ ]] || {
+    echo "ERROR: GW-ISO rollback is armed without a valid timer identity" >&2
+    return 1
+  }
+  mkdir -p "$GW_ISO_LOCAL_DIR" || return 1
+  raw="$GW_ISO_LOCAL_DIR/rollback_restore.raw"
+  path="$GW_ISO_LOCAL_DIR/rollback_restore.log"
+  [[ "$GW_ISO_WLAN_FWMARK" =~ ^0x[0-9A-Fa-f]+/0x1ffff$ && "$GW_ISO_POLICY_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  expected="GW_ISO_ROLLBACK_ARMED RUN_ID=$RUN_ID NONCE=$RUN_NONCE PID=$GW_ISO_ROLLBACK_PID START=$GW_ISO_ROLLBACK_START IFACE=$GW_ISO_WLAN_IF CIDR=$GW_ISO_WLAN_CIDR POLICY_SHA256=$GW_ISO_POLICY_SHA256 POLICY_FWMARK=$GW_ISO_WLAN_FWMARK GATEWAY=$GW_ISO_WLAN_GATEWAY DIRECT_TABLE=$GW_ISO_POLICY_TABLE_DIRECT WLAN_TABLE=$GW_ISO_POLICY_TABLE_WLAN"
+  policy_lib=$(gw_iso_remote_policy_restore_lib)
+  restore_script="${policy_lib}
+"
+  restore_script+='
+record=$1
+expected=$2
+timer_pid=$3
+timer_start=$4
+iface=$5
+cidr=$6
+snapshot=$7
+policy_sha=$8
+gateway=$9
+policy_table_direct=${10}
+policy_table_wlan=${11}
+fwm=${12}
+policy_attempts=${13}
+if ! ip link set dev "$iface" up; then
+  echo GW_ISO_RESTORE_LINK_UP_FAILED
+  exit 70
+fi
+link_show=$(ip link show dev "$iface" 2>/dev/null || true)
+case "$link_show" in
+  *"<UP,"*|*",UP,"*|*",UP>"*) link_admin_up=1 ;;
+  *) link_admin_up=0 ;;
+esac
+if [ "$link_admin_up" != 1 ]; then
+  printf "GW_ISO_RESTORE_LINK_UP_VERIFY_FAILED admin_up=%s\\n" "$link_admin_up"
+  exit 71
+fi
+count_cidr() {
+  count=0
+  while IFS= read -r line; do
+    case "$line" in *" inet $cidr "*|*" inet $cidr") count=$((count + 1)) ;; esac
+  done <<EOF
+$(ip -4 -o addr show dev "$iface" 2>/dev/null)
+EOF
+  printf "%s\\n" "$count"
+}
+# Let the network service settle after re-enabling wlan0. If it does not
+# recreate the reviewed static address, restore that exact address ourselves.
+count=0
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  count=$(count_cidr)
+  case "$count" in
+    1) break ;;
+    0) sleep 1 ;;
+    *) printf "GW_ISO_RESTORE_ADDRESS_DUPLICATE count=%s\\n" "$count"; exit 73 ;;
+  esac
+done
+count=0
+count=$(count_cidr)
+case "$count" in
+  0)
+    if ! ip address add "$cidr" dev "$iface"; then
+      echo GW_ISO_RESTORE_ADDRESS_ADD_FAILED
+      exit 72
+    fi
+    address_state=ADDED
+    ;;
+  1) address_state=ALREADY_PRESENT ;;
+  *)
+    printf "GW_ISO_RESTORE_ADDRESS_DUPLICATE count=%s\\n" "$count"
+    exit 74
+    ;;
+esac
+sleep 2
+count=$(count_cidr)
+if [ "$count" != 1 ]; then
+  printf "GW_ISO_RESTORE_ADDRESS_VERIFY_FAILED count=%s\\n" "$count"
+  exit 75
+fi
+if ! gw_iso_policy_restore; then
+  echo GW_ISO_RESTORE_POLICY_FAILED
+  exit 78
+fi
+if test ! -f "$record" || test -L "$record"; then
+  echo GW_ISO_RESTORE_RECORD_MISSING_OR_INVALID
+  exit 76
+fi
+if [ "$(cat "$record" 2>/dev/null)" != "$expected" ]; then
+  echo GW_ISO_RESTORE_RECORD_NOT_OWNED
+  exit 77
+fi
+timer_state=GONE
+if test -r "/proc/$timer_pid/stat"; then
+  current=$(cut -d " " -f22 "/proc/$timer_pid/stat" 2>/dev/null || true)
+  if [ "$current" = "$timer_start" ]; then
+    kill "$timer_pid" 2>/dev/null || true
+    sleep 1
+    current=$(cut -d " " -f22 "/proc/$timer_pid/stat" 2>/dev/null || true)
+    if [ "$current" = "$timer_start" ]; then
+      kill -9 "$timer_pid" 2>/dev/null || true
+      sleep 1
+      current=$(cut -d " " -f22 "/proc/$timer_pid/stat" 2>/dev/null || true)
+    fi
+    if [ "$current" = "$timer_start" ]; then
+      echo GW_ISO_RESTORE_TIMER_STOP_FAILED
+      exit 75
+    fi
+    timer_state=STOPPED
+  elif [ -n "$current" ]; then
+    timer_state=REUSED_NOT_KILLED
+  fi
+fi
+if ! rm -f "$record" || test -e "$record" || test -L "$record"; then
+  echo GW_ISO_RESTORE_RECORD_REMOVE_FAILED
+  exit 76
+fi
+printf "GW_ISO_RESTORE_OK address=%s policy=RESTORED timer=%s\\n" "$address_state" "$timer_state"
+'
+  shell "$BOARD_B" "sh -c $(remote_sh_quote "$restore_script") sh $(remote_sh_quote "$GW_ISO_REMOTE_ROLLBACK_RECORD") $(remote_sh_quote "$expected") $(remote_sh_quote "$GW_ISO_ROLLBACK_PID") $(remote_sh_quote "$GW_ISO_ROLLBACK_START") $(remote_sh_quote "$GW_ISO_WLAN_IF") $(remote_sh_quote "$GW_ISO_WLAN_CIDR") $(remote_sh_quote "$GW_ISO_REMOTE_POLICY_SNAPSHOT") $(remote_sh_quote "$GW_ISO_POLICY_SHA256") $(remote_sh_quote "$GW_ISO_WLAN_GATEWAY") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_DIRECT") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_WLAN") $(remote_sh_quote "$GW_ISO_WLAN_FWMARK") $(remote_sh_quote "$GW_ISO_POLICY_SETTLE_ATTEMPTS")" > "$raw" 2>&1 || true
+  tr -d '\r' < "$raw" > "$path"
+  rm -f "$raw"
+  if ! grep -Eq '^GW_ISO_RESTORE_OK address=(ADDED|ALREADY_PRESENT) policy=RESTORED timer=(STOPPED|GONE|REUSED_NOT_KILLED)$' "$path"; then
+    echo "ERROR: GW-ISO could not prove address/policy restoration and timer disarm" >&2
+    return 1
+  fi
+  GW_ISO_ACTIVE=0
+  GW_ISO_ROLLBACK_ARMED=0
+  GW_ISO_ROLLBACK_PID=""
+  GW_ISO_ROLLBACK_START=""
+}
+
+
+wait_gw_iso_pc_marker() { # <pc-log> <fixed marker> <attempts>
+  local log="$1" marker="$2" attempts="$3" attempt
+  [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$attempts" =~ ^[1-9][0-9]*$ ]] || return 1
+  for attempt in $(seq 1 "$attempts"); do
+    if grep -Fq "$marker" "$LOGDIR/$log" "$LOGDIR/$log.err" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# The direct-PC probe is deliberately TCP to a listener bound only to the PC's
+# 192.168.8.101 address. It is not a substitute for traffic capture; it gives
+# the route check a tokenless, bounded application-level negative control.
+run_gw_iso_tcp_probe() { # <board> <pre_a|pre_b|post_b> <connect|fail> [expected-source]
+  local board="$1" label="$2" expected="$3" source="${4:-}" raw path probe_script
+  [[ "$label" =~ ^(pre_a|pre_b|post_b)$ && "$expected" =~ ^(connect|fail)$ ]] || return 1
+  if [ -n "$source" ] && ! [[ "$source" =~ ^192\.168\.8\.[0-9]{1,3}$ ]]; then
+    return 1
+  fi
+  ensure_remote_owner "$board" || return 1
+  mkdir -p "$GW_ISO_LOCAL_DIR" || return 1
+  raw="$GW_ISO_LOCAL_DIR/tcp_${label}.raw"
+  path="$GW_ISO_LOCAL_DIR/tcp_${label}.log"
+  probe_script='
+helper=$1
+host=$2
+port=$3
+expected=$4
+source=$5
+if [ -n "$source" ]; then
+  exec python3.12 "$helper" --host "$host" --port "$port" --timeout 3 --expect "$expected" --expect-source "$source"
+fi
+exec python3.12 "$helper" --host "$host" --port "$port" --timeout 3 --expect "$expected"
+'
+  shell "$board" ". $(remote_sh_quote "$DEVICE_DIR/env.sh") || exit 70; exec sh -c $(remote_sh_quote "$probe_script") sh $(remote_sh_quote "$DEVICE_DIR/mdds_e2e/network_tcp_probe.py") $(remote_sh_quote "$GW_ISO_PC_IP") $(remote_sh_quote "$GW_ISO_TCP_PORT") $(remote_sh_quote "$expected") $(remote_sh_quote "$source")" > "$raw" 2>&1 || true
+  tr -d '\r' < "$raw" > "$path"
+  rm -f "$raw"
+  grep -Fq "GW_ISO_TCP_PROBE PASS expected=$expected " "$path" || return 1
+  if [ -n "$source" ]; then
+    grep -Fq "local=$source:" "$path" || return 1
+  fi
+}
+
+# Network interface counters are supporting topology evidence. The exact
+# payload outcome below remains authoritative; these deltas show that the
+# isolated B->A leg actually used eth1 during that successful run.
+assert_gw_iso_eth1_activity() {
+  local b_pre b_post a_pre a_post b_tx0 b_tx1 a_rx0 a_rx1 b_delta a_delta path
+  b_pre="$GW_ISO_LOCAL_DIR/board_b_pre_network.log"
+  b_post="$GW_ISO_LOCAL_DIR/board_b_post_network.log"
+  a_pre="$GW_ISO_LOCAL_DIR/board_a_pre_network.log"
+  a_post="$GW_ISO_LOCAL_DIR/board_a_post_network.log"
+  path="$GW_ISO_LOCAL_DIR/eth1_counter_delta.log"
+  b_tx0=$(grep -F "GW_ISO_COUNTER dev=$GW_ISO_ETH_IF stat=tx_bytes value=" "$b_pre" 2>/dev/null | tail -1 | sed -n 's/.*value=\([0-9][0-9]*\)$/\1/p')
+  b_tx1=$(grep -F "GW_ISO_COUNTER dev=$GW_ISO_ETH_IF stat=tx_bytes value=" "$b_post" 2>/dev/null | tail -1 | sed -n 's/.*value=\([0-9][0-9]*\)$/\1/p')
+  a_rx0=$(grep -F "GW_ISO_COUNTER dev=$GW_ISO_ETH_IF stat=rx_bytes value=" "$a_pre" 2>/dev/null | tail -1 | sed -n 's/.*value=\([0-9][0-9]*\)$/\1/p')
+  a_rx1=$(grep -F "GW_ISO_COUNTER dev=$GW_ISO_ETH_IF stat=rx_bytes value=" "$a_post" 2>/dev/null | tail -1 | sed -n 's/.*value=\([0-9][0-9]*\)$/\1/p')
+  if ! [[ "$b_tx0" =~ ^[0-9]+$ && "$b_tx1" =~ ^[0-9]+$ && "$a_rx0" =~ ^[0-9]+$ && "$a_rx1" =~ ^[0-9]+$ ]]; then
+    printf 'GW_ISO_ETH1_DELTA FAIL malformed_counter b_tx_pre=%s b_tx_post=%s a_rx_pre=%s a_rx_post=%s\n' \
+      "${b_tx0:-MISSING}" "${b_tx1:-MISSING}" "${a_rx0:-MISSING}" "${a_rx1:-MISSING}" > "$path"
+    return 1
+  fi
+  b_delta=$((b_tx1 - b_tx0))
+  a_delta=$((a_rx1 - a_rx0))
+  if (( b_delta <= 0 || a_delta <= 0 )); then
+    printf 'GW_ISO_ETH1_DELTA FAIL b_tx_delta=%s a_rx_delta=%s\n' "$b_delta" "$a_delta" > "$path"
+    return 1
+  fi
+  printf 'GW_ISO_ETH1_DELTA PASS b_tx_delta=%s a_rx_delta=%s\n' "$b_delta" "$a_delta" > "$path"
+}
+
+assert_gw_iso_exact_b_to_pc() {
+  local bad=0 line
+  line=$(grep -F 'SWEEP-SUB size=1024 ' "$LOGDIR/gwiso_pc_sub.log" 2>/dev/null | tail -1)
+  if [ -z "$line" ] || ! grep -Fq 'received=20/20 lost=0 reorder=0 crc=0' <<< "$line" || ! grep -Fq ' OK' <<< "$line"; then
+    echo "   GW-ISO PC subscriber did not report an exact 20/20 block" >&2
+    bad=1
+  fi
+  grep -Fq 'SWEEP_RESULT PASS' "$LOGDIR/gwiso_pc_sub.log" \
+    || { echo "   GW-ISO PC subscriber did not report PASS" >&2; bad=1; }
+  grep -Fq ' BAD' "$LOGDIR/gwiso_pc_sub.log" \
+    && { echo "   GW-ISO PC subscriber reported BAD" >&2; bad=1; }
+  grep -Fq 'SWEEP-PUB-DONE size=1024 count=20' "$LOGDIR/gwiso_b_pub.log" \
+    || { echo "   GW-ISO Board-B publisher did not offer all 20 samples" >&2; bad=1; }
+  grep -Fq 'SWEEP-PUB-ALL-DONE' "$LOGDIR/gwiso_b_pub.log" \
+    || { echo "   GW-ISO Board-B publisher did not finish" >&2; bad=1; }
+  assert_gateway_m2c_healthy gwiso_gw.log "$GW_TOPIC_SWEEP" 20 3 \
+    || { echo "   GW-ISO gateway mdds->cyclone final state was unhealthy" >&2; bad=1; }
+  assert_rmw_dsoftbus_only_log gwiso_b_pub.log \
+    || { echo "   GW-ISO Board-B publisher did not prove DSoftBus-only transport" >&2; bad=1; }
+  assert_gateway_dsoftbus_only_log gwiso_gw.log \
+    || { echo "   GW-ISO gateway did not prove DSoftBus-only transport" >&2; bad=1; }
+  assert_dsoftbus_socket_bytes_trace gwiso_b_pub.log \
+    || { echo "   GW-ISO Board-B publisher lacks DSoftBus Socket/Bytes trace" >&2; bad=1; }
+  assert_dsoftbus_socket_bytes_trace gwiso_gw.log \
+    || { echo "   GW-ISO gateway lacks DSoftBus Socket/Bytes trace" >&2; bad=1; }
+  [ "$bad" -eq 0 ]
+}
+
 
 wait_gateway_dsoftbus_ready() { # <gateway-log-name>
   local log="$1" attempt status expected_domain
@@ -1616,6 +2947,70 @@ start_gateway() {
     "$DEVICE_DIR/lib/mdds_gateway/mdds_gateway -c $DEVICE_DIR/mdds_e2e/mdds_gateway_test.conf" "$2" || return 1
   GW_PID=$LAST_PID
   wait_gateway_dsoftbus_ready "$2" || return 1
+}
+
+# GW-11 is expected to make the real gateway fail closed.  Its wrapper retains
+# the gateway's actual nonzero exit code in a create-only remote status file;
+# HDC's shell return code is never used as a board verdict.
+start_gw11_gateway() {
+  launch "$BOARD_A" "$GWENVS" \
+    "$GW11_WRAPPER_REMOTE $REMOTE_LOGDIR/gw11_gateway_exit.status $RUN_ID $RUN_NONCE" \
+    gw11_gw.log || return 1
+  GW_PID=$LAST_PID
+  wait_gateway_dsoftbus_ready gw11_gw.log
+}
+
+wait_gw11_gateway_exit() {
+  local attempt out
+  for attempt in $(seq 1 "$GW11_EXIT_POLL_ATTEMPTS"); do
+    out=$(shell "$BOARD_A" "if test -f '$REMOTE_LOGDIR/gw11_gateway_exit.status' && test ! -L '$REMOTE_LOGDIR/gw11_gateway_exit.status' && grep -Eq '^GW11_GATEWAY_EXIT RUN_ID=$RUN_ID NONCE=$RUN_NONCE STATE=EXIT RC=[1-9][0-9]*$' '$REMOTE_LOGDIR/gw11_gateway_exit.status'; then printf GW11_GATEWAY_EXIT_NONZERO; elif test -f '$REMOTE_LOGDIR/gw11_gateway_exit.status'; then printf GW11_GATEWAY_EXIT_INVALID; else printf GW11_GATEWAY_EXIT_WAIT; fi" || true)
+    out=$(printf '%s' "$out" | tr -d '\r\n')
+    printf 'attempt=%s result=%s\n' "$attempt" "${out:-NO_SENTINEL}" \
+      >> "$LOGDIR/gw11_gateway_exit_poll.txt"
+    case "$out" in
+      GW11_GATEWAY_EXIT_NONZERO) return 0 ;;
+      GW11_GATEWAY_EXIT_INVALID)
+        echo "ERROR: GW-11 gateway emitted a malformed/zero/signal exit record" >&2
+        return 1
+        ;;
+    esac
+    sleep 1
+  done
+  echo "ERROR: GW-11 gateway did not emit its durable nonzero exit record" >&2
+  return 1
+}
+
+fetch_gw11_gateway_exit() {
+  local raw="$LOGDIR/gw11_gateway_exit.status.raw" path="$LOGDIR/gw11_gateway_exit.status"
+  shell "$BOARD_A" "if test -f '$REMOTE_LOGDIR/gw11_gateway_exit.status' && test ! -L '$REMOTE_LOGDIR/gw11_gateway_exit.status'; then echo GW11_EXIT_STATUS_BEGIN; cat '$REMOTE_LOGDIR/gw11_gateway_exit.status'; else echo GW11_EXIT_STATUS_MISSING; fi" > "$raw" 2>/dev/null || true
+  tr -d '\r' < "$raw" > "$path"
+  rm -f "$raw"
+  if ! grep -Fqx 'GW11_EXIT_STATUS_BEGIN' "$path"; then
+    echo "ERROR: missing GW-11 gateway exit status file" >&2
+    return 1
+  fi
+  sed -i '/^GW11_EXIT_STATUS_BEGIN$/d' "$path"
+  grep -Eq "^GW11_GATEWAY_EXIT RUN_ID=$RUN_ID NONCE=$RUN_NONCE STATE=EXIT RC=[1-9][0-9]*$" "$path"
+}
+
+wait_gw11_cap_probe() {
+  local attempt out
+  for attempt in $(seq 1 "$GW11_EXIT_POLL_ATTEMPTS"); do
+    out=$(shell "$BOARD_B" "if test -f '$REMOTE_LOGDIR/gw11_cap_probe.log' && grep -Eq '^GW11_CAP_PROBE_CAP_REACHED received=1024 expected=1024 acknack_dropped=[1-9][0-9]* reader_messages_lost=0 state=HOLDING$' '$REMOTE_LOGDIR/gw11_cap_probe.log'; then printf GW11_CAP_PROBE_READY; elif test -f '$REMOTE_LOGDIR/gw11_cap_probe.log' && grep -Eq '^GW11_CAP_PROBE_RESULT state=(INIT_FAILED|CREATE_READER_FAILED|TIMEOUT_BEFORE_CAP|STOPPED_BEFORE_CAP|OVER_CAP_DELIVERY)' '$REMOTE_LOGDIR/gw11_cap_probe.log'; then printf GW11_CAP_PROBE_FAILED; else printf GW11_CAP_PROBE_WAIT; fi" || true)
+    out=$(printf '%s' "$out" | tr -d '\r\n')
+    printf 'attempt=%s result=%s\n' "$attempt" "${out:-NO_SENTINEL}" \
+      >> "$LOGDIR/gw11_probe_poll.txt"
+    case "$out" in
+      GW11_CAP_PROBE_READY) return 0 ;;
+      GW11_CAP_PROBE_FAILED)
+        echo "ERROR: GW-11 raw MDDS reader failed before the cap" >&2
+        return 1
+        ;;
+    esac
+    sleep 1
+  done
+  echo "ERROR: GW-11 raw MDDS reader never reached the 1024-sample cap" >&2
+  return 1
 }
 
 # pc_start <bat> <log> [bat-args...]
@@ -1937,6 +3332,102 @@ dup_max() { # highest per-message delivery count in a listener log (0 = none hea
   echo "${n:-0}"
 }
 
+# GW-10 endpoints are separate OS processes, but each has a publisher and a
+# subscriber alive concurrently.  Require the exact fixed-order machine record
+# rather than a vague PASS token: it binds each directional result to the
+# unique topic role and makes a partial/late/duplicate stream fail closed.
+assert_gw10_endpoint_result() { # <local log> <role> <direction-out> <direction-in>
+  local log="$1" role="$2" direction_out="$3" direction_in="$4" path pattern
+  if ! [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$role" =~ ^(pc|board_b)$ && \
+          "$direction_out" =~ ^(pc_to_b|b_to_pc)$ && "$direction_in" =~ ^(pc_to_b|b_to_pc)$ ]]; then
+    echo "   ERROR: invalid GW-10 endpoint assertion arguments" >&2
+    return 1
+  fi
+  path="$LOGDIR/$log"
+  pattern="^GW10_ENDPOINT_RESULT role=${role} direction_out=${direction_out} direction_in=${direction_in} sent=${GW10_COUNT}/${GW10_COUNT} received=${GW10_COUNT}/${GW10_COUNT} lost=0 reorder=0 crc=0 malformed=0 starvation=0 max_silence_ms=[0-9]+ elapsed_ms=[0-9]+ result=PASS$"
+  if ! grep -Eq "$pattern" "$path"; then
+    echo "   $log: missing exact non-starved GW-10 endpoint result" >&2
+    return 1
+  fi
+  if grep -Eq '^GW10_(STARVATION|ENDPOINT_ERROR) ' "$path"; then
+    echo "   $log: reported GW-10 starvation or endpoint error" >&2
+    return 1
+  fi
+  return 0
+}
+
+assert_gateway_gw10_m2c_exact() { # <gateway log> <topic> <expected>
+  local log="$1" topic="$2" expected="$3" line forwarded
+  assert_gateway_m2c_healthy "$log" "$topic" "$expected" 1 || return 1
+  line=$(grep -F "$topic final:" "$LOGDIR/$log" 2>/dev/null | tail -n 1)
+  forwarded=$(sed -n 's/.*mdds->cyclone=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  if ! [[ "$forwarded" =~ ^[0-9]+$ ]] || [ "$forwarded" -ne "$expected" ]; then
+    echo "   $log: GW-10 M2C forward count is not exact $expected: ${line:-MISSING}" >&2
+    return 1
+  fi
+  return 0
+}
+
+# GW-11 accepts the intentional fail-closed outcome only when it was caused by
+# the real MDDS Writer's current unacknowledged history.  A generic bridge
+# error, a gateway shadow counter, a reader delivery limit, or a stopped test
+# process cannot satisfy these exact fields.
+assert_gateway_gw11_core_history_cap() { # <gateway log> <topic>
+  local log="$1" topic="$2" line forwarded terminal history_rejections byte_rejections drain_timeouts retained reclaimed active callbacks enqueued
+  if ! [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ && "$topic" =~ ^/[A-Za-z0-9_/-]+$ ]]; then
+    echo "ERROR: invalid GW-11 core history assertion arguments" >&2
+    return 1
+  fi
+  line=$(grep -F "$topic final:" "$LOGDIR/$log" 2>/dev/null | tail -n 1)
+  if [ -z "$line" ]; then
+    echo "   $log: missing final GW-11 gateway counters" >&2
+    return 1
+  fi
+  forwarded=$(sed -n 's/.*cyclone->mdds=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  terminal=$(sed -n 's/.*c2m_terminal=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  history_rejections=$(sed -n 's/.*c2m_history_sample_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  byte_rejections=$(sed -n 's/.*c2m_history_byte_rejections=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  drain_timeouts=$(sed -n 's/.*c2m_ack_drain_timeouts=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  callbacks=$(sed -n 's/.*c2m_ingress(callbacks=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  enqueued=$(sed -n 's/.* enqueued=\([0-9][0-9]*\) queued_samples=.*/\1/p' <<< "$line")
+  retained=$(sed -n 's/.*c2m_history(retained_samples=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  reclaimed=$(sed -n 's/.*ack_reclaimed_samples=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  active=$(sed -n 's/.*active_associations=\([0-9][0-9]*\).*/\1/p' <<< "$line")
+  if ! [[ "$forwarded" =~ ^[0-9]+$ && "$terminal" =~ ^[0-9]+$ && \
+           "$history_rejections" =~ ^[0-9]+$ && "$byte_rejections" =~ ^[0-9]+$ && \
+           "$drain_timeouts" =~ ^[0-9]+$ && "$callbacks" =~ ^[0-9]+$ && \
+           "$enqueued" =~ ^[0-9]+$ && "$retained" =~ ^[0-9]+$ && \
+           "$reclaimed" =~ ^[0-9]+$ && "$active" =~ ^[0-9]+$ ]]; then
+    echo "   $log: malformed final GW-11 counter record: $line" >&2
+    return 1
+  fi
+  if (( forwarded != 1024 || terminal != 1 || history_rejections != 1 || \
+        byte_rejections != 0 || drain_timeouts < 1 || retained != 1024 || \
+        reclaimed != 0 || active < 1 || callbacks < GW11_COUNT || enqueued < GW11_COUNT )); then
+    echo "   $log: GW-11 did not retain exactly 1024 unacknowledged core samples: $line" >&2
+    return 1
+  fi
+  # C2mFailure::HISTORY_SAMPLE_LIMIT is enum value 1.  The worker diagnostic
+  # ties that classification to the bridge terminal path before main returns
+  # the wrapper-recorded nonzero exit code.
+  if ! grep -Fq "$topic cyclone->mdds worker terminal failure cause=1 " "$LOGDIR/$log" || \
+     ! grep -Fq "terminal bridge failure on $topic" "$LOGDIR/$log"; then
+    echo "   $log: GW-11 is missing the real core history-limit terminal cause" >&2
+    return 1
+  fi
+  return 0
+}
+
+assert_gw11_cap_probe() { # <probe log>
+  local log="$1" path="$LOGDIR/$1"
+  if ! [[ "$log" =~ ^[A-Za-z0-9._-]+\.log$ ]]; then
+    return 1
+  fi
+  grep -Eq '^GW11_CAP_PROBE_ASSOCIATION compatible_writers=[1-9][0-9]* discovered_writers=[1-9][0-9]*$' "$path" && \
+    grep -Eq '^GW11_CAP_PROBE_CAP_REACHED received=1024 expected=1024 acknack_dropped=[1-9][0-9]* reader_messages_lost=0 state=HOLDING$' "$path" && \
+    ! grep -Eq '^GW11_CAP_PROBE_(RESULT state=(INIT_FAILED|CREATE_READER_FAILED|TIMEOUT_BEFORE_CAP|STOPPED_BEFORE_CAP|OVER_CAP_DELIVERY)|CAP_REACHED .*reader_messages_lost=[1-9])' "$path"
+}
+
 # --- scenarios ---------------------------------------------------------------
 
 s_gw01() {
@@ -2079,6 +3570,337 @@ s_gw04() {
   verdict "GW-04" $bad "large msgs PC->B 1KB..4MB exact/reliable (gw04_sub.log)"
 }
 
+s_gw09() {
+  # Route-1 regression: C2M must be a sustained reliable stream, not a
+  # process-lifetime 1024-send budget.  This offers 4096 one-KiB samples after
+  # the board-B reader and its current association are both observable.  The
+  # rate is deliberately conservative so this gate measures ACK/history
+  # ownership rather than transient CycloneDDS Wi-Fi fragment overload.
+  gw_reset || return 1
+  rbg "$BOARD_B" \
+    "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode sub --topic $GW_TOPIC_SWEEP --sizes $GW09_SIZE --count $GW09_COUNT --history keep_last --depth $GW09_CYCLONE_DEPTH --idle-timeout $GW09_BOARD_IDLE_TIMEOUT_S" \
+    gw09_sub.log || return 1
+  start_gateway 780 gw09_gw.log || return 1
+  if ! wait_gateway_c2m_reader_association gw09_gw.log "$GW_TOPIC_SWEEP"; then
+    pull "$BOARD_B" gw09_sub.log || true
+    pull "$BOARD_A" gw09_gw.log || true
+    echo "   gateway never recorded the board-B reader's current C2M association" >&2
+    return 1
+  fi
+  # The PC wrapper is already pinned to the gateway's isolated Cyclone domain
+  # 47.  `--wait-match` proves its volatile publisher sees the gateway reader;
+  # the association wait above separately proves the MDDS side is ready.  A
+  # bounded post-match settle additionally lets the Cyclone data path finish
+  # its initial transport setup before VOLATILE sequence 0 is offered.
+  pc_start gw_pc_sweep_pub.bat gw09_pc_pub.log \
+    --topic "$GW_TOPIC_SWEEP" --sizes "$GW09_SIZE" --count "$GW09_COUNT" \
+    --rate "$GW09_RATE_HZ" --rate-bps 800000 --history keep_last \
+    --depth "$GW09_CYCLONE_DEPTH" --wait-match --match-timeout-ms 60000 \
+    --settle-ms "$GW09_PUBLISH_SETTLE_MS" \
+    --flush-ms 60000 || return 1
+  local i completed=0
+  for i in $(seq 1 "$GW09_POLL_ATTEMPTS"); do
+    sleep 10
+    completed=$(shell "$BOARD_B" "grep -c SWEEP_RESULT '$REMOTE_LOGDIR/gw09_sub.log' 2>/dev/null || true" | tr -dc '0-9')
+    [ -n "$completed" ] && [ "$completed" -ge 1 ] && break
+  done
+  gw_reset || return 1
+  pull "$BOARD_B" gw09_sub.log || return 1
+  pull "$BOARD_A" gw09_gw.log || return 1
+  local bad=0 line recv want
+  [ "${completed:-0}" -ge 1 ] || { echo "   board-B subscriber produced no SWEEP_RESULT"; bad=1; }
+  line=$(grep "SWEEP-SUB size=$GW09_SIZE " "$LOGDIR/gw09_sub.log" | tail -n 1)
+  if [ -z "$line" ]; then
+    echo "   missing C2M 4096-sample board result"
+    bad=1
+  else
+    echo "$line" | grep -q "lost=0 reorder=0 crc=0" || { echo "   gap/reorder/crc: $line"; bad=1; }
+    recv=$(echo "$line" | sed -n 's/.*received=\([0-9]*\)\/.*/\1/p')
+    want=$(echo "$line" | sed -n 's/.*received=[0-9]*\/\([0-9]*\).*/\1/p')
+    [ "$recv" = "$GW09_COUNT" ] && [ "$want" = "$GW09_COUNT" ] \
+      || { echo "   inexact C2M count: $line"; bad=1; }
+  fi
+  grep -Fq 'SWEEP_RESULT PASS' "$LOGDIR/gw09_sub.log" \
+    || { echo "   board-B subscriber did not report PASS"; bad=1; }
+  grep -q ' BAD' "$LOGDIR/gw09_sub.log" \
+    && { echo "   board-B subscriber reported BAD"; bad=1; }
+  grep -Fq "SWEEP-PUB-DONE size=$GW09_SIZE count=$GW09_COUNT" "$LOGDIR/gw09_pc_pub.log" \
+    || { echo "   PC publisher did not offer all $GW09_COUNT samples"; bad=1; }
+  grep -Fq 'SWEEP-PUB-ALL-DONE' "$LOGDIR/gw09_pc_pub.log" \
+    || { echo "   PC publisher did not report completion"; bad=1; }
+  grep -Fq "SWEEP-PUB-SETTLE ms=$GW09_PUBLISH_SETTLE_MS" "$LOGDIR/gw09_pc_pub.log" \
+    || { echo "   PC publisher did not record the required post-match settle"; bad=1; }
+  grep -Fq 'SWEEP-PUB-ERROR' "$LOGDIR/gw09_pc_pub.log" \
+    && { echo "   PC publisher reported an error"; bad=1; }
+  assert_gateway_c2m_sustained_history gw09_gw.log "$GW_TOPIC_SWEEP" "$GW09_COUNT" \
+    || { echo "   gateway did not prove sustained ACK-reclaimed C2M history"; bad=1; }
+  assert_rmw_dsoftbus_only_log gw09_sub.log \
+    || { echo "   B subscriber did not prove DSoftBus-only transport"; bad=1; }
+  assert_gateway_dsoftbus_only_log gw09_gw.log \
+    || { echo "   gateway did not prove DSoftBus-only transport"; bad=1; }
+  assert_dsoftbus_socket_bytes_trace gw09_sub.log \
+    || { echo "   B subscriber lacks DSoftBus Socket/Bytes trace"; bad=1; }
+  assert_dsoftbus_socket_bytes_trace gw09_gw.log \
+    || { echo "   gateway lacks DSoftBus Socket/Bytes trace"; bad=1; }
+  verdict "GW-09" $bad "PC->B C2M exact $GW09_COUNT/$GW09_COUNT; bounded ACK-reclaimed history"
+}
+
+s_gw10() {
+  # Simultaneous bidirectional endurance, not two sequential one-way checks:
+  # B and PC each create a subscriber before their publisher waits for a
+  # match.  Once both are matched, each emits 4096 independently CRC-protected
+  # samples while receiving the opposite direction.  The endpoints fail on a
+  # bounded no-progress interval, and their strict machine records are checked
+  # after every owned process has stopped.
+  local bad=0 board_done=0 pc_done=0 reset_bad=0 i barrier_token barrier_release
+  barrier_token="gw10_${RUN_NONCE}"
+  barrier_release="$REMOTE_LOGDIR/gw10_board_bidir.release"
+  gw_reset || return 1
+  start_gateway 780 gw10_gw.log || return 1
+  prepare_gw10_board_barrier "$barrier_release" "$barrier_token" || return 1
+  rbg "$BOARD_B" \
+    "python3.12 $DEVICE_DIR/mdds_e2e/bidir_sweep.py --role board_b --direction-out b_to_pc --direction-in pc_to_b --pub-topic $GW_TOPIC_BIDIR_B_TO_PC --sub-topic $GW_TOPIC_BIDIR_PC_TO_B --count $GW10_COUNT --size $GW10_SIZE --rate-hz $GW10_RATE_HZ --depth $GW10_DEPTH --match-timeout-s $GW10_MATCH_TIMEOUT_S --settle-ms $GW10_SETTLE_MS --starvation-timeout-s $GW10_STARVATION_TIMEOUT_S --overall-timeout-s $GW10_OVERALL_TIMEOUT_S --barrier-release-file $barrier_release --barrier-token $barrier_token --barrier-timeout-s 120" \
+    gw10_b_bidir.log || return 1
+  if ! wait_gw10_board_barrier_ready gw10_b_bidir.log "$barrier_token"; then
+    pull "$BOARD_B" gw10_b_bidir.log || true
+    pull "$BOARD_A" gw10_gw.log || true
+    echo "   board-B endpoint did not establish its GW-10 release barrier" >&2
+    return 1
+  fi
+  # The board-B subscriber exists before the PC publisher starts.  This is the
+  # writer-owned association proof that prevents a volatile first sample from
+  # being mistaken for a C2M history-reclamation or starvation outcome.
+  if ! wait_gateway_c2m_reader_association gw10_gw.log "$GW_TOPIC_BIDIR_PC_TO_B"; then
+    pull "$BOARD_B" gw10_b_bidir.log || true
+    pull "$BOARD_A" gw10_gw.log || true
+    echo "   gateway never recorded the board-B C2M association for GW-10" >&2
+    return 1
+  fi
+  pc_start gw_pc_bidir_sweep.bat gw10_pc_bidir.log \
+    --role pc --direction-out pc_to_b --direction-in b_to_pc \
+    --pub-topic "$GW_TOPIC_BIDIR_PC_TO_B" --sub-topic "$GW_TOPIC_BIDIR_B_TO_PC" \
+    --count "$GW10_COUNT" --size "$GW10_SIZE" --rate-hz "$GW10_RATE_HZ" \
+    --depth "$GW10_DEPTH" --match-timeout-s "$GW10_MATCH_TIMEOUT_S" \
+    --settle-ms "$GW10_SETTLE_MS" \
+    --starvation-timeout-s "$GW10_STARVATION_TIMEOUT_S" \
+    --overall-timeout-s "$GW10_OVERALL_TIMEOUT_S" || return 1
+  if ! wait_gw10_pc_matched gw10_pc_bidir.log; then
+    echo "   PC endpoint did not establish its GW-10 inbound subscription" >&2
+    return 1
+  fi
+  if ! commit_gw10_board_barrier "$barrier_release" "$barrier_token"; then
+    echo "   could not atomically release Board-B's GW-10 publisher" >&2
+    return 1
+  fi
+  printf 'GW10_BARRIER run_id=%s nonce=%s release=%s token=%s board_ready=1 pc_matched=1 result=COMMITTED\n' \
+    "$RUN_ID" "$RUN_NONCE" "$barrier_release" "$barrier_token" \
+    > "$LOGDIR/gw10_barrier_evidence.txt"
+
+  for i in $(seq 1 "$GW10_POLL_ATTEMPTS"); do
+    board_done=$(shell "$BOARD_B" "grep -c '^GW10_ENDPOINT_RESULT role=board_b ' '$REMOTE_LOGDIR/gw10_b_bidir.log' 2>/dev/null || true" | tr -dc '0-9')
+    pc_done=$(grep -c '^GW10_ENDPOINT_RESULT role=pc ' "$LOGDIR/gw10_pc_bidir.log" 2>/dev/null || true)
+    if [[ "$board_done" =~ ^[1-9][0-9]*$ && "$pc_done" =~ ^[1-9][0-9]*$ ]]; then
+      break
+    fi
+    sleep 5
+  done
+  gw_reset || reset_bad=1
+  pull "$BOARD_B" gw10_b_bidir.log || return 1
+  pull "$BOARD_A" gw10_gw.log || return 1
+
+  # Preserve a concise machine-readable cross-check next to the raw endpoint
+  # logs.  It is derived after collection and never substitutes for them.
+  {
+    printf 'GW10_ORCHESTRATOR run_id=%s nonce=%s count=%s size=%s rate_hz=%s board_result_records=%s pc_result_records=%s\n' \
+      "$RUN_ID" "$RUN_NONCE" "$GW10_COUNT" "$GW10_SIZE" "$GW10_RATE_HZ" \
+      "${board_done:-0}" "${pc_done:-0}"
+    cat "$LOGDIR/gw10_barrier_evidence.txt" 2>/dev/null || true
+    grep '^GW10_ENDPOINT_RESULT ' "$LOGDIR/gw10_b_bidir.log" 2>/dev/null || true
+    grep '^GW10_ENDPOINT_RESULT ' "$LOGDIR/gw10_pc_bidir.log" 2>/dev/null || true
+    grep -F "$GW_TOPIC_BIDIR_PC_TO_B final:" "$LOGDIR/gw10_gw.log" 2>/dev/null || true
+    grep -F "$GW_TOPIC_BIDIR_B_TO_PC final:" "$LOGDIR/gw10_gw.log" 2>/dev/null || true
+  } > "$LOGDIR/gw10_machine_result.txt"
+  cat "$LOGDIR/gw10_machine_result.txt"
+
+  [[ "${board_done:-0}" =~ ^[1-9][0-9]*$ ]] || { echo "   board-B endpoint produced no GW-10 result" >&2; bad=1; }
+  [[ "${pc_done:-0}" =~ ^[1-9][0-9]*$ ]] || { echo "   PC endpoint produced no GW-10 result" >&2; bad=1; }
+  [ "$reset_bad" -eq 0 ] || { echo "   GW-10 owned-process cleanup was incomplete" >&2; bad=1; }
+  assert_gw10_endpoint_result gw10_b_bidir.log board_b b_to_pc pc_to_b || bad=1
+  assert_gw10_endpoint_result gw10_pc_bidir.log pc pc_to_b b_to_pc || bad=1
+  assert_gw10_board_release_order gw10_b_bidir.log "$barrier_token" || bad=1
+  assert_gateway_c2m_sustained_history gw10_gw.log "$GW_TOPIC_BIDIR_PC_TO_B" "$GW10_COUNT" || bad=1
+  assert_gateway_gw10_m2c_exact gw10_gw.log "$GW_TOPIC_BIDIR_B_TO_PC" "$GW10_COUNT" || bad=1
+  assert_rmw_dsoftbus_only_log gw10_b_bidir.log || bad=1
+  assert_gateway_dsoftbus_only_log gw10_gw.log || bad=1
+  assert_dsoftbus_socket_bytes_trace gw10_b_bidir.log || bad=1
+  assert_dsoftbus_socket_bytes_trace gw10_gw.log || bad=1
+  verdict "GW-10" "$bad" "simultaneous PC<->B exact ${GW10_COUNT}/${GW10_COUNT} each way; CRC/order/starvation=0"
+}
+
+s_gw11() {
+  # Deliberate negative capacity gate.  Board B's TEST-ONLY raw MDDS reader
+  # accepts every CDR payload but drops ACKNACK after decoding it. The real
+  # gateway Writer must therefore retain its first 1024 samples and reject
+  # exactly number 1025; it must not reclaim, evict, or keep running. This is
+  # intentionally separate from GW-09/10's healthy long-stream proof.
+  local bad=0 reset_bad=0
+  gw_reset || return 1
+  prepare_gw11_helpers || return 1
+  rbg "$BOARD_B" \
+    "$GW11_PROBE_REMOTE --topic $GW_TOPIC_SWEEP --domain $GW_MDDS_DOMAIN --expected-samples 1024 --timeout-seconds $GW11_PROBE_TIMEOUT_S --drop-acknack" \
+    gw11_cap_probe.log || return 1
+  start_gw11_gateway || return 1
+  if ! wait_gateway_c2m_reader_association gw11_gw.log "$GW_TOPIC_SWEEP"; then
+    pull "$BOARD_B" gw11_cap_probe.log || true
+    pull "$BOARD_A" gw11_gw.log || true
+    echo "   gateway never recorded GW-11's raw reader association" >&2
+    return 1
+  fi
+  pc_start gw_pc_sweep_pub.bat gw11_pc_pub.log \
+    --topic "$GW_TOPIC_SWEEP" --sizes "$GW11_SIZE" --count "$GW11_COUNT" \
+    --rate "$GW11_RATE_HZ" --rate-bps 800000 --history keep_last \
+    --depth "$GW11_CYCLONE_DEPTH" --wait-match --match-timeout-ms 60000 \
+    --settle-ms "$GW11_PUBLISH_SETTLE_MS" --flush-ms 5000 || return 1
+
+  wait_gw11_cap_probe || bad=1
+  wait_gw11_gateway_exit || bad=1
+  # Pull before teardown: the raw reader must still be alive while the
+  # gateway's final Writer::history_status() snapshot is emitted.
+  pull "$BOARD_B" gw11_cap_probe.log || bad=1
+  pull "$BOARD_A" gw11_gw.log || bad=1
+  fetch_gw11_gateway_exit || bad=1
+  {
+    printf 'GW11_ORCHESTRATOR run_id=%s nonce=%s offered=%s cap=%s topic=%s\n' \
+      "$RUN_ID" "$RUN_NONCE" "$GW11_COUNT" 1024 "$GW_TOPIC_SWEEP"
+    cat "$LOGDIR/gw11_gateway_exit.status" 2>/dev/null || true
+    grep '^GW11_CAP_PROBE_' "$LOGDIR/gw11_cap_probe.log" 2>/dev/null || true
+    grep -F "$GW_TOPIC_SWEEP final:" "$LOGDIR/gw11_gw.log" 2>/dev/null | tail -n 1 || true
+    grep -F "$GW_TOPIC_SWEEP cyclone->mdds worker terminal failure" "$LOGDIR/gw11_gw.log" 2>/dev/null || true
+  } > "$LOGDIR/gw11_machine_result.txt"
+  cat "$LOGDIR/gw11_machine_result.txt"
+  gw_reset || reset_bad=1
+
+  grep -Fq "SWEEP-PUB-DONE size=$GW11_SIZE count=$GW11_COUNT" "$LOGDIR/gw11_pc_pub.log" \
+    || { echo "   PC publisher did not offer the 1025th cap-triggering sample" >&2; bad=1; }
+  grep -Fq 'SWEEP-PUB-ALL-DONE' "$LOGDIR/gw11_pc_pub.log" \
+    || { echo "   PC publisher did not complete its GW-11 offer" >&2; bad=1; }
+  grep -Fq 'SWEEP-PUB-ERROR' "$LOGDIR/gw11_pc_pub.log" \
+    && { echo "   PC publisher reported a GW-11 error" >&2; bad=1; }
+  [ "$reset_bad" -eq 0 ] || { echo "   GW-11 owned-process cleanup was incomplete" >&2; bad=1; }
+  assert_gw11_cap_probe gw11_cap_probe.log \
+    || { echo "   raw MDDS ACK-suppression probe did not prove 1024 held samples" >&2; bad=1; }
+  assert_gateway_gw11_core_history_cap gw11_gw.log "$GW_TOPIC_SWEEP" \
+    || { echo "   gateway did not prove the real MDDS 1024-sample fail-closed cap" >&2; bad=1; }
+  grep -Eq "^GW11_GATEWAY_EXIT RUN_ID=$RUN_ID NONCE=$RUN_NONCE STATE=EXIT RC=[1-9][0-9]*$" \
+    "$LOGDIR/gw11_gateway_exit.status" \
+    || { echo "   missing exact durable nonzero gateway exit marker" >&2; bad=1; }
+  assert_gateway_dsoftbus_only_log gw11_gw.log \
+    || { echo "   gateway did not prove DSoftBus-only transport in GW-11" >&2; bad=1; }
+  assert_dsoftbus_socket_bytes_trace gw11_cap_probe.log \
+    || { echo "   raw MDDS cap probe lacks DSoftBus Socket/Bytes evidence" >&2; bad=1; }
+  assert_dsoftbus_socket_bytes_trace gw11_gw.log \
+    || { echo "   gateway lacks DSoftBus Socket/Bytes evidence in GW-11" >&2; bad=1; }
+  verdict "GW-11" "$bad" "intentional C2M cap: retained=1024, 1025th rejected, durable gateway RC!=0"
+}
+
+
+s_gw_iso() {
+  # Explicit maintenance-window proof:
+  #   B wlan0 .8.111 exists -> timer is armed -> only that CIDR is deleted ->
+  #   B cannot route/probe the PC -> B -> A(DSoftBus) -> PC exact 20/20 ->
+  #   the address is restored and the timer identity is disarmed.
+  #
+  # It is deliberately not part of all: a transient address removal is an
+  # observable topology mutation even though it is bounded and reversible.
+  local bad=0 e2e_launched=0 had_rollback=0
+  gw_reset || return 1
+  mkdir -p "$GW_ISO_LOCAL_DIR" || return 1
+  gw_iso_contract_valid || bad=1
+  capture_gw_iso_pc_network pre || bad=1
+  capture_gw_iso_board_network "$BOARD_A" a_pre || bad=1
+  capture_gw_iso_board_network "$BOARD_B" b_pre || bad=1
+  check_gw_iso_board_b_state pre || bad=1
+  if (( bad == 0 )); then
+    snapshot_gw_iso_board_b_policy || bad=1
+  fi
+
+  if (( bad == 0 )); then
+    pc_start gw_iso_tcp_listener.bat gwiso_pc_tcp_listener.log "$GW_ISO_TCP_PORT" "$GW_ISO_ROLLBACK_SECONDS" || bad=1
+  fi
+  if (( bad == 0 )); then
+    wait_gw_iso_pc_marker gwiso_pc_tcp_listener.log "GW_ISO_TCP_LISTENER READY host=$GW_ISO_PC_IP port=$GW_ISO_TCP_PORT" 20 || bad=1
+  fi
+  if (( bad == 0 )); then
+    run_gw_iso_tcp_probe "$BOARD_A" pre_a connect 192.168.8.112 || bad=1
+    run_gw_iso_tcp_probe "$BOARD_B" pre_b connect "$GW_ISO_WLAN_IP" || bad=1
+    wait_gw_iso_pc_marker gwiso_pc_tcp_listener.log 'GW_ISO_TCP_LISTENER ACCEPT remote=192.168.8.112:' 10 || bad=1
+    wait_gw_iso_pc_marker gwiso_pc_tcp_listener.log 'GW_ISO_TCP_LISTENER ACCEPT remote=192.168.8.111:' 10 || bad=1
+  fi
+
+  if (( bad == 0 )); then
+    arm_gw_iso_rollback || bad=1
+  fi
+  if (( bad == 0 )); then
+    remove_gw_iso_board_b_wlan_address || bad=1
+  fi
+  # Even a delete-path failure after arming is observed before restoration:
+  # this prevents an uncertain mutation from being silently treated as no-op.
+  if [ "$GW_ISO_ROLLBACK_ARMED" -eq 1 ]; then
+    capture_gw_iso_board_network "$BOARD_B" b_isolated || bad=1
+    check_gw_iso_board_b_state isolated || bad=1
+    run_gw_iso_tcp_probe "$BOARD_B" post_b fail || bad=1
+  fi
+
+  # Stop the negative-control listener before starting the real PC subscriber.
+  # This also exercises the existing run-owned Job Object cleanup path.
+  gw_reset || bad=1
+
+  if (( bad == 0 )) && [ "$GW_ISO_ACTIVE" -eq 1 ]; then
+    e2e_launched=1
+    start_gateway 180 gwiso_gw.log || bad=1
+    if (( bad == 0 )); then
+      pc_start gw_pc_sweep_sub_gw.bat gwiso_pc_sub.log --topic "$GW_TOPIC_SWEEP" \
+        --sizes 1024 --count 20 --idle-timeout 30 || bad=1
+    fi
+    if (( bad == 0 )); then
+      # Match the existing gateway gates' discovery settle time. The B-side
+      # publisher only sees its MDDS reader; this gives the independent
+      # gateway->PC Cyclone writer time to discover the PC subscriber before
+      # a VOLATILE head sample can be offered.
+      sleep 6
+      rbg "$BOARD_B" "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode pub --topic $GW_TOPIC_SWEEP --sizes 1024 --count 20 --rate 2 --wait-match --match-timeout-ms 30000 --settle-ms 2000 --flush-ms 10000" gwiso_b_pub.log || bad=1
+    fi
+    if (( bad == 0 )); then
+      wait_gw_iso_pc_marker gwiso_pc_sub.log 'SWEEP_RESULT ' 70 || bad=1
+    fi
+  fi
+
+  gw_reset || bad=1
+  capture_gw_iso_board_network "$BOARD_A" a_post || bad=1
+  capture_gw_iso_board_network "$BOARD_B" b_post || bad=1
+  if [ "$GW_ISO_ROLLBACK_ARMED" -eq 1 ]; then
+    check_gw_iso_board_b_state isolated || bad=1
+  fi
+  if (( e2e_launched == 1 )); then
+    pull "$BOARD_B" gwiso_b_pub.log || bad=1
+    pull "$BOARD_A" gwiso_gw.log || bad=1
+    assert_gw_iso_exact_b_to_pc || bad=1
+    assert_gw_iso_eth1_activity || bad=1
+  fi
+
+  if [ "$GW_ISO_ROLLBACK_ARMED" -eq 1 ] || [ "$GW_ISO_ACTIVE" -eq 1 ]; then
+    had_rollback=1
+    restore_gw_iso_network || bad=1
+  fi
+  if (( had_rollback == 1 )); then
+    capture_gw_iso_board_network "$BOARD_B" b_restored || bad=1
+    check_gw_iso_board_b_state restored || bad=1
+  fi
+  capture_gw_iso_pc_network post || bad=1
+  verdict "GW-ISO" "$bad" "reversible B .8 isolation; B->A(DSoftBus)->PC exact 20/20; rollback_timer_s=$GW_ISO_ROLLBACK_SECONDS"
+}
+
+
 s_gw05() {
   # A single B-side participant publishes and subscribes on its run-unique
   # topic while
@@ -2209,7 +4031,8 @@ s_gw_pc_cleanup_probe() {
   # PID:start proof after IsProcessInJob succeeds; its disappearance proves
   # that KILL_ON_JOB_CLOSE closed the contained child tree as well.
   gw_reset || return 1
-  local bad=0 proof_file proof_tag negative_record negative_tag=pc_negative_no_job_marker
+  local bad=0 proof_file proof_tag negative_record negative_tag
+  negative_tag=pc_negative_no_job_marker
   if [ "$FORCE_PC_POST_RECORD_MISMATCH" != 1 ]; then
     echo "   PC cleanup probe requires MDDS_TEST_FORCE_PC_POST_RECORD_MISMATCH=1" >&2
     bad=1
@@ -2246,12 +4069,19 @@ s_gw_pc_cleanup_probe() {
   verdict "GW-PC-CLEANUP" "$bad" "Job Object child cleanup and missing-marker rejection exercised"
 }
 
+# The static contract mode is intentionally handled only after every helper
+# has been defined, but before traps, activity locks, deployment, or HDC use.
+if [ "$GW_ISO_STATIC_VALIDATE" -eq 1 ]; then
+  gw_iso_contract_valid
+  exit $?
+fi
+
 # --- main --------------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
-  set -- gw01 gw02 gw03 gw04 gw05 gw06 gw07 gw08
+  set -- "${DEFAULT_GW_SCENARIOS[@]}"
 elif [ "$1" = all ]; then
-  set -- gw01 gw02 gw03 gw04 gw05 gw06 gw07 gw08
+  set -- "${DEFAULT_GW_SCENARIOS[@]}"
 fi
 
 # Cleanup targets only identity-fenced records.  A failed cleanup is surfaced
@@ -2262,6 +4092,11 @@ on_gw_exit() {
   trap '' INT TERM HUP
   if ! gw_reset; then
     echo "ERROR: gateway gate cleanup was incomplete; retained identity records prevent an unsafe kill" >&2
+    cleanup_ok=0
+    rc=1
+  fi
+  if ! restore_gw_iso_network; then
+    echo "ERROR: GW-ISO address rollback/disarm was incomplete; retaining activity locks for operator recovery" >&2
     cleanup_ok=0
     rc=1
   fi
@@ -2282,6 +4117,10 @@ on_gw_signal() {
   trap '' INT TERM HUP
   if ! gw_reset; then
     echo "ERROR: cleanup after signal was incomplete; records were retained" >&2
+    cleanup_ok=0
+  fi
+  if ! restore_gw_iso_network; then
+    echo "ERROR: GW-ISO rollback/disarm after signal was incomplete; records were retained" >&2
     cleanup_ok=0
   fi
   if (( cleanup_ok == 1 )); then
@@ -2321,11 +4160,18 @@ for sc in "$@"; do
       echo "ERROR: aborting later gateway scenarios because owned-process cleanup is incomplete" >&2
       break
     fi
+    if ! restore_gw_iso_network; then
+      echo "ERROR: aborting later gateway scenarios because GW-ISO rollback/disarm is incomplete" >&2
+      break
+    fi
   fi
 done
 
 if ! gw_reset; then
   verdict "GW-CLEANUP" 1 "owned-process cleanup incomplete (see retained identity errors)"
+fi
+if ! restore_gw_iso_network; then
+  verdict "GW-ISO-CLEANUP" 1 "address rollback/disarm incomplete (see network_isolation/rollback_restore.log)"
 fi
 echo
 echo "== mdds gateway summary: $pass passed, $fail failed =="

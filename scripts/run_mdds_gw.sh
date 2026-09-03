@@ -1948,8 +1948,9 @@ gw_iso_contract_valid() {
      ! grep -Fq 'GW_ISO_POLICY_SNAPSHOT SHA256=' "$source_path" || \
      ! grep -Fq 'POLICY_SHA256=$policy_sha POLICY_FWMARK=$fwm' "$source_path" || \
      ! grep -Fq 'GW_ISO_POLICY_RESTORE_CONFLICT' "$source_path" || \
+     ! grep -Fq 'GW_ISO_ROLLBACK_TIMER_ASSOCIATION_RESTORE_FAILED' "$source_path" || \
      ! grep -Fq 'GW_ISO_ROLLBACK_TIMER_POLICY_RESTORE_FAILED' "$source_path" || \
-     ! grep -Fq 'GW_ISO_RESTORE_OK address=%s policy=RESTORED timer=%s' "$source_path"; then
+     ! grep -Fq 'GW_ISO_RESTORE_OK address=%s policy=RESTORED association=COMPLETED timer=%s' "$source_path"; then
     echo "GW_ISO_CONTRACT FAIL missing dynamic policy snapshot or safe rollback fence" >&2
     bad=1
   fi
@@ -2224,7 +2225,7 @@ if [ "$eth_exact" != 1 ] || [ "$a_rc" -ne 0 ] || ! printf "%s\\n" "$a_route" | g
 fi
 case "$mode" in
   pre|restored)
-    if [ "$wlan_exact" != 1 ] || [ "$eight_total" != 1 ] || [ "$wlan_link_admin_up" != 1 ] || [ "$policy_ok" != 1 ] || [ "$pc_rc" -ne 0 ] || ! printf "%s\\n" "$pc_route" | grep -Fq "dev $wlan_if" || ! printf "%s\\n" "$pc_route" | grep -Fq "src $wlan_ip"; then
+    if [ "$wlan_exact" != 1 ] || [ "$eight_total" != 1 ] || [ "$wlan_link_admin_up" != 1 ] || [ "$wlan_operstate" != up ] || [ "$policy_ok" != 1 ] || [ "$pc_rc" -ne 0 ] || ! printf "%s\\n" "$pc_route" | grep -Fq "dev $wlan_if" || ! printf "%s\\n" "$pc_route" | grep -Fq "src $wlan_ip"; then
       echo GW_ISO_STATE_FAIL reason=expected_direct_pc_path_missing
       bad=1
     fi
@@ -2351,6 +2352,41 @@ gw_iso_policy_snapshot_valid() {
   test -f "$snapshot" && test ! -L "$snapshot" || return 1
   actual=$(sha256sum "$snapshot" 2>/dev/null | cut -d " " -f1)
   [ "$actual" = "$policy_sha" ]
+}
+# Administrative UP plus a restored IPv4 address is not a usable Wi-Fi link:
+# this OpenHarmony image can remain DISCONNECTED/DORMANT indefinitely.  Make
+# association part of both the normal restore and the independent timer, and
+# wait for it before policy repair so the network service cannot add the same
+# rules after our transaction has already declared success.
+gw_iso_restore_association() {
+  [ "$iface" = wlan0 ] || return 1
+  wpa_cli=/vendor/bin/wpa_cli
+  wpa_ctrl=/data/service/el1/public/wifi/sockets/wpa
+  test -x "$wpa_cli" && test -d "$wpa_ctrl" || {
+    echo GW_ISO_ASSOCIATION_TOOL_MISSING
+    return 1
+  }
+  reconnect=$($wpa_cli -p "$wpa_ctrl" -i "$iface" reconnect 2>&1) || {
+    printf "GW_ISO_ASSOCIATION_RECONNECT_FAILED output=%s\n" "$reconnect"
+    return 1
+  }
+  [ "$reconnect" = OK ] || {
+    printf "GW_ISO_ASSOCIATION_RECONNECT_REJECTED output=%s\n" "$reconnect"
+    return 1
+  }
+  attempt=1
+  while [ "$attempt" -le 30 ]; do
+    association=$($wpa_cli -p "$wpa_ctrl" -i "$iface" status 2>/dev/null | sed -n "s/^wpa_state=//p" | head -1)
+    operstate=$(cat "/sys/class/net/$iface/operstate" 2>/dev/null || true)
+    if [ "$association" = COMPLETED ] && [ "$operstate" = up ]; then
+      printf "GW_ISO_ASSOCIATION_RESTORED state=%s operstate=%s attempts=%s\n" "$association" "$operstate" "$attempt"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  printf "GW_ISO_ASSOCIATION_RESTORE_TIMEOUT state=%s operstate=%s attempts=30\n" "${association:-UNKNOWN}" "${operstate:-UNKNOWN}"
+  return 1
 }
 gw_iso_route_count() {
   table=$1
@@ -2534,6 +2570,10 @@ if test -f "$record" && test ! -L "$record" && [ "$(cat "$record" 2>/dev/null)" 
     echo GW_ISO_ROLLBACK_TIMER_LINK_UP_FAILED
     exit 0
   fi
+  if ! gw_iso_restore_association; then
+    echo GW_ISO_ROLLBACK_TIMER_ASSOCIATION_RESTORE_FAILED
+    exit 0
+  fi
   exact=0
   while IFS= read -r line; do
     case "$line" in *" inet $cidr "*|*" inet $cidr") exact=$((exact + 1)) ;; esac
@@ -2552,7 +2592,7 @@ EOF
     *) echo GW_ISO_ROLLBACK_TIMER_DUPLICATE_ADDRESS; exit 0 ;;
   esac
   if gw_iso_policy_restore; then
-    printf "GW_ISO_ROLLBACK_TIMER_RESTORED address=%s policy=RESTORED\\n" "$address_state"
+    printf "GW_ISO_ROLLBACK_TIMER_RESTORED address=%s policy=RESTORED association=COMPLETED\\n" "$address_state"
   else
     echo GW_ISO_ROLLBACK_TIMER_POLICY_RESTORE_FAILED
   fi
@@ -2763,6 +2803,10 @@ if [ "$link_admin_up" != 1 ]; then
   printf "GW_ISO_RESTORE_LINK_UP_VERIFY_FAILED admin_up=%s\\n" "$link_admin_up"
   exit 71
 fi
+if ! gw_iso_restore_association; then
+  echo GW_ISO_RESTORE_ASSOCIATION_FAILED
+  exit 79
+fi
 count_cidr() {
   count=0
   while IFS= read -r line; do
@@ -2842,13 +2886,13 @@ if ! rm -f "$record" || test -e "$record" || test -L "$record"; then
   echo GW_ISO_RESTORE_RECORD_REMOVE_FAILED
   exit 76
 fi
-printf "GW_ISO_RESTORE_OK address=%s policy=RESTORED timer=%s\\n" "$address_state" "$timer_state"
+printf "GW_ISO_RESTORE_OK address=%s policy=RESTORED association=COMPLETED timer=%s\\n" "$address_state" "$timer_state"
 '
   shell "$BOARD_B" "sh -c $(remote_sh_quote "$restore_script") sh $(remote_sh_quote "$GW_ISO_REMOTE_ROLLBACK_RECORD") $(remote_sh_quote "$expected") $(remote_sh_quote "$GW_ISO_ROLLBACK_PID") $(remote_sh_quote "$GW_ISO_ROLLBACK_START") $(remote_sh_quote "$GW_ISO_WLAN_IF") $(remote_sh_quote "$GW_ISO_WLAN_CIDR") $(remote_sh_quote "$GW_ISO_REMOTE_POLICY_SNAPSHOT") $(remote_sh_quote "$GW_ISO_POLICY_SHA256") $(remote_sh_quote "$GW_ISO_WLAN_GATEWAY") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_DIRECT") $(remote_sh_quote "$GW_ISO_POLICY_TABLE_WLAN") $(remote_sh_quote "$GW_ISO_WLAN_FWMARK") $(remote_sh_quote "$GW_ISO_POLICY_SETTLE_ATTEMPTS")" > "$raw" 2>&1 || true
   tr -d '\r' < "$raw" > "$path"
   rm -f "$raw"
-  if ! grep -Eq '^GW_ISO_RESTORE_OK address=(ADDED|ALREADY_PRESENT) policy=RESTORED timer=(STOPPED|GONE|REUSED_NOT_KILLED)$' "$path"; then
-    echo "ERROR: GW-ISO could not prove address/policy restoration and timer disarm" >&2
+  if ! grep -Eq '^GW_ISO_RESTORE_OK address=(ADDED|ALREADY_PRESENT) policy=RESTORED association=COMPLETED timer=(STOPPED|GONE|REUSED_NOT_KILLED)$' "$path"; then
+    echo "ERROR: GW-ISO could not prove association/address/policy restoration and timer disarm" >&2
     return 1
   fi
   GW_ISO_ACTIVE=0

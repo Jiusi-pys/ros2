@@ -83,6 +83,14 @@ if (( ${#DS3_TOPIC} > 200 )); then
   echo "ERROR: MDDS_RUN_ID + MDDS_RUN_NONCE makes the DS-03 topic too long" >&2
   exit 2
 fi
+# The active DSoftBus side deliberately paces an ordinary failed BindAsync for
+# 10 seconds to stay below the platform's bind-DDoS threshold.  DS-03 replaces
+# its seed reader with the real writer, so the first redial may legitimately
+# race the new listener and consume one complete retry interval.  Keep the
+# publisher wait above two poll/retry turns, and keep the outer readiness poll
+# longer than that wait so it can observe the terminal marker deterministically.
+DS3_MATCH_TIMEOUT_MS=25000
+DS3_BARRIER_READY_POLLS=35
 REMOTE_OWNER="$REMOTE_LOGDIR/.mdds_run_owner"
 # PowerShell guards inherit only exported state. Keep the shell-local source of
 # truth above, then export the already validated copies used in their signed
@@ -878,7 +886,7 @@ wait_publisher_barrier_ready() { # <publisher-log-name> <token>
   local log="$1" token="$2" marker
   [[ "$log" =~ ^[a-z0-9_]+\.log$ && "$token" =~ ^[A-Za-z0-9_-]{1,200}$ ]] || return 1
   marker=$(shell "$BOARD_B" \
-    "i=0; while [ \$i -lt 30 ]; do if grep -Eq '^SWEEP-PUB-BARRIER-READY token=$token local_subs=[1-9][0-9]*$' '$REMOTE_LOGDIR/$log' 2>/dev/null; then echo PUB_BARRIER_READY; exit 0; fi; if grep -Fq 'SWEEP-PUB-NO-MATCH' '$REMOTE_LOGDIR/$log' 2>/dev/null || grep -Fq 'SWEEP-PUB-BARRIER-FAIL' '$REMOTE_LOGDIR/$log' 2>/dev/null; then echo PUB_BARRIER_FAILED; exit 0; fi; i=\$((i+1)); sleep 1; done; echo PUB_BARRIER_TIMEOUT" \
+    "i=0; while [ \$i -lt $DS3_BARRIER_READY_POLLS ]; do if grep -Eq '^SWEEP-PUB-BARRIER-READY token=$token local_subs=[1-9][0-9]*$' '$REMOTE_LOGDIR/$log' 2>/dev/null; then echo PUB_BARRIER_READY; exit 0; fi; if grep -Fq 'SWEEP-PUB-NO-MATCH' '$REMOTE_LOGDIR/$log' 2>/dev/null || grep -Fq 'SWEEP-PUB-BARRIER-FAIL' '$REMOTE_LOGDIR/$log' 2>/dev/null; then echo PUB_BARRIER_FAILED; exit 0; fi; i=\$((i+1)); sleep 1; done; echo PUB_BARRIER_TIMEOUT" \
     | tr -d '\r')
   [[ "$marker" == *PUB_BARRIER_READY* ]]
 }
@@ -1250,7 +1258,7 @@ s_ds03_case() { # <verdict-id> <safe-log-tag> <count> <rate-hz> <settle-ms> <min
   fi
   trace_dsb_gateway_case "$tag" "publisher_barrier_reserved board=B path=$barrier_release token=$barrier_token"
   launch "$BOARD_B" "$DSB_ENVS_B" \
-    "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode pub --topic $DS3_TOPIC --sizes 1024 --count $ds03_count --rate $rate --reliability reliable --history keep_last --depth 10 --wait-match --match-timeout-ms 10000 --barrier-release-file $barrier_release --barrier-token $barrier_token --barrier-timeout-s 45 --settle-ms $settle_ms --flush-ms 10000" \
+    "python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py --mode pub --topic $DS3_TOPIC --sizes 1024 --count $ds03_count --rate $rate --reliability reliable --history keep_last --depth 10 --wait-match --match-timeout-ms $DS3_MATCH_TIMEOUT_MS --barrier-release-file $barrier_release --barrier-token $barrier_token --barrier-timeout-s 45 --settle-ms $settle_ms --flush-ms 10000" \
     "$pub_log" || {
       cleanup_dsb || echo "   ERROR: cleanup after true-publisher launch failure was incomplete" >&2
       return 1

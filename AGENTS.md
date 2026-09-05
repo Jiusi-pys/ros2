@@ -1,24 +1,5 @@
 # Agent Guide for `ros2/ros2`
 
-## Current generic KaihongOS release profile
-
-Use README.md and docs/kaihongos_support_matrix.md for the current release
-workflow and support verdicts; the porting notes below are historical context.
-Run pixi install --locked, import ros2.ohos.lock.repos, replay only the checked-in
-patch inventory, build fixed-source CPython, then run
-target_deps_src/build_all_clean_ohos.sh and OHOS_REQUIRE_CLEAN=1 scripts/build_ohos.sh.
-Deploy with scripts/deploy_ohos_generic.sh and validate with
-scripts/run_ohos_generic_acceptance.sh. Do not use legacy MDDS launchers or
-board-pulled Python as generic acceptance evidence. Never kill unrelated board
-processes or overwrite an old install to make a test pass. Keep GUI/SHM
-experimental and DDS Security/TLS outside this release profile.
-
-Existing unpublished MDDS work is deliberately excluded from this generic
-release. Its two repositories remain at the public commits in the lock, without
-local series/snapshots. Do not regenerate/export all dirty repositories and
-publish them implicitly. Preserving local work is not authorization to release it.
-The nine previously committed meta-repository changes are retained separately.
-
 This repository is the **source distribution workspace for ROS 2**. It does not contain the actual ROS 2 package source code. Instead, it provides the manifest and dependency declarations needed to fetch, build, and validate a complete ROS 2 distribution from source.
 
 ## Project Overview
@@ -176,42 +157,48 @@ If a downstream test fails, use `colcon test --packages-select <package> --event
 
 ### Porting workflow (no push access to upstream repos)
 
-All OHOS modifications to the `src/` subrepos live as local commits on top of
-the upstream branches and are mirrored into `patches/` (one format-patch
-series + a `.base` file per repo, recorded against the TRUE base = parent of
-the first local commit, which can differ from `origin/<branch>` after a
-`vcs pull`):
+OHOS modifications to the `src/` subrepos may be unpublished commits and/or
+uncommitted work.  `scripts/export_patches.sh` mirrors both without modifying
+the real index: format-patch series record a fetchable commit base, while a
+private-index binary snapshot records dirty tracked and untracked files plus
+the exact base and result tree IDs.  `scripts/freeze_ros2_repos.py` then writes
+`ros2.ohos.lock.repos`, pinning every repository to a fetchable commit (the
+series base for repositories whose HEAD is not published):
 
-- `./scripts/export_patches.sh` — regenerate `patches/` from the current
-  subrepo commits. Run it every time you commit/amend in a subrepo.
-- `./scripts/apply_patches.sh` — apply `patches/` onto a fresh checkout;
-  idempotent (reverse-apply check), uses `git am --3way` so series still
-  apply after upstream moved.
+- `./scripts/export_patches.sh` — regenerate commit series and exact dirty
+  snapshots from every imported repository, including the two owned repos.
+- `python scripts/freeze_ros2_repos.py` — regenerate the exact, fetchable lock
+  manifest after exporting patches.
+- `./scripts/apply_patches.sh` — apply series and then snapshots onto a clean
+  lock-manifest checkout, verifying the exported trees.
 
 Moving to another machine:
 
 ```bash
 git clone <your-fork-of-ros2/ros2> && cd ros2
-vcs import --input ros2.repos src/
+vcs import --input ros2.ohos.lock.repos src/
 ./scripts/apply_patches.sh        # replay the OHOS port commits
 # then the one-time dep scripts and ./scripts/build_ohos.sh as below
 ```
 
-Syncing with upstream ROS 2:
+Deliberately syncing/rebasing with upstream ROS 2:
 
 ```bash
-vcs pull src/                     # or per-repo: git fetch origin && git reset --hard origin/jazzy
-./scripts/apply_patches.sh        # 3-way reapply; resolve conflicts if any
+vcs pull src/                     # update/rebase each development port branch
 ./scripts/export_patches.sh       # re-export the (possibly rebased) series
+python scripts/freeze_ros2_repos.py
 ```
 
-Two subrepos are owned by Jiusi-pys and registered in `ros2.repos`, so they
-do NOT go through the `patches/` mirror flow (`export_patches.sh` skips them
-via `OWNED_REPOS`) — push them directly to their own GitHub repos:
+Two subrepos are owned by Jiusi-pys and registered in `ros2.repos`:
 
 - `src/Jiusi-pys/mdds` — the mdds core library, `git@github.com:Jiusi-pys/mdds.git`.
 - `src/ros2/rmw_mdds` — the `rmw_mdds` + `mdds_gateway` ROS packages,
   `git@github.com:Jiusi-pys/rmw_mdds.git`.
+
+Their unpublished state is included in the patch/snapshot fallback like every
+other repository, so a fresh checkout does not silently depend on an unpushed
+branch.  Publishing those branches remains a separate human-controlled release
+gate; the scripts never commit or push on the user's behalf.
 
 This meta repository lives at `git@github.com:Jiusi-pys/ros2.git` (`origin`,
 branch `jazzy_ohos`); `https://github.com/ros2/ros2.git` is `upstream` for
@@ -236,7 +223,7 @@ non-colcon dependencies are cross-built by the scripts in `target_deps_src/`
 ./scripts/install_board_python_deps.sh   # one-time per board: numpy/pyyaml/psutil/...
 ./scripts/deploy_ohos.sh                 # pack install_ohos/ and push to both boards
 ./scripts/smoke_loopback.sh [board_id]   # same-board talker/listener check
-./scripts/run_bidirectional_test.sh 20   # board A <-> board B, both directions
+./scripts/run_bidirectional_test.sh      # compatibility entry; hardened domain-0 smoke
 ./scripts/run_board_tests.sh [board_id] [pkg...]  # run package ctest suites on the board
 ```
 
@@ -277,9 +264,15 @@ Key facts:
   (upstream logic: no DISPLAY on the Windows host); the
   `*_visual_test` screenshot comparisons need `-DEnableVisualTests=True` and
   reference images captured on the same GPU - left SKIPPED on the Mali board.
-  Stale ROS processes on the board (auto-spawned ros2 daemon, leftover rqt /
+  The default package set includes `mdds`: its two token-boundary CTests use
+  the explicit `MDDS_BOARDTEST_TOKEN_MODE` marker to prove an unprivileged
+  fail-closed startup followed, on the same isolated domain, by the just-built
+  package launcher's authorized startup. Their raw logs/verdicts and order are
+  subject to the same exact archive inventory gate.
+  Foreign ROS processes on the board (auto-spawned ros2 daemon, leftover rqt /
   demo nodes) hold participants on domain 0 and make graph/timing tests flaky
-  or hanging - kill them (and stale iox-roudi) before a test run.
+  or hanging. Hardened runners fail closed when they detect such processes;
+  they terminate only PIDs whose run record and `/proc` start identity match.
 - iceoryx is ported: musl patches under `src/eclipse-iceoryx/iceoryx/`
   (mqueue ENOSYS stubs, no-op access_control, PTHREAD_MUTEX_RECURSIVE for
   _NP, no libacl/libatomic/librt link). env.sh mounts a tmpfs over `/dev/shm`
@@ -310,9 +303,12 @@ Key facts:
   baked path. A daemonized sessiond ignores SIGTERM on this musl; use
   `kill -9`. `ros2 trace` works non-interactively (`ros2 trace start/stop`);
   the interactive form needs a stdin that `hdc shell` does not forward.
-- `scripts/env.sh` is GENERATED by `scripts/deploy_ohos.sh` from a heredoc on
-  every deploy - edit the heredoc, never the generated file. Deploy also
-  `chmod +x bin/* lib/lttng/libexec/*` (the tar does not preserve exec bits).
+- `scripts/env.sh` is a fail-closed retired legacy stub. `deploy_ohos.sh`
+  generates the only usable board environment from
+  `scripts/env_ohos.template.sh` inside its hash-bound staged prefix. Edit the
+  template, never revive/manual-push the legacy stub. Deploy restores
+  executable bits across installed `bin/` and `Lib/`, verifies every
+  regular-file digest, and atomically swaps the prefix.
 - Fast-DDS (2.14.x) is built with `-DTHIRDPARTY=ON` (bundled asio/tinyxml2 from
   git submodules - run `git submodule update --init thirdparty/asio
   thirdparty/tinyxml2` in `src/eProsima/Fast-DDS` after `vcs import`) and
@@ -346,8 +342,12 @@ Key facts:
   python launcher dlopen()s libpython with RTLD_LOCAL, so `env.sh` sets
   `LD_PRELOAD=libpython3.12.so.1.0` to make Py* symbols global. psutil has no
   musllinux wheel and is compiled by hand with the NDK clang.
-- Runtime on the board: `. /data/local/tmp/ros2/env.sh`, then `$ROS2_TALKER` /
-  `$ROS2_LISTENER` (C++) or `$ROS2_PY_TALKER` / `$ROS2_PY_LISTENER`
+- Runtime on the board: first require
+  `. /data/local/tmp/ros2/env.sh || exit 70` in automation (or put subsequent
+  interactive commands inside `if . /data/local/tmp/ros2/env.sh; then ...; fi`), then
+  `mdds_exec "$ROS2_TALKER_RAW"` / `mdds_exec "$ROS2_LISTENER_RAW"` (C++) or
+  `mdds_exec python3.12 "$ROS2_PY_TALKER_RAW"` /
+  `mdds_exec python3.12 "$ROS2_PY_LISTENER_RAW"`
   (demo_nodes_py; colcon on a Windows host writes setuptools `*-script.py`
   entry scripts into `lib/<pkg>/`, the `.exe` launchers are unusable). `ros2`
   is an env.sh shell function wrapping `ros2cli.cli:main`. Board-to-board
@@ -411,10 +411,10 @@ Key facts:
     -DOHOS_PYQT5_SIP_DIR` from build_ohos.sh. Note sip4 needs the
     `py_ssize_t_clean=True` directive stripped from QtCoremod.sip (same
     workaround as upstream sip_configure.py).
-  - The pixi host env must NOT have pytest-runner (`ptr`): its entry point
-    imports `pkg_resources`, which current setuptools removed, and any
-    setuptools `print_commands` (colcon's `setup.py --help-commands` probe,
-    e.g. rqt_gui) dies on it.
+  - Do not independently upgrade setuptools inside the Pixi prefix. Both
+    vcstool and pytest-runner's `ptr` entry point still import
+    `pkg_resources`; `pixi.toml`/`pixi.lock` retain setuptools 68.1.2 for that
+    compatibility.
   - ament-index resource files written by the Windows host build have CRLF;
     pluginlib's getline does not strip `\r` and then fails to load plugin.xml
     ("has no Root Element"). `deploy_ohos.sh` strips `\r` from
@@ -467,10 +467,10 @@ Key facts:
     are replaced by direct EGL/GLESv2 find_library on OHOS. build_ohos.sh now
     passes `-DCMAKE_LIBRARY_ARCHITECTURE=aarch64-linux-ohos` so find_library
     searches `lib/<triple>` in the sysroot (needed for libEGL/libGLESv2).
-  - pixi's `vcs` (used by EVERY vendor-package download step) imports
-    `pkg_resources`, removed in current setuptools -> vendor downloads die
-    with ModuleNotFoundError. Work around by prebuilding the dep (as above)
-    or `pip install "setuptools<81"` in the pixi env (a pixi reinstall reverts).
+  - If pixi's `vcs` fails with `ModuleNotFoundError: pkg_resources`, the local
+    prefix has drifted from the checked-in lock (typically via a pip setuptools
+    upgrade). Restore the locked environment/setuptools 68.1.2 before import;
+    do not paper over it with an unrecorded release dependency.
   - rviz_rendering OHOS patches: X11/GLX dummy-context code is `#if __linux__
     && !defined(__OHOS__)`, `loadOgrePlugins` loads `RenderSystem_GLES2`,
     `setPluginDirectory` uses `<prefix>/lib/OGRE` (no opt/ subdir),

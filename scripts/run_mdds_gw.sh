@@ -211,11 +211,11 @@ export MSYS2_ARG_CONV_EXCL='*'
 # The gateway must NOT have RMW_IMPLEMENTATION pinned by its environment: it
 # pins rmw_cyclonedds_cpp internally and fails closed on a foreign RMW. Its
 # raw MDDS participant is selected solely by mdds_gateway_test.conf.
-RENVS=". $DEVICE_DIR/env.sh; . $DEVICE_DIR/share/rmw_mdds/config/ohos_dsoftbus.env; export MDDS_DEBUG=1; export ROS_DOMAIN_ID=$GW_MDDS_DOMAIN;"
+RENVS=". $DEVICE_DIR/env.sh || exit 70; export MDDS_TOKEN_EXEC=$DEVICE_DIR/bin/mdds_token_exec; . $DEVICE_DIR/share/rmw_mdds/config/ohos_dsoftbus.env || exit 70; export MDDS_DEBUG=1; export ROS_DOMAIN_ID=$GW_MDDS_DOMAIN;"
 # main.cpp obtains its Cyclone domain exclusively from the rendered config via
 # InitOptions::set_domain_id().  Clear inherited ROS_DOMAIN_ID so an unrelated
 # board process cannot make the intended boundary ambiguous in diagnostics.
-GWENVS=". $DEVICE_DIR/env.sh; unset RMW_IMPLEMENTATION MDDS_DEPLOYMENT_PROFILE MDDS_TRANSPORT MDDS_UDP_PEER_ALLOW ROS_DOMAIN_ID; export CYCLONEDDS_URI=$DEVICE_DIR/mdds_e2e/cyclonedds_board_a.xml; export MDDS_DEBUG=1; export RCUTILS_LOGGING_BUFFERED_STREAM=0;"
+GWENVS=". $DEVICE_DIR/env.sh || exit 70; export MDDS_TOKEN_EXEC=$DEVICE_DIR/bin/mdds_token_exec; unset RMW_IMPLEMENTATION MDDS_DEPLOYMENT_PROFILE MDDS_TRANSPORT MDDS_UDP_PEER_ALLOW ROS_DOMAIN_ID; export CYCLONEDDS_URI=$DEVICE_DIR/mdds_e2e/cyclonedds_board_a.xml; export MDDS_DEBUG=1; export RCUTILS_LOGGING_BUFFERED_STREAM=0;"
 
 # HDC shell's exit status is not a trustworthy board-process status. Every
 # launcher writes a run-scoped PID:start record before emitting an optional
@@ -471,6 +471,9 @@ launch() { # launch <board> <env-prefix> <cmd> <log>; remote pid -> LAST_PID
   local out raw record token pid start record_path intent_path status_path cancel_path record_source pending status
   local guard_script q_guard q_intent q_record q_status q_cancel q_log q_env q_payload q_run q_nonce q_tag q_fail q_suppress
   local attempt launch_tag
+  # Grant the native DSoftBus token only to this recorded child.  libmdds is
+  # deliberately forbidden from mutating the shared caller process identity.
+  payload="\$MDDS_TOKEN_EXEC -- $payload"
   ensure_remote_owner "$board" || return 1
   LAUNCH_SEQUENCE=$((LAUNCH_SEQUENCE + 1))
   launch_tag="${LAUNCH_SEQUENCE}_${RANDOM}_$$"
@@ -1500,7 +1503,7 @@ verify_final_artifacts() {
   # configuration: it selects the strict DSoftBus-only deployment profile.
   # Treat it as an artifact so a stale/modified profile cannot turn a green
   # gateway run into evidence for a different transport configuration.
-  for name in libmdds.so librmw_mdds.so librmw_cyclonedds_cpp.so ohos_dsoftbus.env mdds_gateway; do
+  for name in libmdds.so librmw_mdds.so librmw_cyclonedds_cpp.so ohos_dsoftbus.env mdds_gateway mdds_token_exec; do
     case "$name" in
       libmdds.so)
         local_path="install_ohos/lib/libmdds.so"
@@ -1521,6 +1524,10 @@ verify_final_artifacts() {
       mdds_gateway)
         local_path="install_ohos/lib/mdds_gateway/mdds_gateway"
         remote="$DEVICE_DIR/lib/mdds_gateway/mdds_gateway"
+        ;;
+      mdds_token_exec)
+        local_path="install_ohos/bin/mdds_token_exec"
+        remote="$DEVICE_DIR/bin/mdds_token_exec"
         ;;
     esac
     if [ ! -f "$local_path" ]; then

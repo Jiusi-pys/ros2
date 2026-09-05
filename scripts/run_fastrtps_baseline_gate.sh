@@ -212,6 +212,11 @@ if [ "$provenance_ok" -eq 1 ] && ! one_matching_line "$RUN_TXT" \
   reason=UNVERIFIED_ARCHIVE_CONTROLS
 fi
 if [ "$provenance_ok" -eq 1 ] && ! one_matching_line "$RUN_TXT" \
+  "^BOARDTEST_VERDICT_SET package=$PACKAGE expected=1 stdout=1 archive=1 raw_logs=1 xml=1 result=EXACT$"; then
+  provenance_ok=0
+  reason=UNVERIFIED_VERDICT_SET
+fi
+if [ "$provenance_ok" -eq 1 ] && ! one_matching_line "$RUN_TXT" \
   "^BOARDTEST_ACTIVITY_LOCK_RELEASE board=$BOARD .* result=MDDS_ACTIVITY_LOCK_RELEASED$"; then
   provenance_ok=0
   reason=ACTIVITY_LOCK_NOT_PROVEN_RELEASED
@@ -247,9 +252,13 @@ if [ "$provenance_ok" -eq 1 ]; then
     provenance_ok=0
     reason=ARCHIVED_DRIVER_UNREADABLE
   elif [[ "$(printf '%s\n' "$archived_driver" | tr -d '\r' | grep -Ec \
-    '^env GTEST_BRIEF=1 RMW_IMPLEMENTATION=rmw_fastrtps_cpp timeout [0-9]+ \./test_subscription( |$)' || true)" != "1" ||
+    '^env GTEST_BRIEF=1 RMW_IMPLEMENTATION=rmw_fastrtps_cpp timeout [0-9]+ "\$MDDS_TOKEN_EXEC" -- \./test_subscription( |$)' || true)" != "1" ||
     "$(printf '%s\n' "$archived_driver" | tr -d '\r' | grep -Fxc \
-      "if [ \$rc -eq 0 ]; then echo 'BOARDTEST $CTEST_SELECTOR PASS'; else echo \"BOARDTEST $CTEST_SELECTOR FAIL rc=\$rc\"; fi" || true)" != "1" ]]; then
+      "# BOARDTEST_EXPECTED $CTEST_SELECTOR" || true)" != "1" ||
+    "$(printf '%s\n' "$archived_driver" | tr -d '\r' | grep -Fxc \
+      "# BOARDTEST_TOKEN_MODE $CTEST_SELECTOR REQUIRED" || true)" != "1" ||
+    "$(printf '%s\n' "$archived_driver" | tr -d '\r' | grep -Fxc \
+      'exit "$overall_rc"' || true)" != "1" ]]; then
     provenance_ok=0
     reason=ARCHIVED_DRIVER_RMW_BINDING_MISMATCH
   else
@@ -263,7 +272,7 @@ if [ "$provenance_ok" -eq 1 ]; then
   if [ "${#verdict_lines[@]}" -ne 1 ]; then
     provenance_ok=0
     reason=SELECTOR_DID_NOT_YIELD_EXACTLY_ONE_VERDICT
-  elif [[ "${verdict_lines[0]}" == "BOARDTEST $CTEST_SELECTOR PASS" ]]; then
+  elif [[ "${verdict_lines[0]}" == "BOARDTEST $CTEST_SELECTOR PASS rc=0" ]]; then
     actual_test_result=PASS
   elif [[ "${verdict_lines[0]}" =~ ^BOARDTEST[[:space:]]+$CTEST_SELECTOR[[:space:]]+FAIL[[:space:]]+rc=[1-9][0-9]*$ ]]; then
     actual_test_result=FAIL

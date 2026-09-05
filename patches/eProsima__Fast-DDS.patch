@@ -1,5 +1,24 @@
+From e66e90fd7b1e7a14d80129002474c68bc16da2bb Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sat, 5 Sep 2026 12:14:31 +0800
+Subject: [PATCH] fix(ohos): anchor topic RTTI and use matching bundled
+ TinyXML2
+
+Give TopicDescription an OHOS-only out-of-line key function so cross-DSO downcasts use provider-owned RTTI. Keep bundled TinyXML2 headers and implementation together. Add topic downcast and ELF ownership regressions.
+
+Focused RK3588A tests passed: content filter 1/1, subscription 31/31, cpp and dynamic RMW 16/16 each, default-RMW cross-board pub/sub. Full clean SDK23 ROS build and release acceptance are still pending. Published through the ROS workspace patch snapshot; no direct upstream push.
+---
+ cmake/modules/FindTinyXML2.cmake              | 20 +++--
+ .../fastdds/dds/topic/TopicDescription.hpp    |  8 ++
+ src/cpp/CMakeLists.txt                        |  2 +-
+ src/cpp/fastdds/topic/Topic.cpp               |  4 +
+ test/ohos/check_topic_description_rtti.py     | 82 +++++++++++++++++++
+ test/unittest/dds/topic/TopicTests.cpp        | 20 +++++
+ 6 files changed, 129 insertions(+), 7 deletions(-)
+ create mode 100644 test/ohos/check_topic_description_rtti.py
+
 diff --git a/cmake/modules/FindTinyXML2.cmake b/cmake/modules/FindTinyXML2.cmake
-index 44b8e645758a468e75c2f2fb9daf40bb86ca7a99..20d1c9753f7de67e416b1d5d8f3b2805c30bf190 100644
+index 44b8e6457..20d1c9753 100644
 --- a/cmake/modules/FindTinyXML2.cmake
 +++ b/cmake/modules/FindTinyXML2.cmake
 @@ -29,16 +29,24 @@ if(TinyXML2_FOUND AND NOT TINYXML2_FROM_THIRDPARTY)
@@ -34,7 +53,7 @@ index 44b8e645758a468e75c2f2fb9daf40bb86ca7a99..20d1c9753f7de67e416b1d5d8f3b2805
      endif()
  
 diff --git a/include/fastdds/dds/topic/TopicDescription.hpp b/include/fastdds/dds/topic/TopicDescription.hpp
-index 656e70b66752f4a6fa79c3c652f37a1bce1f83c5..7b1aac4889362f60cff40698adae69b98c164523 100644
+index 656e70b66..7b1aac488 100644
 --- a/include/fastdds/dds/topic/TopicDescription.hpp
 +++ b/include/fastdds/dds/topic/TopicDescription.hpp
 @@ -77,9 +77,17 @@ protected:
@@ -56,7 +75,7 @@ index 656e70b66752f4a6fa79c3c652f37a1bce1f83c5..7b1aac4889362f60cff40698adae69b9
  protected:
  
 diff --git a/src/cpp/CMakeLists.txt b/src/cpp/CMakeLists.txt
-index 50017a6bc65e265239f29ac4e2171d1928dde593..24791c438445b9b67393396588f4bacc24d1a9f8 100644
+index 50017a6bc..24791c438 100644
 --- a/src/cpp/CMakeLists.txt
 +++ b/src/cpp/CMakeLists.txt
 @@ -507,8 +507,8 @@ target_include_directories(${PROJECT_NAME} PUBLIC
@@ -70,7 +89,7 @@ index 50017a6bc65e265239f29ac4e2171d1928dde593..24791c438445b9b67393396588f4bacc
      ${THIRDPARTY_BOOST_INCLUDE_DIR}
      ${PROJECT_SOURCE_DIR}/thirdparty/taocpp-pegtl
 diff --git a/src/cpp/fastdds/topic/Topic.cpp b/src/cpp/fastdds/topic/Topic.cpp
-index ed8975170b517b4260a4cde15d8e2981a5a0c7a1..a0d80f1565ca609becdea11e744664fe13d105b6 100644
+index ed8975170..a0d80f156 100644
 --- a/src/cpp/fastdds/topic/Topic.cpp
 +++ b/src/cpp/fastdds/topic/Topic.cpp
 @@ -27,6 +27,10 @@ namespace eprosima {
@@ -86,7 +105,7 @@ index ed8975170b517b4260a4cde15d8e2981a5a0c7a1..a0d80f1565ca609becdea11e744664fe
          const std::string& type_name,
 diff --git a/test/ohos/check_topic_description_rtti.py b/test/ohos/check_topic_description_rtti.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..3ca6a17edcf05c0d5fbf32e34466b0dc340ab819
+index 000000000..3ca6a17ed
 --- /dev/null
 +++ b/test/ohos/check_topic_description_rtti.py
 @@ -0,0 +1,82 @@
@@ -173,7 +192,7 @@ index 0000000000000000000000000000000000000000..3ca6a17edcf05c0d5fbf32e34466b0dc
 +if __name__ == "__main__":
 +    raise SystemExit(main())
 diff --git a/test/unittest/dds/topic/TopicTests.cpp b/test/unittest/dds/topic/TopicTests.cpp
-index bd102150bfe6bdf04c050befc1cc8f19cfb30669..b4beb4a8632b69554b169a5658cf97421a9c47b6 100644
+index bd102150b..b4beb4a86 100644
 --- a/test/unittest/dds/topic/TopicTests.cpp
 +++ b/test/unittest/dds/topic/TopicTests.cpp
 @@ -179,6 +179,26 @@ TEST(TopicTests, GetTopicParticipant)
@@ -203,3 +222,6 @@ index bd102150bfe6bdf04c050befc1cc8f19cfb30669..b4beb4a8632b69554b169a5658cf9742
  void set_listener_test (
          Topic* topic,
          TopicListener* listener,
+-- 
+2.55.0.windows.5
+

@@ -56,7 +56,7 @@ case "$BOARD" in
 esac
 PKGS=("$@")
 if [ ${#PKGS[@]} -eq 0 ]; then
-  PKGS=(rcutils rcpputils rosidl_runtime_c rosidl_runtime_cpp rmw
+  PKGS=(mdds rcutils rcpputils rosidl_runtime_c rosidl_runtime_cpp rmw
         rcl_yaml_param_parser rcl rcl_action rcl_lifecycle rclcpp test_msgs)
 fi
 
@@ -568,17 +568,171 @@ verify_archive_controls() { # <package> <archive> <manifest> <ready> <terminal>
     "$pkg" "$manifest_digest" | tee -a "$LOGDIR/run.txt"
 }
 
+# Bind every host-visible BOARDTEST verdict to one generated-plan entry and
+# one byte-identical record in the hash-verified board archive.  This rejects
+# truncated HDC stdout, duplicate/foreign verdicts, a driver that silently
+# skipped its tail, and an archive whose raw log set does not match the
+# summarized result set.
+verify_archive_verdicts() { # <package> <archive> <driver-stdout> <local-driver>
+  local pkg="$1" archive="$2" driver_stdout="$3" driver="$4"
+  local name line member digest expected_digest status order_index
+  local expected_count=0 verdict_count=0 record_count=0 log_count=0 expected_log_count=0
+  local xml_count=0 expected_xml_count=0 xml_bytes
+  local -A expected_names=()
+  local -A expected_xml=()
+  local -A expected_token_mode=()
+  local -A seen_verdicts=()
+  local -a expected_order=()
+  local -a verdict_order=()
+
+  while IFS= read -r line; do
+    [[ "$line" =~ ^\#\ BOARDTEST_EXPECTED\ ([A-Za-z0-9][A-Za-z0-9_.-]*)$ ]] || continue
+    name="${BASH_REMATCH[1]}"
+    if [[ -n "${expected_names[$name]+present}" ]]; then
+      echo "ERROR: duplicate BOARDTEST plan entry for $pkg/$name" >&2
+      return 1
+    fi
+    expected_names["$name"]=1
+    expected_order+=("$name")
+    expected_count=$((expected_count + 1))
+  done < "$driver"
+  if [ "$expected_count" -eq 0 ]; then
+    echo "ERROR: generated board driver has no auditable test plan for $pkg" >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    [[ "$line" =~ ^\#\ BOARDTEST_XML\ ([A-Za-z0-9][A-Za-z0-9_.-]*)$ ]] || continue
+    name="${BASH_REMATCH[1]}"
+    if [[ -z "${expected_names[$name]+present}" || -n "${expected_xml[$name]+present}" ]]; then
+      echo "ERROR: unknown or duplicate BOARDTEST XML plan entry for $pkg/$name" >&2
+      return 1
+    fi
+    expected_xml["$name"]=1
+    expected_xml_count=$((expected_xml_count + 1))
+  done < "$driver"
+  while IFS= read -r line; do
+    [[ "$line" =~ ^\#\ BOARDTEST_TOKEN_MODE\ ([A-Za-z0-9][A-Za-z0-9_.-]*)\ (REQUIRED|BYPASS_EXPECT_UNAUTHORIZED|LAUNCHER_UNDER_TEST)$ ]] || continue
+    name="${BASH_REMATCH[1]}"
+    if [[ -z "${expected_names[$name]+present}" || -n "${expected_token_mode[$name]+present}" ]]; then
+      echo "ERROR: unknown or duplicate BOARDTEST token-mode plan entry for $pkg/$name" >&2
+      return 1
+    fi
+    expected_token_mode["$name"]="${BASH_REMATCH[2]}"
+  done < "$driver"
+
+  while IFS= read -r line; do
+    # HDC can frame each remote LF as CRLF. Accept exactly one transport CR
+    # at the physical line boundary, then bind the normalized LF record to
+    # the board archive. Any embedded or second CR remains and fails closed.
+    line="${line%$'\r'}"
+    if [[ "$line" == *$'\r'* ]]; then
+      echo "ERROR: BOARDTEST stdout contains embedded/additional CR for $pkg" >&2
+      return 1
+    fi
+    [[ "$line" == BOARDTEST\ * ]] || continue
+    if [[ "$line" =~ ^BOARDTEST\ ([A-Za-z0-9][A-Za-z0-9_.-]*)\ (SKIP|PASS\ rc=0|FAIL\ rc=[1-9][0-9]*)$ ]]; then
+      name="${BASH_REMATCH[1]}"
+    else
+      echo "ERROR: malformed/noncanonical BOARDTEST line for $pkg: $line" >&2
+      return 1
+    fi
+    if [[ -z "${expected_names[$name]+present}" || -n "${seen_verdicts[$name]+present}" ]]; then
+      echo "ERROR: unknown or duplicate BOARDTEST verdict for $pkg/$name" >&2
+      return 1
+    fi
+    seen_verdicts["$name"]="$line"
+    verdict_order+=("$name")
+    verdict_count=$((verdict_count + 1))
+  done < "$driver_stdout"
+
+  record_count="$(local_archive_tar -tf "$archive" | tr -d '\r' | grep -Ec "^${pkg}/[.]boardtest-verdicts/[A-Za-z0-9][A-Za-z0-9_.-]*$" || true)"
+  log_count="$(local_archive_tar -tf "$archive" | tr -d '\r' | grep -Ec "^${pkg}/[A-Za-z0-9][A-Za-z0-9_.-]*[.]log$" || true)"
+  xml_count="$(local_archive_tar -tf "$archive" | tr -d '\r' | grep -Ec "^${pkg}/[A-Za-z0-9][A-Za-z0-9_.-]*[.]xml$" || true)"
+  if [ "$verdict_count" -ne "$expected_count" ] || [ "$record_count" -ne "$expected_count" ]; then
+    echo "ERROR: incomplete verdict set for $pkg: expected=$expected_count stdout=$verdict_count archive=$record_count" >&2
+    return 1
+  fi
+  for ((order_index = 0; order_index < expected_count; order_index++)); do
+    if [[ "${verdict_order[$order_index]}" != "${expected_order[$order_index]}" ]]; then
+      echo "ERROR: BOARDTEST verdict order differs from generated plan for $pkg at index $order_index" >&2
+      return 1
+    fi
+  done
+
+  for name in "${expected_order[@]}"; do
+    line="${seen_verdicts[$name]-}"
+    if [ -z "$line" ]; then
+      echo "ERROR: missing BOARDTEST verdict for $pkg/$name" >&2
+      return 1
+    fi
+    member="$pkg/.boardtest-verdicts/$name"
+    if [ "$(local_archive_tar -tf "$archive" | tr -d '\r' | grep -Fxc "$member")" != 1 ]; then
+      echo "ERROR: archive lacks exactly one verdict record for $pkg/$name" >&2
+      return 1
+    fi
+    expected_digest="$(printf '%s\n' "$line" | sha256sum | cut -d ' ' -f1)"
+    digest="$(local_archive_tar -xOf "$archive" "$member" | sha256sum | cut -d ' ' -f1)" || return 1
+    if [[ "$digest" != "$expected_digest" ]]; then
+      echo "ERROR: archived verdict differs from HDC stdout for $pkg/$name" >&2
+      return 1
+    fi
+    status="${line#BOARDTEST $name }"
+    if [[ "$status" == SKIP ]]; then
+      if [[ -n "${expected_token_mode[$name]+present}" ]]; then
+        echo "ERROR: skipped test unexpectedly has a token-mode execution plan for $pkg/$name" >&2
+        return 1
+      fi
+      if local_archive_tar -tf "$archive" | tr -d '\r' | grep -Fxq "$pkg/$name.log"; then
+        echo "ERROR: skipped test unexpectedly has a raw log for $pkg/$name" >&2
+        return 1
+      fi
+    else
+      if [[ -z "${expected_token_mode[$name]+present}" ]]; then
+        echo "ERROR: executed test lacks an explicit token-mode plan for $pkg/$name" >&2
+        return 1
+      fi
+      expected_log_count=$((expected_log_count + 1))
+      if [ "$(local_archive_tar -tf "$archive" | tr -d '\r' | grep -Fxc "$pkg/$name.log")" != 1 ]; then
+        echo "ERROR: executed test lacks exactly one raw log for $pkg/$name" >&2
+        return 1
+      fi
+      if [[ -n "${expected_xml[$name]+present}" ]]; then
+        if [ "$(local_archive_tar -tf "$archive" | tr -d '\r' | grep -Fxc "$pkg/$name.xml")" != 1 ]; then
+          echo "ERROR: GTest XML plan lacks exactly one XML result for $pkg/$name" >&2
+          return 1
+        fi
+        xml_bytes="$(local_archive_tar -xOf "$archive" "$pkg/$name.xml" | wc -c | tr -d '[:space:]')" || return 1
+        if ! [[ "$xml_bytes" =~ ^[1-9][0-9]*$ ]]; then
+          echo "ERROR: GTest XML result is empty for $pkg/$name" >&2
+          return 1
+        fi
+      fi
+    fi
+  done
+  if [ "$log_count" -ne "$expected_log_count" ]; then
+    echo "ERROR: archive contains orphan/missing raw logs for $pkg: expected=$expected_log_count actual=$log_count" >&2
+    return 1
+  fi
+  if [ "$xml_count" -ne "$expected_xml_count" ]; then
+    echo "ERROR: archive contains orphan/missing GTest XML files for $pkg: expected=$expected_xml_count actual=$xml_count" >&2
+    return 1
+  fi
+  printf 'BOARDTEST_VERDICT_SET package=%s expected=%s stdout=%s archive=%s raw_logs=%s xml=%s result=EXACT\n' \
+    "$pkg" "$expected_count" "$verdict_count" "$record_count" "$log_count" "$xml_count" | tee -a "$LOGDIR/run.txt"
+}
+
 # Create the shared directory atomically and then create/read back the exact
-# owner record.  Existing, incomplete, or malformed locks are intentionally
-# indistinguishable from a live owner: all are fail-closed and are never
-# removed by this test runner.
+# owner record. Existing or foreign locks fail closed. If this transaction
+# wrote its exact owner and then failed a later setup check, it releases only
+# that exact one-entry lock so a partial initialization cannot wedge the board.
 acquire_activity_lock() {
-  local out
+  local out cleanup_out
   out="$(shell "if (umask 077; mkdir '$ACTIVITY_LOCK_DIR') 2>/dev/null; then
     if (umask 077; set -C; printf '%s\\n' '$ACTIVITY_LOCK_OWNER' > '$ACTIVITY_LOCK_DIR/owner') 2>/dev/null && \\
       test -d '$ACTIVITY_LOCK_DIR' && test ! -L '$ACTIVITY_LOCK_DIR' && \\
       test -f '$ACTIVITY_LOCK_DIR/owner' && test ! -L '$ACTIVITY_LOCK_DIR/owner' && \\
-      test \"\$(cat '$ACTIVITY_LOCK_DIR/owner' 2>/dev/null)\" = '$ACTIVITY_LOCK_OWNER'; then
+      test \"\$(cat '$ACTIVITY_LOCK_DIR/owner' 2>/dev/null)\" = '$ACTIVITY_LOCK_OWNER' && \\
+      test \"\$(find '$ACTIVITY_LOCK_DIR' -mindepth 1 -maxdepth 1)\" = '$ACTIVITY_LOCK_DIR/owner'; then
       printf MDDS_ACTIVITY_LOCK_ACQUIRED
     else
       printf MDDS_ACTIVITY_LOCK_OWNER_WRITE_FAILED
@@ -589,6 +743,11 @@ acquire_activity_lock() {
   printf 'BOARDTEST_ACTIVITY_LOCK board=%s owner=%s result=%s\n' \
     "$BOARD" "$ACTIVITY_LOCK_OWNER" "${out:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"
   if [[ "$out" != "MDDS_ACTIVITY_LOCK_ACQUIRED" ]]; then
+    if [[ "$out" == "MDDS_ACTIVITY_LOCK_OWNER_WRITE_FAILED" ]]; then
+      cleanup_out="$(shell "if test -d '$ACTIVITY_LOCK_DIR' && test ! -L '$ACTIVITY_LOCK_DIR' && test -f '$ACTIVITY_LOCK_DIR/owner' && test ! -L '$ACTIVITY_LOCK_DIR/owner' && test \"\$(cat '$ACTIVITY_LOCK_DIR/owner' 2>/dev/null)\" = '$ACTIVITY_LOCK_OWNER' && test \"\$(find '$ACTIVITY_LOCK_DIR' -mindepth 1 -maxdepth 1)\" = '$ACTIVITY_LOCK_DIR/owner'; then rm -f '$ACTIVITY_LOCK_DIR/owner' && rmdir '$ACTIVITY_LOCK_DIR' && printf MDDS_ACTIVITY_LOCK_RELEASED; else printf MDDS_ACTIVITY_LOCK_NOT_OWNED; fi" | tr -d '\r\n')"
+      printf 'BOARDTEST_ACTIVITY_LOCK_PARTIAL_RELEASE board=%s owner=%s result=%s\n' \
+        "$BOARD" "$ACTIVITY_LOCK_OWNER" "${cleanup_out:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"
+    fi
     echo "ERROR: MDDS activity lock is held, malformed, or could not be created on $BOARD: ${out:-NO_MARKER}" >&2
     return 1
   fi
@@ -895,7 +1054,11 @@ attempted_packages=0
 
 for pkg in "${PKGS[@]}"; do
   dir="build_ohos/$pkg"
-  [ -f "$dir/CTestTestfile.cmake" ] || { echo "== $pkg: no CTestTestfile, skipped"; continue; }
+  if [ ! -f "$dir/CTestTestfile.cmake" ]; then
+    echo "ERROR: requested package has no CTestTestfile: $pkg" >&2
+    driver_completion_fail=1
+    break
+  fi
   # collect native test executables + helper libs (build-tree layout kept)
   mapfile -t exes < <(find "$dir" -type f \
     -not -path "*/CMakeFiles/*" -not -path "*/.cmake/*" \
@@ -903,7 +1066,6 @@ for pkg in "${PKGS[@]}"; do
     -exec file {} + \
     | grep "ELF 64-bit" | grep -i "aarch64" | grep -iE "executable|interpreter" | cut -d: -f1 \
     | grep -v "/benchmark_")
-  [ ${#exes[@]} -eq 0 ] && { echo "== $pkg: no test executables, skipped"; continue; }
   mapfile -t libs < <(find "$dir" -type f -name "*.so" -not -path "*/.cmake/*" -not -path "*/CMakeFiles/*")
   echo "== $pkg: ${#exes[@]} executables, ${#libs[@]} helper libs"
   # driver script replaying the ament test fixtures
@@ -917,7 +1079,14 @@ for pkg in "${PKGS[@]}"; do
     driver_completion_fail=1
     break
   fi
+  expected_plan_count="$(grep -Ec '^# BOARDTEST_EXPECTED [A-Za-z0-9][A-Za-z0-9_.-]*$' "$driver" || true)"
+  if [ "$expected_plan_count" -eq 0 ]; then
+    echo "ERROR: generated board driver has an empty/invalid plan for $pkg" >&2
+    driver_completion_fail=1
+    break
+  fi
   printf 'BOARDTEST_SELECTION package=%s selector=%s\n' "$pkg" "${ONLY_TEST:-ALL}" | tee -a "$LOGDIR/run.txt"
+  printf 'BOARDTEST_PLAN package=%s expected_verdicts=%s\n' "$pkg" "$expected_plan_count" | tee -a "$LOGDIR/run.txt"
 
   reset_ready_manifest
   package_root="$ROS2_HOME/tests/$pkg"
@@ -1052,9 +1221,9 @@ for pkg in "${PKGS[@]}"; do
     if [ "$DRIVER_TERMINAL_RECORD_VALID" -eq 1 ]; then
       terminal_rc_ok=0
       driver_terminal_rc_fail=1
-      printf 'BOARDTEST_DRIVER_TERMINAL_FAILURE package=%s rc=%s action=RETAIN_LOCK_AND_FAIL_GATE\n' \
+      printf 'BOARDTEST_DRIVER_TERMINAL_FAILURE package=%s rc=%s action=FAIL_GATE_AFTER_ARCHIVE\n' \
         "$pkg" "$DRIVER_TERMINAL_RC" | tee -a "$LOGDIR/run.txt"
-      echo "ERROR: board driver for $pkg recorded non-zero terminal RC=$DRIVER_TERMINAL_RC; retaining activity lock and failing gate" >&2
+      echo "ERROR: board driver for $pkg recorded non-zero terminal RC=$DRIVER_TERMINAL_RC; failing gate after evidence capture" >&2
     else
       terminal_record_ok=0
       driver_completion_fail=1
@@ -1065,6 +1234,9 @@ for pkg in "${PKGS[@]}"; do
     archive_ok=0
     archive_fail=1
   elif [ "$terminal_record_ok" -eq 1 ] && ! verify_archive_controls "$pkg" "$CAPTURED_ARCHIVE" "$manifest_path" "$ready_path" "$terminal_path"; then
+    archive_ok=0
+    archive_fail=1
+  elif ! verify_archive_verdicts "$pkg" "$CAPTURED_ARCHIVE" "$driver_stdout" "$driver"; then
     archive_ok=0
     archive_fail=1
   fi
@@ -1102,7 +1274,7 @@ for pkg in "${PKGS[@]}"; do
     driver_completion_fail=1
   fi
   if [ "$terminal_record_ok" -ne 1 ] || [ "$terminal_rc_ok" -ne 1 ] || [ "$archive_ok" -ne 1 ]; then
-    echo "ERROR: terminal/READY/archive provenance or terminal RC failed for $pkg; retaining activity lock and stopping later packages" >&2
+    echo "ERROR: terminal/READY/archive provenance or terminal RC failed for $pkg; stopping later packages" >&2
     break
   fi
 done
@@ -1112,6 +1284,10 @@ echo "== board test summary: $total_pass passed, $total_fail failed, $total_skip
 if [ $((total_pass + total_fail + total_skip)) -eq 0 ]; then
   echo "ERROR: no BOARDTEST verdicts were collected; refusing to report a pass" >&2
   exit 1
+fi
+if [ "$attempted_packages" -ne "${#PKGS[@]}" ]; then
+  echo "ERROR: requested package set was not executed completely: requested=${#PKGS[@]} attempted=$attempted_packages" >&2
+  driver_completion_fail=1
 fi
 if [ ${#failed_tests[@]} -gt 0 ]; then
   printf '   %s\n' "${failed_tests[@]}"
@@ -1123,14 +1299,15 @@ if [ "$driver_completion_fail" -ne 0 ]; then
   echo "ERROR: one or more board drivers lack a verified terminal marker; retaining lock" >&2
 fi
 if [ "$driver_terminal_rc_fail" -ne 0 ]; then
-  echo "ERROR: one or more board drivers recorded a non-zero terminal RC; retaining lock and failing gate" >&2
+  echo "ERROR: one or more board drivers recorded a non-zero terminal RC; failing gate" >&2
 fi
-if [ "$archive_fail" -ne 0 ] || [ "$driver_completion_fail" -ne 0 ] || [ "$driver_terminal_rc_fail" -ne 0 ]; then
+if [ "$archive_fail" -ne 0 ] || [ "$driver_completion_fail" -ne 0 ]; then
   exit 1
 fi
-# Release requires a verified successful terminal (RC=0) as well as the
-# matching archive.  Any driver-reported test/assertion failure leaves the
-# activity lock for explicit recovery instead of turning lost HDC stdout into
-# a false successful gate.
+# A canonical non-zero terminal is a failed test gate, but it also proves the
+# synchronous driver has exited. Once its exact archive/verdict set is back,
+# releasing the activity lock is safe; only missing completion/provenance
+# retains the lock for manual recovery.
 SAFE_TO_RELEASE=1
+[ "$driver_terminal_rc_fail" -eq 0 ] || exit 1
 [ "$total_fail" -eq 0 ]

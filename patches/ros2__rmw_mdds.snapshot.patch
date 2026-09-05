@@ -1,0 +1,1828 @@
+diff --git a/mdds_gateway/CMakeLists.txt b/mdds_gateway/CMakeLists.txt
+index f84fe39f222427455399cc413f97deaac4817c4c..a271dd8016731c87baa30c38a37a0293615b0527 100644
+--- a/mdds_gateway/CMakeLists.txt
++++ b/mdds_gateway/CMakeLists.txt
+@@ -81,6 +81,33 @@ if(BUILD_TESTING)
+   if(TARGET test_spin_thread_guard)
+     target_include_directories(test_spin_thread_guard PRIVATE src)
+   endif()
++  find_package(std_msgs REQUIRED)
++  ament_add_gtest(test_deferred_callback_group test/test_deferred_callback_group.cpp)
++  if(TARGET test_deferred_callback_group)
++    target_include_directories(test_deferred_callback_group PRIVATE src)
++    target_link_libraries(test_deferred_callback_group
++      rclcpp::rclcpp
++      ${std_msgs_TARGETS}
++    )
++  endif()
++  ament_add_gtest(test_bridge_construction_transaction
++    test/test_bridge_construction_transaction.cpp
++    src/ack_fence.cpp
++    src/bridge.cpp
++    src/dedup.cpp
++  )
++  if(TARGET test_bridge_construction_transaction)
++    target_include_directories(test_bridge_construction_transaction PRIVATE src)
++    target_link_libraries(test_bridge_construction_transaction
++      mdds::mdds
++      rcl::rcl
++      rclcpp::rclcpp
++      rcutils::rcutils
++      rmw::rmw
++      rmw_cyclonedds_cpp::rmw_cyclonedds_cpp
++      ${std_msgs_TARGETS}
++    )
++  endif()
+ endif()
+ 
+ install(
+diff --git a/mdds_gateway/docs/design.md b/mdds_gateway/docs/design.md
+index 32eb277d84b3037190efd4f1570833d273a1d242..09d1dc50e100c5bcc53385d9d6398dfcf46f581c 100644
+--- a/mdds_gateway/docs/design.md
++++ b/mdds_gateway/docs/design.md
+@@ -115,12 +115,20 @@ mdds 域（DSoftBus/UDP loopback）            CycloneDDS 域（UDP/LAN）
+   `c2m_cyclone_message_lost=0`；GW runner 还须核验 RMW 与 gateway 都记录了
+   ResourceLimits 已应用，不能用 `c2m_dropped` 代替。
+ 
+-回调并发安全（两阶段激活 + 共享回调状态）：executor 在桥构造期间已经
+-spin，subscription/alive timer 回调只捕获 `CallbackState` 的
+-`weak_ptr`（writer/reader 句柄、dedup、统计计数、`active` 门闩都在状态里），
+-进入时先 `lock`，再被 `active` 门闩挡住直到构造最后一步才放行；构造中途
+-抛异常时状态随成员析构自动回收 mdds 端点（自定义 deleter 的
+-unique_ptr），回调 `lock` 失败即返回，不存在悬空的 `this` 解引用。
++回调并发安全（延迟 callback group + 共同构造闩锁）：executor 在桥构造期间已经
++spin，但 subscription/alive timer 都放入
++`automatically_add_to_executor_with_node=false` 的专属 callback group，且 group 的
++`can_be_taken_from` 在注册期间保持 false。DDS discovery 与 RELIABLE reader
++history 可以接收预在线 publisher 的 sample，executor 却不能 take；两个 worker
++也共同等待 `PENDING -> COMMITTED/CANCELLED` 构造闩锁。`add_callback_group()`
++完整返回后，group 在闩锁仍为 `PENDING` 时开放并执行最后一次可失败 wake；此时
++即使 executor 选中 callback，它也只会等待闩锁，不会消费或转发数据。wake 成功
++后才发布 `COMMITTED`，且之后没有可失败的构造操作。因此构造窗口不会产生
++terminal pre-activation drop，排队 sample 会在提交后正常处理。若 executor 已把
++group 登记进 collector、随后任一次唤醒抛异常，失败路径先发布 `CANCELLED`，再
++移除 group、关闭队列并 join worker；两向都不能 take/write/publish。回调仍只
++捕获 `CallbackState` 的 `weak_ptr`；构造中途抛异常时状态随成员析构自动回收
++mdds 端点（自定义 deleter 的 unique_ptr）。
+ main 侧 spin 线程由 RAII guard（`SpinThreadGuard`）兜底：executor 以
+ 100 ms 有界 `spin_once` 轮询运行，guard 先置 stop 位再尝试 `cancel()`
+ 快速唤醒、最后 join。即使 rclcpp 的 guard-condition 唤醒失败而
+diff --git a/mdds_gateway/package.xml b/mdds_gateway/package.xml
+index 2bc4db7bec8a00f724a08e18126be059453c7ff3..969e7cb97d4c7552e43981dfb2dbdeeba32d9606 100644
+--- a/mdds_gateway/package.xml
++++ b/mdds_gateway/package.xml
+@@ -21,6 +21,7 @@
+   <depend>rmw_cyclonedds_cpp</depend>
+ 
+   <test_depend>ament_cmake_gtest</test_depend>
++  <test_depend>std_msgs</test_depend>
+ 
+   <export>
+     <build_type>ament_cmake</build_type>
+diff --git a/mdds_gateway/src/bridge.cpp b/mdds_gateway/src/bridge.cpp
+index b6df3d835bf3635dc2fb390473e9dac956bd8444..d64676410fca5717f6bc142e60065d66a93b52ae 100644
+--- a/mdds_gateway/src/bridge.cpp
++++ b/mdds_gateway/src/bridge.cpp
+@@ -152,18 +152,19 @@ c2m_history_usage(const mdds::WriterHistoryStatus & status) noexcept
+ TopicBridge::TopicBridge(
+   const std::string & topic, const std::string & type,
+   rclcpp::Node::SharedPtr cyclone_node,
++  rclcpp::Executor & cyclone_executor,
+   mdds::Participant * mdds_participant,
+   std::shared_ptr<DedupCache> dedup)
+-: topic_(topic), type_(type), mdds_participant_(mdds_participant)
++: topic_(topic), type_(type), mdds_participant_(mdds_participant),
++  cyclone_callbacks_(cyclone_node), construction_latch_(std::make_shared<ConstructionLatch>())
+ {
+-  // Shared callback state FIRST, with the activation gate closed: the node's
+-  // executor is already spinning while this constructor runs, so the cyclone
+-  // subscription created below can fire immediately (pre-online publisher).
+-  // Its callback only ever holds a weak_ptr to this state — it no-ops until
+-  // active flips true at the end of the constructor, and can never
+-  // dereference a half-built bridge.
++  // Shared callback state FIRST, with the activation gate closed. The Cyclone
++  // callbacks below belong to a detached callback group, so an already-online
++  // publisher can fill its reliable reader history but cannot execute a
++  // callback against this half-built bridge.
+   state_ = std::make_shared<CallbackState>(
+-    topic, type, mdds_participant_, std::move(dedup), kGatewayC2mHistoryLimits);
++    topic, type, mdds_participant_, std::move(dedup), kGatewayC2mHistoryLimits,
++    construction_latch_);
+ 
+   // mdds side: no typesupport needed for a raw-bytes passthrough. The state
+   // owns the endpoints from the moment they exist: when any later step
+@@ -189,6 +190,7 @@ TopicBridge::TopicBridge(
+   cyclone_pub_ = cyclone_node->create_generic_publisher(topic_, type_, cyclone_pub_qos());
+   rclcpp::SubscriptionOptions sub_options;
+   sub_options.ignore_local_publications = true;  // do not hear our own republications
++  sub_options.callback_group = cyclone_callbacks_.group();
+   const std::weak_ptr<CallbackState> weak_state = state_;
+   auto c2m_rmw_payload = std::make_shared<CycloneC2mResourceLimitsPayload>();
+   // The RMW subscription owns only an opaque pointer. CallbackState pins the
+@@ -199,7 +201,8 @@ TopicBridge::TopicBridge(
+   sub_options.event_callbacks.message_lost_callback = [weak_state](
+     rclcpp::QOSMessageLostInfo & info) {
+       const std::shared_ptr<CallbackState> state = weak_state.lock();
+-      if (state == nullptr || !state->active.load(std::memory_order_acquire)) {
++      if (state == nullptr || !state->construction->wait_for_commit() ||
++        !state->active.load(std::memory_order_acquire)) {
+         return;
+       }
+       state->c2m.run_callback([&] {
+@@ -214,15 +217,17 @@ TopicBridge::TopicBridge(
+     [weak_state](
+       std::shared_ptr<rclcpp::SerializedMessage> msg,
+       const rclcpp::MessageInfo & /*info*/) {
+-      // Runs on the executor thread, possibly before the bridge constructor
+-      // has finished or while/after the bridge is torn down: lock the weak
+-      // state and pass the activation gate before touching anything. A
+-      // callback already past the gate keeps the state (and the mdds
+-      // endpoints) alive through its locked shared_ptr until it returns.
++      // Runs only after the bridge registers its callback group. It may still
++      // overlap teardown, so lock the weak state and pass the activation gate
++      // before touching anything. A callback already past the gate keeps the
++      // state (and the mdds endpoints) alive until it returns.
+       const std::shared_ptr<CallbackState> state = weak_state.lock();
+       if (state == nullptr) {
+         return;  // bridge construction failed or it was torn down
+       }
++      if (!state->construction->wait_for_commit()) {
++        return;
++      }
+       state->c2m.run_callback([&] {
+         if (!state->active.load(std::memory_order_acquire)) {
+           ++state->n_c2m_dropped;
+@@ -328,7 +333,8 @@ TopicBridge::TopicBridge(
+     std::chrono::seconds(2),
+     [weak_state, weak_cyclone_pub, weak_cyclone_sub]() {
+       const std::shared_ptr<CallbackState> state = weak_state.lock();
+-      if (state == nullptr || !state->active.load(std::memory_order_acquire)) {
++      if (state == nullptr || !state->construction->wait_for_commit() ||
++        !state->active.load(std::memory_order_acquire)) {
+         return;
+       }
+       state->c2m.run_callback([&] {
+@@ -456,12 +462,14 @@ TopicBridge::TopicBridge(
+           // Terminal state remains observable to BridgeManager/final health.
+         }
+       }
+-    });
++    },
++    cyclone_callbacks_.group());
+ 
+   // The mdds-side callback and the forward thread capture `this`; that is
+   // safe because destroy_reader() (clears + drains the callback) and the
+   // thread join both happen before the members they touch go away, including
+-  // on a constructor throw (state_ destructs before cv_).
++  // on a constructor throw (threads, Cyclone entities, state_, then cv_ are
++  // destroyed in that order).
+   state_->reader->set_data_callback([this] {on_mdds_data();});
+   // No exception may escape a std::thread entry point: an allocation failure
+   // in take()/dedup, for example, must become the same terminal condition the
+@@ -523,6 +531,7 @@ TopicBridge::TopicBridge(
+       }
+     });
+   } catch (...) {
++    construction_latch_->cancel();
+     running_.store(false, std::memory_order_release);
+     state_->c2m_ingress.close();
+     cv_.notify_all();
+@@ -532,8 +541,50 @@ TopicBridge::TopicBridge(
+     throw;
+   }
+ 
+-  // Every field the callbacks use is valid: open the gate.
++  // Registration and activation are a two-phase transaction. The callback
++  // group stays untakeable and both workers wait on the same PENDING latch
++  // while add_callback_group() performs its fallible collector+wake sequence.
++  // prepare_commit() then makes the group selectable and performs the last
++  // fallible wake while callbacks still wait on the latch.
++  try {
++    cyclone_callbacks_.register_with(cyclone_executor);
++    cyclone_callbacks_.prepare_commit();
++  } catch (...) {
++    // Publish cancellation before removing the possibly registered group or
++    // closing queues. Thus no worker can take input and no callback can be
++    // selected during rollback.
++    construction_latch_->cancel();
++    state_->active.store(false, std::memory_order_release);
++    cyclone_callbacks_.deactivate();
++    running_.store(false, std::memory_order_release);
++    state_->c2m_ingress.close();
++    cv_.notify_all();
++    if (c2m_forward_thread_.joinable()) {
++      c2m_forward_thread_.join();
++    }
++    if (forward_thread_.joinable()) {
++      forward_thread_.join();
++    }
++    throw;
++  }
+   state_->active.store(true, std::memory_order_release);
++  if (!construction_latch_->commit()) {
++    // Defensive only: no other owner can cancel during construction.
++    construction_latch_->cancel();
++    state_->active.store(false, std::memory_order_release);
++    cyclone_callbacks_.deactivate();
++    running_.store(false, std::memory_order_release);
++    state_->c2m_ingress.close();
++    cv_.notify_all();
++    if (c2m_forward_thread_.joinable()) {
++      c2m_forward_thread_.join();
++    }
++    if (forward_thread_.joinable()) {
++      forward_thread_.join();
++    }
++    throw std::runtime_error("bridge construction latch was cancelled");
++  }
++  // No fallible construction operation follows COMMITTED.
+ }
+ 
+ TopicBridge::~TopicBridge()
+@@ -542,7 +593,9 @@ TopicBridge::~TopicBridge()
+   // no-op, and a callback already past the gate keeps the state (and with it
+   // the mdds endpoints) alive through its locked shared_ptr until it
+   // returns. No dangling `this`, no endpoint freed under an in-flight write.
++  construction_latch_->cancel();
+   state_->active.store(false, std::memory_order_release);
++  cyclone_callbacks_.deactivate();
+   running_.store(false, std::memory_order_release);
+   state_->c2m_ingress.close();
+   cv_.notify_all();
+@@ -643,6 +696,9 @@ void
+ TopicBridge::c2m_forward_loop()
+ {
+   const std::shared_ptr<CallbackState> state = state_;
++  if (!state->construction->wait_for_commit()) {
++    return;
++  }
+   while (running_.load(std::memory_order_acquire)) {
+     std::vector<uint8_t> payload;
+     const bool have_payload = state->c2m_ingress.pop_for(payload, std::chrono::milliseconds(200));
+@@ -836,6 +892,9 @@ TopicBridge::mdds_ingress_healthy()
+ void
+ TopicBridge::forward_loop()
+ {
++  if (!construction_latch_->wait_for_commit()) {
++    return;
++  }
+   uint64_t unacked = 0;
+   while (running_.load(std::memory_order_acquire)) {
+     {
+diff --git a/mdds_gateway/src/bridge.hpp b/mdds_gateway/src/bridge.hpp
+index 94bc153026370a991e7189fa12bbeef32d1f5390..fd8de3e50869356b76daa943c3a6a6e26005a88c 100644
+--- a/mdds_gateway/src/bridge.hpp
++++ b/mdds_gateway/src/bridge.hpp
+@@ -31,7 +31,9 @@
+ 
+ #include "c2m_fail_closed.hpp"
+ #include "c2m_ingress_queue.hpp"
++#include "construction_latch.hpp"
+ #include "dedup.hpp"
++#include "deferred_callback_group.hpp"
+ 
+ namespace mdds_gateway
+ {
+@@ -56,6 +58,7 @@ public:
+   TopicBridge(
+     const std::string & topic, const std::string & type,
+     rclcpp::Node::SharedPtr cyclone_node,
++    rclcpp::Executor & cyclone_executor,
+     mdds::Participant * mdds_participant,
+     std::shared_ptr<DedupCache> dedup);
+   ~TopicBridge();
+@@ -78,12 +81,11 @@ private:
+   bool mdds_ingress_healthy();
+ 
+   /// Everything the executor-side callbacks (cyclone subscription, alive
+-  /// timer) touch. The node's executor is already spinning while the bridge
+-  /// constructor runs, so those callbacks must never dereference the
+-  /// half-built bridge: they capture a weak_ptr to this state, lock it on
+-  /// entry (an expired state means construction failed or the bridge was
+-  /// torn down) and no-op until `active` opens as the last constructor
+-  /// statement. The state also OWNS the mdds endpoints through
++  /// timer) touch. Both entities are created in a DeferredCallbackGroup which
++  /// is registered with the already-running executor only after the bridge is
++  /// complete. They additionally capture a weak_ptr to this state so teardown
++  /// and constructor failure cannot expose a half-built bridge. The state also
++  /// OWNS the mdds endpoints through
+   /// custom-deleter unique_ptrs: when a later constructor step throws, the
+   /// bridge destructor never runs, but this fully constructed member does —
+   /// the endpoints are destroyed instead of leaking one pair per 500 ms
+@@ -106,10 +108,11 @@ private:
+     CallbackState(
+       const std::string & topic_in, const std::string & type_in,
+       mdds::Participant * participant_in, std::shared_ptr<DedupCache> dedup_in,
+-      C2mHistoryLimits c2m_history_limits)
++      C2mHistoryLimits c2m_history_limits,
++      std::shared_ptr<ConstructionLatch> construction_in)
+     : topic(topic_in), type(type_in), participant(participant_in),
+       dedup(std::move(dedup_in)), c2m(std::move(c2m_history_limits)),
+-      c2m_ingress(kGatewayC2mIngressLimits)
++      c2m_ingress(kGatewayC2mIngressLimits), construction(std::move(construction_in))
+     {}
+ 
+     const std::string topic;
+@@ -119,8 +122,8 @@ private:
+     /// matched counts into local vs remote from discovery snapshots.
+     mdds::Participant * participant;
+     std::shared_ptr<DedupCache> dedup;
+-    /// Two-phase activation gate: opened (release) only as the LAST
+-    /// constructor statement, once every field the callbacks use is valid.
++    /// Runtime gate. Construction is separately guarded by `construction`;
++    /// both must be open before an executor callback does work.
+     std::atomic<bool> active{false};
+     std::atomic<uint64_t> n_m2c{0};  // samples forwarded mdds -> cyclone
+     /// Completed bounded ACK fences and their terminal timeouts.  These make
+@@ -155,6 +158,9 @@ private:
+     /// construction. This prevents a downstream ACK-drain wait from allowing
+     /// CycloneDDS KEEP_LAST semantics to discard an older incoming sample.
+     C2mIngressQueue c2m_ingress;
++    /// Shared by executor callbacks and both forwarding workers. It survives
++    /// failed TopicBridge construction through this shared owner.
++    std::shared_ptr<ConstructionLatch> construction;
+     /// RMW stores the opaque pointer in its subscription options. Keep the
+     /// versioned Cyclone-only payload alive until the subscription itself has
+     /// been torn down, even though the RMW copies its scalar values at create.
+@@ -169,6 +175,27 @@ private:
+   const std::string type_;
+   mdds::Participant * mdds_participant_;
+ 
++  // Created with automatic executor association disabled.  This member is
++  // declared before its entities so explicit destructor teardown can detach
++  // the group before subscriptions/timers are released.
++  DeferredCallbackGroup cyclone_callbacks_;
++
++  // PENDING until callback-group registration returns successfully. A failed
++  // construction publishes CANCELLED before closing either worker.
++  std::shared_ptr<ConstructionLatch> construction_latch_;
++
++  std::atomic<bool> running_{true};
++  std::atomic<bool> terminal_forward_failure_{false};
++  std::mutex cv_mutex_;
++  std::condition_variable cv_;
++  // Declaration order is a constructor-failure contract. Reverse destruction
++  // tears down the worker threads first (all post-start throws join them), then
++  // the Cyclone timer/subscription/publisher while their opaque payload and
++  // weak callback state remain alive, then the MDDS endpoints owned by state_.
++  // destroy_reader() drains its callback while cv_ is still alive. The callback
++  // group is last and is detached/no-op by then.
++  std::shared_ptr<CallbackState> state_;
++
+   // cyclone side (owned via shared_ptr; the callbacks only hold a weak_ptr
+   // to the callback state, never `this`)
+   rclcpp::GenericPublisher::SharedPtr cyclone_pub_;
+@@ -180,15 +207,6 @@ private:
+   // post-mortem logs (GW-04 investigation).
+   rclcpp::TimerBase::SharedPtr alive_timer_;
+ 
+-  std::atomic<bool> running_{true};
+-  std::atomic<bool> terminal_forward_failure_{false};
+-  std::mutex cv_mutex_;
+-  std::condition_variable cv_;
+-  // Declared AFTER cv_: on a constructor throw the members destruct in
+-  // reverse order, so the state (owning the mdds reader, whose data callback
+-  // notifies cv_) is destroyed — and destroy_reader() drains that callback —
+-  // before cv_ goes away.
+-  std::shared_ptr<CallbackState> state_;
+   std::thread c2m_forward_thread_;
+   std::thread forward_thread_;
+ };
+diff --git a/mdds_gateway/src/construction_latch.hpp b/mdds_gateway/src/construction_latch.hpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..cb6b99217bae08d833f077ac6eafb20b16766274
+--- /dev/null
++++ b/mdds_gateway/src/construction_latch.hpp
+@@ -0,0 +1,88 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef CONSTRUCTION_LATCH_HPP_
++#define CONSTRUCTION_LATCH_HPP_
++
++#include <atomic>
++#include <condition_variable>
++#include <cstdint>
++#include <mutex>
++
++namespace mdds_gateway
++{
++
++/// One shared decision for every asynchronous path created by TopicBridge.
++/// No worker may consume input, and no executor callback may hand input off,
++/// until construction reaches COMMITTED. Any failed constructor publishes
++/// CANCELLED before waking and joining its workers.
++class ConstructionLatch
++{
++public:
++  enum class Phase : uint8_t
++  {
++    PENDING,
++    COMMITTED,
++    CANCELLED,
++  };
++
++  ConstructionLatch() = default;
++  ConstructionLatch(const ConstructionLatch &) = delete;
++  ConstructionLatch & operator=(const ConstructionLatch &) = delete;
++
++  bool commit() noexcept
++  {
++    bool committed = false;
++    {
++      std::lock_guard<std::mutex> lock(mutex_);
++      Phase expected = Phase::PENDING;
++      committed = phase_.compare_exchange_strong(
++        expected, Phase::COMMITTED, std::memory_order_release, std::memory_order_acquire);
++    }
++    cv_.notify_all();
++    return committed;
++  }
++
++  void cancel() noexcept
++  {
++    {
++      std::lock_guard<std::mutex> lock(mutex_);
++      phase_.store(Phase::CANCELLED, std::memory_order_release);
++    }
++    cv_.notify_all();
++  }
++
++  bool wait_for_commit() noexcept
++  {
++    std::unique_lock<std::mutex> lock(mutex_);
++    cv_.wait(lock, [this] {
++        return phase_.load(std::memory_order_acquire) != Phase::PENDING;
++      });
++    return phase_.load(std::memory_order_acquire) == Phase::COMMITTED;
++  }
++
++  bool is_committed() const noexcept
++  {
++    return phase_.load(std::memory_order_acquire) == Phase::COMMITTED;
++  }
++
++private:
++  std::atomic<Phase> phase_{Phase::PENDING};
++  std::mutex mutex_;
++  std::condition_variable cv_;
++};
++
++}  // namespace mdds_gateway
++
++#endif  // CONSTRUCTION_LATCH_HPP_
+diff --git a/mdds_gateway/src/deferred_callback_group.hpp b/mdds_gateway/src/deferred_callback_group.hpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..175d795ce48148edb0afb72553e30926bbf3eeef
+--- /dev/null
++++ b/mdds_gateway/src/deferred_callback_group.hpp
+@@ -0,0 +1,126 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef DEFERRED_CALLBACK_GROUP_HPP_
++#define DEFERRED_CALLBACK_GROUP_HPP_
++
++#include <atomic>
++#include <stdexcept>
++
++#include "rclcpp/executor.hpp"
++#include "rclcpp/node.hpp"
++
++namespace mdds_gateway
++{
++
++/// Keep callbacks invisible to an already-running executor until their owner
++/// has finished construction.  DDS discovery and reader history remain live
++/// while the group is detached, so a pre-online reliable publisher's samples
++/// are taken after commit instead of being dropped in a constructor race.
++/// rclcpp serializes collection updates while an executor spins; this wrapper
++/// may therefore add/remove the group from the gateway's manager thread. The
++/// wrapper itself is single-owner: register_with(), prepare_commit(),
++/// deactivate(), and destruction must not run concurrently, and the executor
++/// must outlive it.
++class DeferredCallbackGroup
++{
++public:
++  explicit DeferredCallbackGroup(const rclcpp::Node::SharedPtr & node)
++  : node_base_(node->get_node_base_interface()),
++    group_(node->create_callback_group(
++        rclcpp::CallbackGroupType::MutuallyExclusive,
++      /*automatically_add_to_executor_with_node=*/false))
++  {
++    if (node_base_ == nullptr || group_ == nullptr) {
++      throw std::runtime_error("failed to create deferred callback group");
++    }
++    // Registration is not activation. Executor records the group before its
++    // fallible wake, so keep it untakeable throughout that partial window.
++    group_->can_be_taken_from().store(false, std::memory_order_release);
++  }
++
++  ~DeferredCallbackGroup()
++  {
++    deactivate();
++  }
++
++  DeferredCallbackGroup(const DeferredCallbackGroup &) = delete;
++  DeferredCallbackGroup & operator=(const DeferredCallbackGroup &) = delete;
++
++  rclcpp::CallbackGroup::SharedPtr group() const noexcept
++  {
++    return group_;
++  }
++
++  void register_with(rclcpp::Executor & executor)
++  {
++    if (executor_ != nullptr) {
++      throw std::logic_error("deferred callback group is already active");
++    }
++    executor_ = &executor;
++    // Leave executor_ set when this throws: add_callback_group() may already
++    // have recorded the group. The owner publishes CANCELLED before removal.
++    executor.add_callback_group(group_, node_base_);
++  }
++
++  /// Make a registered group selectable and request one final collection
++  /// rebuild while the owner's construction latch is still PENDING. A
++  /// callback selected in this window waits on that latch; a wake failure is
++  /// therefore still a construction failure which can be rolled back without
++  /// consuming or forwarding input.
++  void prepare_commit()
++  {
++    if (executor_ == nullptr) {
++      throw std::logic_error("deferred callback group is not registered");
++    }
++    group_->can_be_taken_from().store(true, std::memory_order_release);
++    try {
++      group_->trigger_notify_guard_condition();
++    } catch (...) {
++      group_->can_be_taken_from().store(false, std::memory_order_release);
++      throw;
++    }
++  }
++
++  /// Best-effort no-throw teardown. Executor stores only a weak group pointer,
++  /// so even an unexpected removal error cannot leave a dangling callback
++  /// group after this object is destroyed.
++  void deactivate() noexcept
++  {
++    group_->can_be_taken_from().store(false, std::memory_order_release);
++    rclcpp::Executor * executor = executor_;
++    if (executor == nullptr) {
++      return;
++    }
++    executor_ = nullptr;
++    try {
++      executor->remove_callback_group(group_);
++    } catch (...) {
++      // Destructors and constructor-failure cleanup must remain no-throw.
++    }
++  }
++
++private:
++  rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_base_;
++  rclcpp::CallbackGroup::SharedPtr group_;
++  // Non-owning by design: the gateway owns the executor outside every
++  // TopicBridge and its documented teardown order destroys all bridges first.
++  // Callers of this helper must preserve the same executor-outlives-group
++  // contract (the deterministic unit test does so explicitly).
++  rclcpp::Executor * executor_ = nullptr;
++};
++
++}  // namespace mdds_gateway
++
++#endif  // DEFERRED_CALLBACK_GROUP_HPP_
+diff --git a/mdds_gateway/src/main.cpp b/mdds_gateway/src/main.cpp
+index 27d33367920309c82f235cf98e72304c1e0faff6..7ed27f69b36f1fd8c4b85eb5c59030eedc4d3a99 100644
+--- a/mdds_gateway/src/main.cpp
++++ b/mdds_gateway/src/main.cpp
+@@ -135,10 +135,12 @@ class BridgeManager
+ public:
+   BridgeManager(
+     rclcpp::Node::SharedPtr cyclone_node,
++    rclcpp::Executor & cyclone_executor,
+     mdds::Participant * mdds_participant,
+     std::shared_ptr<mdds_gateway::DedupCache> dedup,
+     std::vector<std::string> topics)
+   : node_(std::move(cyclone_node)),
++    executor_(cyclone_executor),
+     participant_(mdds_participant),
+     dedup_(std::move(dedup)),
+     topics_(std::move(topics))
+@@ -166,7 +168,7 @@ public:
+       }
+       try {
+         auto bridge = std::make_unique<mdds_gateway::TopicBridge>(
+-          topic, type, node_, participant_, dedup_);
++          topic, type, node_, executor_, participant_, dedup_);
+         bridges_.emplace(topic, std::move(bridge));
+         RCLCPP_INFO(logger(), "bridging %s [%s]", topic.c_str(), type.c_str());
+       } catch (const std::exception & e) {
+@@ -244,6 +246,7 @@ private:
+   }
+ 
+   rclcpp::Node::SharedPtr node_;
++  rclcpp::Executor & executor_;
+   mdds::Participant * participant_;
+   std::shared_ptr<mdds_gateway::DedupCache> dedup_;
+   std::vector<std::string> topics_;
+@@ -447,7 +450,7 @@ main(int argc, char ** argv)
+   // unwinds), while the node, participant and executor are all still alive.
+   int exit_code = 0;
+   {
+-    BridgeManager manager(node, participant.get(), dedup, config.topics);
++    BridgeManager manager(node, executor, participant.get(), dedup, config.topics);
+ 
+     RCLCPP_INFO(
+       logger(),
+diff --git a/mdds_gateway/test/test_bridge_construction_transaction.cpp b/mdds_gateway/test/test_bridge_construction_transaction.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..755421978221f6f42cc4405819083f521c4c13e2
+--- /dev/null
++++ b/mdds_gateway/test/test_bridge_construction_transaction.cpp
+@@ -0,0 +1,353 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#include <atomic>
++#include <chrono>
++#include <functional>
++#include <memory>
++#include <mutex>
++#include <stdexcept>
++#include <string>
++#include <thread>
++#include <utility>
++#include <vector>
++
++#include "gtest/gtest.h"
++
++#include "rclcpp/rclcpp.hpp"
++#include "std_msgs/msg/string.hpp"
++
++#include "bridge.hpp"
++#include "spin_thread_guard.hpp"
++
++namespace
++{
++
++using namespace std::chrono_literals;
++
++template<typename Predicate>
++bool wait_until(Predicate predicate, std::chrono::milliseconds timeout = 10s)
++{
++  const auto deadline = std::chrono::steady_clock::now() + timeout;
++  while (!predicate()) {
++    if (std::chrono::steady_clock::now() >= deadline) {
++      return false;
++    }
++    std::this_thread::sleep_for(10ms);
++  }
++  return true;
++}
++
++struct FakeStats
++{
++  std::atomic<size_t> writer_creates{0};
++  std::atomic<size_t> reader_creates{0};
++  std::atomic<size_t> writer_destroys{0};
++  std::atomic<size_t> reader_destroys{0};
++  std::atomic<size_t> mdds_writes{0};
++  std::atomic<size_t> mdds_takes{0};
++};
++
++class FakeWriter final : public mdds::Writer
++{
++public:
++  FakeWriter(
++    std::shared_ptr<FakeStats> stats, std::string topic, std::string type,
++    const mdds::QosProfile & qos)
++  : stats_(std::move(stats)), topic_(std::move(topic)), type_(std::move(type)), qos_(qos)
++  {}
++
++  mdds::Guid guid() const override {return {};}
++  const std::string & topic() const override {return topic_;}
++  const std::string & type_name() const override {return type_;}
++  const mdds::QosProfile & qos() const override {return qos_;}
++  bool write(const uint8_t *, size_t) override
++  {
++    stats_->mdds_writes.fetch_add(1, std::memory_order_relaxed);
++    return true;
++  }
++  size_t matched_count() const override {return 1;}
++  void assert_liveliness() override {}
++  mdds::WriterHistoryStatus history_status() const override {return {};}
++
++private:
++  std::shared_ptr<FakeStats> stats_;
++  std::string topic_;
++  std::string type_;
++  mdds::QosProfile qos_;
++};
++
++class FakeReader final : public mdds::Reader
++{
++public:
++  FakeReader(
++    std::shared_ptr<FakeStats> stats, std::string topic, std::string type,
++    const mdds::QosProfile & qos, std::vector<uint8_t> payload)
++  : stats_(std::move(stats)), topic_(std::move(topic)), type_(std::move(type)), qos_(qos),
++    payload_(std::move(payload))
++  {}
++
++  mdds::Guid guid() const override {return {};}
++  const std::string & topic() const override {return topic_;}
++  const std::string & type_name() const override {return type_;}
++  const mdds::QosProfile & qos() const override {return qos_;}
++  bool take(std::vector<uint8_t> & out, mdds::MessageInfo & info) override
++  {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (taken_) {
++      return false;
++    }
++    taken_ = true;
++    out = payload_;
++    info = {};
++    stats_->mdds_takes.fetch_add(1, std::memory_order_relaxed);
++    return true;
++  }
++  size_t available() const override
++  {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return taken_ ? 0 : 1;
++  }
++  size_t matched_count() const override {return 1;}
++  size_t compatible_matched_count() const override {return 1;}
++  uint64_t messages_lost() const override {return 0;}
++  uint64_t resource_limit_drops() const override {return 0;}
++  void set_data_callback(std::function<void()> cb) override
++  {
++    callback_ = std::move(cb);
++    if (callback_) {
++      callback_();
++    }
++  }
++  void set_sample_filter(std::function<bool(const uint8_t *, size_t)>) override {}
++
++private:
++  std::shared_ptr<FakeStats> stats_;
++  std::string topic_;
++  std::string type_;
++  mdds::QosProfile qos_;
++  std::vector<uint8_t> payload_;
++  mutable std::mutex mutex_;
++  bool taken_ = false;
++  std::function<void()> callback_;
++};
++
++class FakeParticipant final : public mdds::Participant
++{
++public:
++  FakeParticipant(std::shared_ptr<FakeStats> stats, std::vector<uint8_t> m2c_payload)
++  : stats_(std::move(stats)), m2c_payload_(std::move(m2c_payload))
++  {}
++
++  mdds::Guid guid() const override {return {};}
++  mdds::Writer * create_writer(
++    const std::string & topic, const std::string & type,
++    const mdds::QosProfile & qos) override
++  {
++    stats_->writer_creates.fetch_add(1, std::memory_order_relaxed);
++    return new FakeWriter(stats_, topic, type, qos);
++  }
++  mdds::Reader * create_reader(
++    const std::string & topic, const std::string & type,
++    const mdds::QosProfile & qos, bool) override
++  {
++    stats_->reader_creates.fetch_add(1, std::memory_order_relaxed);
++    return new FakeReader(stats_, topic, type, qos, m2c_payload_);
++  }
++  void destroy_writer(mdds::Writer * writer) override
++  {
++    stats_->writer_destroys.fetch_add(1, std::memory_order_relaxed);
++    delete writer;
++  }
++  void destroy_reader(mdds::Reader * reader) override
++  {
++    stats_->reader_destroys.fetch_add(1, std::memory_order_relaxed);
++    delete reader;
++  }
++  void add_node(const std::string &, const std::string &) override {}
++  void remove_node(const std::string &, const std::string &) override {}
++  std::vector<mdds::ParticipantSnapshot> remote_participants() const override {return {};}
++  GraphCounts graph_counts() const override {return {};}
++  std::vector<mdds::TransportStatus> transport_status() const override {return {};}
++  bool remote_writer_last_seen_ms(const mdds::Guid &, uint64_t &) const override {return false;}
++  bool remote_participant_last_seen_ms(const mdds::Guid &, uint64_t &) const override
++  {
++    return false;
++  }
++  void set_graph_callback(std::function<void()>) override {}
++  void clear_graph_callback_async() noexcept override {}
++  void wait_graph_callback_idle() noexcept override {}
++  bool graph_callback_active_on_this_thread() const noexcept override {return false;}
++  void announce_now() override {}
++
++private:
++  std::shared_ptr<FakeStats> stats_;
++  std::vector<uint8_t> m2c_payload_;
++};
++
++class ThrowAfterRegistrationExecutor final : public rclcpp::executors::SingleThreadedExecutor
++{
++public:
++  using SingleThreadedExecutor::SingleThreadedExecutor;
++
++  std::function<void(size_t)> after_registration;
++  std::atomic<size_t> registration_attempts{0};
++  std::atomic<bool> registration_was_untakeable{true};
++
++  void add_callback_group(
++    rclcpp::CallbackGroup::SharedPtr group,
++    rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node,
++    bool notify = true) override
++  {
++    SingleThreadedExecutor::add_callback_group(group, node, notify);
++    if (group->can_be_taken_from().load(std::memory_order_acquire)) {
++      registration_was_untakeable.store(false, std::memory_order_release);
++    }
++    const size_t attempt = registration_attempts.fetch_add(1) + 1;
++    if (after_registration) {
++      after_registration(attempt);
++    }
++    if (attempt == 1) {
++      throw std::runtime_error("injected wake failure after collector registration");
++    }
++  }
++};
++
++std::vector<uint8_t> serialize_string(const std::string & value)
++{
++  std_msgs::msg::String message;
++  message.data = value;
++  rclcpp::SerializedMessage serialized;
++  rclcpp::Serialization<std_msgs::msg::String> serializer;
++  serializer.serialize_message(&message, &serialized);
++  const auto & raw = serialized.get_rcl_serialized_message();
++  return std::vector<uint8_t>(raw.buffer, raw.buffer + raw.buffer_length);
++}
++
++TEST(TopicBridgeConstruction, partial_executor_registration_is_cancelled_without_external_io)
++{
++  auto context = std::make_shared<rclcpp::Context>();
++  auto peer_context = std::make_shared<rclcpp::Context>();
++  context->init(0, nullptr);
++  peer_context->init(0, nullptr);
++  rclcpp::NodeOptions options;
++  options.context(context);
++  auto gateway_node = std::make_shared<rclcpp::Node>("transaction_gateway", options);
++  rclcpp::NodeOptions peer_options;
++  peer_options.context(peer_context);
++  auto peer_node = std::make_shared<rclcpp::Node>("transaction_peer", peer_options);
++
++  rclcpp::ExecutorOptions executor_options;
++  executor_options.context = context;
++  ThrowAfterRegistrationExecutor executor(executor_options);
++  executor.add_node(gateway_node);
++  rclcpp::ExecutorOptions peer_executor_options;
++  peer_executor_options.context = peer_context;
++  rclcpp::executors::SingleThreadedExecutor peer_executor(peer_executor_options);
++  peer_executor.add_node(peer_node);
++
++  std::atomic<bool> spin_stop{false};
++  std::thread spin_thread([&]() {
++      while (!spin_stop.load(std::memory_order_acquire)) {
++        executor.spin_once(20ms);
++      }
++    });
++  auto cancel_executor = [&executor]() {executor.cancel();};
++  mdds_gateway::SpinThreadGuard<decltype(cancel_executor)> spin_guard(
++    spin_stop, spin_thread, std::move(cancel_executor));
++  std::atomic<bool> peer_spin_stop{false};
++  std::thread peer_spin_thread([&]() {
++      while (!peer_spin_stop.load(std::memory_order_acquire)) {
++        peer_executor.spin_once(20ms);
++      }
++    });
++  auto cancel_peer_executor = [&peer_executor]() {peer_executor.cancel();};
++  mdds_gateway::SpinThreadGuard<decltype(cancel_peer_executor)> peer_spin_guard(
++    peer_spin_stop, peer_spin_thread, std::move(cancel_peer_executor));
++
++  const std::string topic = "/mdds_gateway_construction_transaction";
++  const std::string type = "std_msgs/msg/String";
++  auto cyclone_writer = peer_node->create_publisher<std_msgs::msg::String>(
++    topic, rclcpp::QoS(10).reliable());
++  std::atomic<size_t> cyclone_reads{0};
++  auto cyclone_reader = peer_node->create_generic_subscription(
++    topic, type, rclcpp::QoS(10).reliable(),
++    [&cyclone_reads](std::shared_ptr<rclcpp::SerializedMessage> serialized) {
++      // Count only the MDDS-origin payload. The peer's own Cyclone-origin
++      // sample uses this topic too and is intentionally ignored here.
++      std_msgs::msg::String message;
++      rclcpp::Serialization<std_msgs::msg::String> serializer;
++      serializer.deserialize_message(serialized.get(), &message);
++      if (message.data == "preloaded-mdds") {
++        cyclone_reads.fetch_add(1, std::memory_order_relaxed);
++      }
++    });
++
++  auto stats = std::make_shared<FakeStats>();
++  FakeParticipant participant(stats, serialize_string("preloaded-mdds"));
++  executor.after_registration = [&](size_t attempt) {
++      if (!wait_until([&]() {return cyclone_writer->get_subscription_count() >= 1;})) {
++        throw std::runtime_error("gateway Cyclone subscription did not match");
++      }
++      std_msgs::msg::String message;
++      message.data = attempt == 1 ? "preloaded-failed-attempt" : "preloaded-retry";
++      cyclone_writer->publish(message);
++      // Give the already-spinning executor a deterministic opportunity to
++      // select work from the partially registered group.
++      std::this_thread::sleep_for(150ms);
++    };
++
++  EXPECT_THROW(
++    mdds_gateway::TopicBridge(topic, type, gateway_node, executor, &participant, nullptr),
++    std::runtime_error);
++  EXPECT_EQ(1u, executor.registration_attempts.load());
++  EXPECT_TRUE(executor.registration_was_untakeable.load());
++  EXPECT_EQ(0u, stats->mdds_writes.load());
++  EXPECT_EQ(0u, stats->mdds_takes.load());
++  EXPECT_EQ(0u, cyclone_reads.load());
++  EXPECT_EQ(1u, stats->writer_destroys.load());
++  EXPECT_EQ(1u, stats->reader_destroys.load());
++  EXPECT_TRUE(executor.get_manually_added_callback_groups().empty());
++
++  // The manager's next tick performs exactly one retry. Both samples queued
++  // during this second registration are released only after COMMITTED.
++  {
++    mdds_gateway::TopicBridge retry(
++      topic, type, gateway_node, executor, &participant, nullptr);
++    ASSERT_TRUE(wait_until([&]() {return stats->mdds_writes.load() == 1;}));
++    ASSERT_TRUE(wait_until([&]() {return cyclone_reads.load() == 1;}));
++  }
++  EXPECT_EQ(2u, executor.registration_attempts.load());
++  EXPECT_EQ(1u, stats->mdds_writes.load());
++  EXPECT_EQ(1u, stats->mdds_takes.load());
++  EXPECT_EQ(1u, cyclone_reads.load());
++  EXPECT_EQ(2u, stats->writer_creates.load());
++  EXPECT_EQ(2u, stats->reader_creates.load());
++  EXPECT_EQ(2u, stats->writer_destroys.load());
++  EXPECT_EQ(2u, stats->reader_destroys.load());
++  EXPECT_TRUE(executor.get_manually_added_callback_groups().empty());
++
++  EXPECT_TRUE(spin_guard.stop_and_join());
++  EXPECT_TRUE(peer_spin_guard.stop_and_join());
++  cyclone_reader.reset();
++  cyclone_writer.reset();
++  peer_executor.remove_node(peer_node);
++  executor.remove_node(gateway_node);
++  peer_node.reset();
++  gateway_node.reset();
++  EXPECT_TRUE(context->shutdown("construction transaction test complete"));
++  EXPECT_TRUE(peer_context->shutdown("construction transaction peer test complete"));
++}
++
++}  // namespace
+diff --git a/mdds_gateway/test/test_deferred_callback_group.cpp b/mdds_gateway/test/test_deferred_callback_group.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..550a162cd41b1d7504c0ebe055d33b577d9d1c36
+--- /dev/null
++++ b/mdds_gateway/test/test_deferred_callback_group.cpp
+@@ -0,0 +1,126 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#include <atomic>
++#include <chrono>
++#include <memory>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <utility>
++
++#include "gtest/gtest.h"
++
++#include "rclcpp/rclcpp.hpp"
++#include "std_msgs/msg/string.hpp"
++
++#include "deferred_callback_group.hpp"
++#include "spin_thread_guard.hpp"
++
++namespace
++{
++
++using namespace std::chrono_literals;
++
++template<typename Predicate>
++bool wait_until(Predicate predicate, std::chrono::milliseconds timeout = 10s)
++{
++  const auto deadline = std::chrono::steady_clock::now() + timeout;
++  while (!predicate()) {
++    if (std::chrono::steady_clock::now() >= deadline) {
++      return false;
++    }
++    std::this_thread::sleep_for(10ms);
++  }
++  return true;
++}
++
++TEST(DeferredCallbackGroup, publisher_first_sample_waits_for_explicit_activation)
++{
++  auto context = std::make_shared<rclcpp::Context>();
++  context->init(0, nullptr);
++  rclcpp::NodeOptions node_options;
++  node_options.context(context);
++  auto publisher_node = std::make_shared<rclcpp::Node>("deferred_group_pub", node_options);
++  auto subscriber_node = std::make_shared<rclcpp::Node>("deferred_group_sub", node_options);
++
++  rclcpp::ExecutorOptions executor_options;
++  executor_options.context = context;
++  rclcpp::executors::SingleThreadedExecutor executor(executor_options);
++  executor.add_node(publisher_node);
++  executor.add_node(subscriber_node);
++
++  std::atomic<bool> spin_stop{false};
++  std::thread spin_thread([&]() {
++      while (!spin_stop.load(std::memory_order_acquire)) {
++        executor.spin_once(20ms);
++      }
++    });
++  auto cancel_executor = [&executor]() {executor.cancel();};
++  mdds_gateway::SpinThreadGuard<decltype(cancel_executor)> spin_guard(
++    spin_stop, spin_thread, std::move(cancel_executor));
++
++  // The publisher exists first, matching the gateway race that originally
++  // let a subscription callback run while TopicBridge was still constructing.
++  const std::string topic = "/mdds_gateway_deferred_callback_group";
++  auto publisher = publisher_node->create_publisher<std_msgs::msg::String>(
++    topic, rclcpp::QoS(10).reliable());
++  mdds_gateway::DeferredCallbackGroup callbacks(subscriber_node);
++  rclcpp::SubscriptionOptions subscription_options;
++  subscription_options.callback_group = callbacks.group();
++  std::atomic<size_t> callback_count{0};
++  std::mutex value_mutex;
++  std::string received;
++  auto subscription = subscriber_node->create_subscription<std_msgs::msg::String>(
++    topic, rclcpp::QoS(10).reliable(),
++    [&](std_msgs::msg::String::ConstSharedPtr message) {
++      {
++        std::lock_guard<std::mutex> lock(value_mutex);
++        received = message->data;
++      }
++      callback_count.fetch_add(1, std::memory_order_release);
++    },
++    subscription_options);
++
++  ASSERT_TRUE(wait_until([&]() {return publisher->get_subscription_count() == 1;}));
++  std_msgs::msg::String message;
++  message.data = "published-before-callback-group-activation";
++  publisher->publish(message);
++
++  // Discovery/RHC are live, but no executor may take the queued sample while
++  // the bridge's callback group remains detached.
++  std::this_thread::sleep_for(250ms);
++  EXPECT_EQ(0u, callback_count.load(std::memory_order_acquire));
++
++  callbacks.register_with(executor);
++  callbacks.prepare_commit();
++  ASSERT_TRUE(wait_until([&]() {return callback_count.load(std::memory_order_acquire) == 1;}));
++  {
++    std::lock_guard<std::mutex> lock(value_mutex);
++    EXPECT_EQ(message.data, received);
++  }
++  EXPECT_EQ(1u, callback_count.load(std::memory_order_acquire));
++
++  callbacks.deactivate();
++  EXPECT_TRUE(spin_guard.stop_and_join());
++  subscription.reset();
++  publisher.reset();
++  executor.remove_node(subscriber_node);
++  executor.remove_node(publisher_node);
++  subscriber_node.reset();
++  publisher_node.reset();
++  EXPECT_TRUE(context->shutdown("deferred callback group test complete"));
++}
++
++}  // namespace
+diff --git a/rmw_mdds/CMakeLists.txt b/rmw_mdds/CMakeLists.txt
+index d7ef7b75a5a31cfdecab9fe6c603470c31e04f87..23850b188758d7a4b5255037b3ab8c973d459f70 100644
+--- a/rmw_mdds/CMakeLists.txt
++++ b/rmw_mdds/CMakeLists.txt
+@@ -123,6 +123,19 @@ if(BUILD_TESTING)
+     )
+   endif()
+ 
++  # RMW lifecycle and wait-array contract tests use the implementation's
++  # internal context/waitable state to make invalid-argument behavior exact.
++  ament_add_gtest(test_wait test/test_wait.cpp)
++  if(TARGET test_wait)
++    target_include_directories(test_wait PRIVATE src)
++    target_link_libraries(test_wait
++      mdds::mdds
++      rcutils::rcutils
++      rmw::rmw
++      ${PROJECT_NAME}
++    )
++  endif()
++
+   # Transport-profile parsing is deliberately pure and does not start a
+   # participant, so these tests prove fail-closed production selection on
+   # hosts where DSoftBus itself is unavailable as well as on OHOS.
+diff --git a/rmw_mdds/README.md b/rmw_mdds/README.md
+index 0c4de9e7413aedbb1a43e61ee9b1f17df295de14..a8045b973fe6280c40d2a75ca805d95f20ae22b5 100644
+--- a/rmw_mdds/README.md
++++ b/rmw_mdds/README.md
+@@ -19,9 +19,31 @@ Implemented:
+   RMW_EVENT_OFFERED_QOS_INCOMPATIBLE / RMW_EVENT_REQUESTED_QOS_INCOMPATIBLE,
+   RMW_EVENT_MESSAGE_LOST (polled; see `src/event.cpp`)
+ 
+-Still stubbed (return `RMW_RET_UNSUPPORTED`): loaned messages,
+-`*_set_on_new_*_callback`, content-filtered topics, dynamic typesupport,
+-network flow endpoints.
++Explicitly unsupported (returns `RMW_RET_UNSUPPORTED` unless noted):
++
++- publisher/subscription allocation objects and all loaned-message operations
++- `rmw_subscription_set_on_new_message_callback`,
++  `rmw_service_set_on_new_request_callback`, and
++  `rmw_client_set_on_new_response_callback`
++- content-filtered topics, dynamic data/typesupport, and dynamic serialization
++  support
++- publisher/subscription network-flow endpoint introspection
++- `rmw_get_serialized_message_size` and runtime log-severity control
++- `rmw_publisher_wait_for_all_acked` for RELIABLE publishers (BEST_EFFORT
++  correctly returns immediately); MDDS retransmits on NACK but this adapter
++  does not yet expose a complete per-reader acknowledgement fence
++- DDS Security enforcement and static peer lists at context initialization;
++  these fail closed rather than silently weakening the requested policy
++
++`rmw_feature_supported()` currently reports false for every optional RMW
++feature. Serialization accepts legacy PLAIN_CDR encapsulations only; XCDR2 and
++dynamic types are rejected. A ROS `long double` always occupies 16 wire bytes,
++matching Fast-CDR: native IEEE binary128 is preserved on RK3588A/OpenHarmony,
++and shorter host ABIs use Fast-CDR's binary128 conversion or its eight-zero-byte
++fallback. Both little- and big-endian encapsulations are decoded. Wait-set
++calls reject any null entry in all five input collections before polling or
++modifying the arrays, and guard-condition creation is rejected after
++`rmw_shutdown()`.
+ 
+ Build and test from the ROS 2 workspace root:
+ 
+diff --git a/rmw_mdds/src/serdes_internal.hpp b/rmw_mdds/src/serdes_internal.hpp
+index 25b428f20cea047d5048d5b3cf171211e6f909dd..eadea3b4b725537706fd1cc0f351ce5f33dc3e93 100644
+--- a/rmw_mdds/src/serdes_internal.hpp
++++ b/rmw_mdds/src/serdes_internal.hpp
+@@ -15,6 +15,8 @@
+ #ifndef SERDES_INTERNAL_HPP_
+ #define SERDES_INTERNAL_HPP_
+ 
++#include <algorithm>
++#include <array>
+ #include <cstdint>
+ #include <cstring>
+ #include <stdexcept>
+@@ -29,6 +31,15 @@
+ #include "rosidl_typesupport_introspection_c/message_introspection.h"
+ #include "rosidl_typesupport_introspection_cpp/message_introspection.hpp"
+ 
++// Fast-CDR converts a short host long double through __float128 when that
++// compiler type is available; otherwise its 8-byte ABI fallback stores eight
++// leading zero bytes followed by the native double representation.
++#if defined(__SIZEOF_FLOAT128__) && __SIZEOF_FLOAT128__ == 16
++#define RMW_MDDS_SERDES_HAVE_FLOAT128 1
++#else
++#define RMW_MDDS_SERDES_HAVE_FLOAT128 0
++#endif
++
+ // CDR (legacy/PLAIN_CDR) serialization on top of the introspection
+ // typesupports, following the same wire conventions as rmw_cyclonedds_cpp:
+ // 4-byte encapsulation header, field alignment relative to the end of the
+@@ -262,6 +273,33 @@ public:
+     put(&b, 1);
+   }
+ 
++  void put_long_double(long double value)
++  {
++    align(8);
++    std::array<uint8_t, 16> bytes{};
++#if RMW_MDDS_SERDES_HAVE_FLOAT128
++    if constexpr (sizeof(long double) < 16) {
++      const __float128 converted = static_cast<__float128>(value);
++      memcpy(bytes.data(), &converted, sizeof(converted));
++      put(bytes.data(), bytes.size());
++      return;
++    }
++#endif
++    if constexpr (sizeof(long double) == 16) {
++      // This is the RK3588A/OHOS path: clang uses little-endian IEEE binary128.
++      // Copying the complete object exactly matches Fast-CDR's native 16-byte
++      // path and keeps its current wire representation unchanged.
++      memcpy(bytes.data(), &value, bytes.size());
++    } else if constexpr (sizeof(long double) == 8) {
++      // Fast-CDR's no-__float128 ABI fallback writes an eight-byte zero prefix
++      // and places the native value in the second half for either endianness.
++      memcpy(bytes.data() + 8, &value, sizeof(value));
++    } else {
++      throw std::runtime_error("cdr: unsupported host long double ABI");
++    }
++    put(bytes.data(), bytes.size());
++  }
++
+   void put_string(const char * data, size_t size)
+   {
+     put_u32(static_cast<uint32_t>(size) + 1);
+@@ -355,6 +393,47 @@ public:
+     return get_pod<uint8_t>() != 0;
+   }
+ 
++  long double get_long_double()
++  {
++    align(8);
++    if (16 > lim_ - pos_) {
++      throw std::runtime_error("cdr: payload truncated");
++    }
++    std::array<uint8_t, 16> bytes{};
++    memcpy(bytes.data(), data_ + pos_, bytes.size());
++    pos_ += bytes.size();
++
++#if RMW_MDDS_SERDES_HAVE_FLOAT128
++    if constexpr (sizeof(long double) < 16) {
++      if (swap_bytes_) {
++        std::reverse(bytes.begin(), bytes.end());
++      }
++      __float128 converted{};
++      memcpy(&converted, bytes.data(), sizeof(converted));
++      return static_cast<long double>(converted);
++    }
++#endif
++    if constexpr (sizeof(long double) == 16) {
++      if (swap_bytes_) {
++        std::reverse(bytes.begin(), bytes.end());
++      }
++      long double value{};
++      memcpy(&value, bytes.data(), sizeof(value));
++      return value;
++    } else if constexpr (sizeof(long double) == 8) {
++      // The first eight bytes are Fast-CDR padding, not part of the binary64
++      // value, so source-endian conversion applies only to the second half.
++      if (swap_bytes_) {
++        std::reverse(bytes.begin() + 8, bytes.end());
++      }
++      long double value{};
++      memcpy(&value, bytes.data() + 8, sizeof(value));
++      return value;
++    } else {
++      throw std::runtime_error("cdr: unsupported host long double ABI");
++    }
++  }
++
+   /// Reject a wire element count that cannot fit in the remaining payload:
+   /// every counted item occupies at least elem_min_wire bytes. The division
+   /// form avoids a count * elem_min_wire overflow.
+@@ -523,13 +602,7 @@ write_single(
+       writer.put_pod(*static_cast<const double *>(field));
+       return;
+     case rosidl_typesupport_introspection_c__ROS_TYPE_LONG_DOUBLE:
+-      {
+-        // CDR long double is 16 bytes on the wire regardless of host size.
+-        std::vector<uint8_t> bytes(16, 0);
+-        memcpy(bytes.data(), field, sizeof(long double) < 16 ? sizeof(long double) : 16);
+-        writer.align(8);
+-        writer.put(bytes.data(), 16);
+-      }
++      writer.put_long_double(*static_cast<const long double *>(field));
+       return;
+     case rosidl_typesupport_introspection_c__ROS_TYPE_STRING:
+       if (is_cpp) {
+@@ -676,14 +749,7 @@ read_single(CdrReader & reader, uint8_t type_id, void * field, bool is_cpp,
+       *static_cast<double *>(field) = reader.get_pod<double>();
+       return;
+     case rosidl_typesupport_introspection_c__ROS_TYPE_LONG_DOUBLE:
+-      {
+-        std::vector<uint8_t> bytes(16, 0);
+-        reader.align(8);
+-        for (size_t i = 0; i < 16; ++i) {
+-          bytes[i] = reader.get_pod<uint8_t>();
+-        }
+-        memcpy(field, bytes.data(), sizeof(long double) < 16 ? sizeof(long double) : 16);
+-      }
++      *static_cast<long double *>(field) = reader.get_long_double();
+       return;
+     case rosidl_typesupport_introspection_c__ROS_TYPE_STRING:
+       {
+@@ -808,4 +874,6 @@ read_members(CdrReader & reader, const MembersType * members, void * data)
+ 
+ }  // namespace rmw_mdds
+ 
++#undef RMW_MDDS_SERDES_HAVE_FLOAT128
++
+ #endif  // SERDES_INTERNAL_HPP_
+diff --git a/rmw_mdds/src/wait.cpp b/rmw_mdds/src/wait.cpp
+index c02f7b1582a6effa17d68396b6a1b7450c8efbf0..b0e5a73292c8ad16e333a18e3fa694fc3a9f9351 100644
+--- a/rmw_mdds/src/wait.cpp
++++ b/rmw_mdds/src/wait.cpp
+@@ -24,6 +24,27 @@
+ 
+ #include "common.hpp"
+ 
++namespace
++{
++
++bool
++validate_wait_entries(const char * kind, void * const * entries, size_t count)
++{
++  if (count != 0 && entries == nullptr) {
++    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s array is null with nonzero count", kind);
++    return false;
++  }
++  for (size_t i = 0; i < count; ++i) {
++    if (entries[i] == nullptr) {
++      RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("%s array entry %zu is null", kind, i);
++      return false;
++    }
++  }
++  return true;
++}
++
++}  // namespace
++
+ extern "C" rmw_guard_condition_t *
+ rmw_create_guard_condition(rmw_context_t * context)
+ {
+@@ -35,6 +56,11 @@ rmw_create_guard_condition(rmw_context_t * context)
+     context->impl,
+     "expected initialized context",
+     return nullptr);
++  auto * context_impl = rmw_mdds::get_context_impl(context);
++  if (context_impl->is_shutdown) {
++    RMW_SET_ERROR_MSG("context has been shutdown");
++    return nullptr;
++  }
+ 
+   auto * impl = new (std::nothrow) rmw_mdds::MddsGuardCondition();
+   if (impl == nullptr) {
+@@ -139,6 +165,30 @@ rmw_wait(
+     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION);
+   auto * ws = static_cast<rmw_mdds::MddsWaitSet *>(wait_set->data);
+   RMW_CHECK_ARGUMENT_FOR_NULL(ws, RMW_RET_INVALID_ARGUMENT);
++
++  // The RMW contract makes every null condition entry invalid. Validate all
++  // five collections as one transaction before polling a guard condition
++  // (which clears it), acquiring the wait set, or nulling unready outputs.
++  // This also rejects a nonzero count paired with a null backing array.
++  if (!validate_wait_entries(
++      "subscription", subscriptions ? subscriptions->subscribers : nullptr,
++      subscriptions ? subscriptions->subscriber_count : 0) ||
++    !validate_wait_entries(
++      "guard condition", guard_conditions ? guard_conditions->guard_conditions : nullptr,
++      guard_conditions ? guard_conditions->guard_condition_count : 0) ||
++    !validate_wait_entries(
++      "service", services ? services->services : nullptr,
++      services ? services->service_count : 0) ||
++    !validate_wait_entries(
++      "client", clients ? clients->clients : nullptr,
++      clients ? clients->client_count : 0) ||
++    !validate_wait_entries(
++      "event", events ? events->events : nullptr,
++      events ? events->event_count : 0))
++  {
++    return RMW_RET_INVALID_ARGUMENT;
++  }
++
+   bool expected = false;
+   if (!ws->inuse.compare_exchange_strong(expected, true)) {
+     RMW_SET_ERROR_MSG("concurrent calls to rmw_wait on a single wait set are not supported");
+diff --git a/rmw_mdds/test/test_serdes.cpp b/rmw_mdds/test/test_serdes.cpp
+index e335326182186072e834d14abd8b0c0ec1d17c19..1b78606328c9d87e91091a34538a7a9ba9cdd073 100644
+--- a/rmw_mdds/test/test_serdes.cpp
++++ b/rmw_mdds/test/test_serdes.cpp
+@@ -12,6 +12,9 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include <algorithm>
++#include <array>
++#include <cfloat>
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstdlib>
+@@ -44,6 +47,8 @@ constexpr uint8_t kI32 = rosidl_typesupport_introspection_c__ROS_TYPE_INT32;
+ constexpr uint8_t kU32 = rosidl_typesupport_introspection_c__ROS_TYPE_UINT32;
+ constexpr uint8_t kU64 = rosidl_typesupport_introspection_c__ROS_TYPE_UINT64;
+ constexpr uint8_t kF64 = rosidl_typesupport_introspection_c__ROS_TYPE_DOUBLE;
++constexpr uint8_t kLongDouble =
++  rosidl_typesupport_introspection_c__ROS_TYPE_LONG_DOUBLE;
+ constexpr uint8_t kString = rosidl_typesupport_introspection_c__ROS_TYPE_STRING;
+ constexpr uint8_t kWString = rosidl_typesupport_introspection_c__ROS_TYPE_WSTRING;
+ constexpr uint8_t kMessage = rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE;
+@@ -186,6 +191,49 @@ const MessageMembers pair_members = members_of("Pair", pair_fields, 2, 16);
+ const rosidl_message_type_support_t pair_ts =
+   {nullptr, &pair_members, nullptr, nullptr, nullptr, nullptr};
+ 
++struct LongDoubleMsg
++{
++  long double value;
++};
++
++const MessageMember long_double_fields[] = {
++  scalar_member("value", kLongDouble, offsetof(LongDoubleMsg, value)),
++};
++const MessageMembers long_double_members =
++  members_of("LongDoubleMsg", long_double_fields, 1, sizeof(LongDoubleMsg));
++
++// Golden PLAIN_CDR representation of 1.0L using Fast-CDR's two supported
++// host paths: IEEE binary128 for the RK3588A 16-byte ABI (and compilers with
++// __float128), or its 8-byte fallback with a leading eight-byte zero prefix.
++std::vector<uint8_t> long_double_one_golden(bool little_endian)
++{
++  std::vector<uint8_t> out{0, static_cast<uint8_t>(little_endian ? 1 : 0), 0, 0};
++#if defined(__SIZEOF_FLOAT128__) && __SIZEOF_FLOAT128__ == 16
++  constexpr bool uses_binary128 =
++    sizeof(long double) < 16 || (sizeof(long double) == 16 && LDBL_MANT_DIG == 113);
++#else
++  constexpr bool uses_binary128 = sizeof(long double) == 16 && LDBL_MANT_DIG == 113;
++#endif
++  if constexpr (uses_binary128) {
++    const std::array<uint8_t, 16> big{
++      0x3f, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
++    if (little_endian) {
++      out.insert(out.end(), big.rbegin(), big.rend());
++    } else {
++      out.insert(out.end(), big.begin(), big.end());
++    }
++  } else if constexpr (sizeof(long double) == 8) {
++    out.insert(out.end(), 8, 0);
++    const std::array<uint8_t, 8> big{0x3f, 0xf0, 0, 0, 0, 0, 0, 0};
++    if (little_endian) {
++      out.insert(out.end(), big.rbegin(), big.rend());
++    } else {
++      out.insert(out.end(), big.begin(), big.end());
++    }
++  }
++  return out;
++}
++
+ // U64SeqMsg { sequence<uint64> values; } with a resize spy proving whether
+ // the length prefix drove an allocation.
+ struct U64SeqMsg
+@@ -209,7 +257,8 @@ MessageMember u64_seq_field()
+ }
+ 
+ const MessageMember u64_seq_fields[] = {u64_seq_field()};
+-const MessageMembers u64_seq_members = members_of("U64SeqMsg", u64_seq_fields, 1, sizeof(U64SeqMsg));
++const MessageMembers u64_seq_members =
++  members_of("U64SeqMsg", u64_seq_fields, 1, sizeof(U64SeqMsg));
+ 
+ // NestMsg { sequence<NestInner> items; }, NestInner { sequence<uint64> data; }.
+ struct NestInner
+@@ -521,6 +570,63 @@ const MessageMembers rt_members = members_of("Rt", rt_fields, 11, sizeof(Rt));
+ 
+ // ---- tests -----------------------------------------------------------------
+ 
++TEST(SerdesLongDouble, writes_fastcdr_native_endian_golden)
++{
++  const std::vector<uint8_t> expected = long_double_one_golden(
++    rmw_mdds::serdes_internal::host_is_little_endian());
++  if (expected.size() != 20) {
++    GTEST_SKIP() << "exact golden is defined for binary128 and Fast-CDR's 8-byte fallback";
++  }
++
++  const LongDoubleMsg message{1.0L};
++  std::vector<uint8_t> encoded;
++  CdrWriter writer(encoded);
++  write_members(writer, &long_double_members, &message);
++  EXPECT_EQ(expected, encoded);
++}
++
++TEST(SerdesLongDouble, reads_fastcdr_little_and_big_endian_goldens)
++{
++  for (const bool little_endian : {false, true}) {
++    const std::vector<uint8_t> encoded = long_double_one_golden(little_endian);
++    if (encoded.size() != 20) {
++      GTEST_SKIP() << "exact golden is defined for binary128 and Fast-CDR's 8-byte fallback";
++    }
++    LongDoubleMsg message{};
++    CdrReader reader(encoded.data(), encoded.size());
++    ASSERT_NO_THROW(read_members(reader, &long_double_members, &message));
++    EXPECT_EQ(1.0L, message.value) << "source little endian=" << little_endian;
++  }
++}
++
++TEST(SerdesLongDouble, source_endian_conversion_covers_the_complete_wire_value)
++{
++  const LongDoubleMsg original{3.5L};
++  std::vector<uint8_t> opposite_endian;
++  CdrWriter writer(opposite_endian);
++  write_members(writer, &long_double_members, &original);
++  ASSERT_EQ(20u, opposite_endian.size());
++  opposite_endian[1] = opposite_endian[1] == 1 ? 0 : 1;
++
++#if defined(__SIZEOF_FLOAT128__) && __SIZEOF_FLOAT128__ == 16
++  constexpr bool uses_full_width = sizeof(long double) < 16 || sizeof(long double) == 16;
++#else
++  constexpr bool uses_full_width = sizeof(long double) == 16;
++#endif
++  if constexpr (uses_full_width) {
++    std::reverse(opposite_endian.begin() + 4, opposite_endian.end());
++  } else {
++    // Fast-CDR's short-ABI padding remains the leading half on both endian
++    // wires; only its trailing binary64 value changes byte order.
++    std::reverse(opposite_endian.begin() + 12, opposite_endian.end());
++  }
++
++  LongDoubleMsg decoded{};
++  CdrReader reader(opposite_endian.data(), opposite_endian.size());
++  ASSERT_NO_THROW(read_members(reader, &long_double_members, &decoded));
++  EXPECT_EQ(original.value, decoded.value);
++}
++
+ TEST(SerdesEncapsulation, rejects_non_plain_cdr_and_short_payloads)
+ {
+   std::vector<uint8_t> bad_enc = {0, 2, 0, 0};  // PLAIN_CDR2: not implemented
+diff --git a/rmw_mdds/test/test_wait.cpp b/rmw_mdds/test/test_wait.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..6b4fe76925040c49639f610dfd04cfabfc52dff5
+--- /dev/null
++++ b/rmw_mdds/test/test_wait.cpp
+@@ -0,0 +1,238 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#include <array>
++#include <cstdint>
++
++#include "gtest/gtest.h"
++
++#include "rcutils/allocator.h"
++#include "rcutils/error_handling.h"
++#include "rcutils/strdup.h"
++
++#include "rmw/discovery_options.h"
++#include "rmw/init.h"
++#include "rmw/init_options.h"
++#include "rmw/rmw.h"
++
++#include "common.hpp"
++
++namespace
++{
++
++enum class WaitCollection
++{
++  SUBSCRIPTIONS,
++  GUARD_CONDITIONS,
++  SERVICES,
++  CLIENTS,
++  EVENTS,
++};
++
++class NullWaitEntryTest : public ::testing::TestWithParam<WaitCollection>
++{
++};
++
++TEST_P(NullWaitEntryTest, returns_invalid_argument_without_modifying_any_input)
++{
++  rmw_mdds::MddsWaitSet wait_impl;
++  rmw_wait_set_t wait_set{};
++  wait_set.implementation_identifier = rmw_mdds::identifier;
++  wait_set.data = &wait_impl;
++
++  uint8_t sentinel_storage = 0;
++  void * const sentinel = &sentinel_storage;
++  std::array<void *, 2> entries{sentinel, nullptr};
++  const std::array<void *, 2> original = entries;
++
++  rmw_subscriptions_t subscriptions{};
++  rmw_guard_conditions_t guard_conditions{};
++  rmw_services_t services{};
++  rmw_clients_t clients{};
++  rmw_events_t events{};
++  rmw_subscriptions_t * subscriptions_arg = nullptr;
++  rmw_guard_conditions_t * guard_conditions_arg = nullptr;
++  rmw_services_t * services_arg = nullptr;
++  rmw_clients_t * clients_arg = nullptr;
++  rmw_events_t * events_arg = nullptr;
++
++  switch (GetParam()) {
++    case WaitCollection::SUBSCRIPTIONS:
++      subscriptions = {entries.size(), entries.data()};
++      subscriptions_arg = &subscriptions;
++      break;
++    case WaitCollection::GUARD_CONDITIONS:
++      guard_conditions = {entries.size(), entries.data()};
++      guard_conditions_arg = &guard_conditions;
++      break;
++    case WaitCollection::SERVICES:
++      services = {entries.size(), entries.data()};
++      services_arg = &services;
++      break;
++    case WaitCollection::CLIENTS:
++      clients = {entries.size(), entries.data()};
++      clients_arg = &clients;
++      break;
++    case WaitCollection::EVENTS:
++      events = {entries.size(), entries.data()};
++      events_arg = &events;
++      break;
++  }
++
++  const rmw_time_t no_wait{0, 0};
++  EXPECT_EQ(
++    RMW_RET_INVALID_ARGUMENT,
++    rmw_wait(
++      subscriptions_arg, guard_conditions_arg, services_arg, clients_arg, events_arg,
++      &wait_set, &no_wait));
++  EXPECT_EQ(original, entries);
++  EXPECT_FALSE(wait_impl.inuse.load());
++  EXPECT_TRUE(rcutils_error_is_set());
++  rcutils_reset_error();
++}
++
++INSTANTIATE_TEST_SUITE_P(
++  EveryWaitCollection,
++  NullWaitEntryTest,
++  ::testing::Values(
++    WaitCollection::SUBSCRIPTIONS,
++    WaitCollection::GUARD_CONDITIONS,
++    WaitCollection::SERVICES,
++    WaitCollection::CLIENTS,
++    WaitCollection::EVENTS));
++
++class NullWaitBackingArrayTest : public ::testing::TestWithParam<WaitCollection>
++{
++};
++
++TEST_P(NullWaitBackingArrayTest, nonzero_count_with_null_array_is_rejected)
++{
++  rmw_mdds::MddsWaitSet wait_impl;
++  rmw_wait_set_t wait_set{};
++  wait_set.implementation_identifier = rmw_mdds::identifier;
++  wait_set.data = &wait_impl;
++
++  rmw_subscriptions_t subscriptions{};
++  rmw_guard_conditions_t guard_conditions{};
++  rmw_services_t services{};
++  rmw_clients_t clients{};
++  rmw_events_t events{};
++  rmw_subscriptions_t * subscriptions_arg = nullptr;
++  rmw_guard_conditions_t * guard_conditions_arg = nullptr;
++  rmw_services_t * services_arg = nullptr;
++  rmw_clients_t * clients_arg = nullptr;
++  rmw_events_t * events_arg = nullptr;
++
++  switch (GetParam()) {
++    case WaitCollection::SUBSCRIPTIONS:
++      subscriptions = {1, nullptr};
++      subscriptions_arg = &subscriptions;
++      break;
++    case WaitCollection::GUARD_CONDITIONS:
++      guard_conditions = {1, nullptr};
++      guard_conditions_arg = &guard_conditions;
++      break;
++    case WaitCollection::SERVICES:
++      services = {1, nullptr};
++      services_arg = &services;
++      break;
++    case WaitCollection::CLIENTS:
++      clients = {1, nullptr};
++      clients_arg = &clients;
++      break;
++    case WaitCollection::EVENTS:
++      events = {1, nullptr};
++      events_arg = &events;
++      break;
++  }
++
++  const rmw_time_t no_wait{0, 0};
++  EXPECT_EQ(
++    RMW_RET_INVALID_ARGUMENT,
++    rmw_wait(
++      subscriptions_arg, guard_conditions_arg, services_arg, clients_arg, events_arg,
++      &wait_set, &no_wait));
++  EXPECT_FALSE(wait_impl.inuse.load());
++  EXPECT_TRUE(rcutils_error_is_set());
++  rcutils_reset_error();
++}
++
++INSTANTIATE_TEST_SUITE_P(
++  EveryWaitCollection,
++  NullWaitBackingArrayTest,
++  ::testing::Values(
++    WaitCollection::SUBSCRIPTIONS,
++    WaitCollection::GUARD_CONDITIONS,
++    WaitCollection::SERVICES,
++    WaitCollection::CLIENTS,
++    WaitCollection::EVENTS));
++
++TEST(WaitValidation, later_invalid_collection_does_not_consume_triggered_guard)
++{
++  rmw_mdds::MddsWaitSet wait_impl;
++  rmw_wait_set_t wait_set{};
++  wait_set.implementation_identifier = rmw_mdds::identifier;
++  wait_set.data = &wait_impl;
++
++  rmw_mdds::MddsGuardCondition guard_impl;
++  guard_impl.trigger();
++  void * guard_entry = &guard_impl;
++  rmw_guard_conditions_t guard_conditions{1, &guard_entry};
++
++  std::array<void *, 2> service_entries{&wait_impl, nullptr};
++  const std::array<void *, 2> original_services = service_entries;
++  rmw_services_t invalid_services{service_entries.size(), service_entries.data()};
++  const rmw_time_t no_wait{0, 0};
++
++  EXPECT_EQ(
++    RMW_RET_INVALID_ARGUMENT,
++    rmw_wait(
++      nullptr, &guard_conditions, &invalid_services, nullptr, nullptr,
++      &wait_set, &no_wait));
++  EXPECT_EQ(original_services, service_entries);
++  EXPECT_EQ(&guard_impl, guard_entry);
++  EXPECT_TRUE(rcutils_error_is_set());
++  rcutils_reset_error();
++
++  // A second, otherwise-valid wait still observes the edge. Validation of a
++  // later collection therefore happened before any guard polling/consumption.
++  EXPECT_EQ(
++    RMW_RET_OK,
++    rmw_wait(nullptr, &guard_conditions, nullptr, nullptr, nullptr, &wait_set, &no_wait));
++  EXPECT_EQ(&guard_impl, guard_entry);
++  EXPECT_FALSE(guard_impl.check_and_clear());
++}
++
++TEST(GuardConditionLifecycle, creation_after_context_shutdown_is_rejected)
++{
++  rmw_init_options_t options = rmw_get_zero_initialized_init_options();
++  ASSERT_EQ(RMW_RET_OK, rmw_init_options_init(&options, rcutils_get_default_allocator()));
++  options.enclave = rcutils_strdup("/", options.allocator);
++  ASSERT_NE(nullptr, options.enclave);
++  options.discovery_options.automatic_discovery_range =
++    RMW_AUTOMATIC_DISCOVERY_RANGE_LOCALHOST;
++
++  rmw_context_t context = rmw_get_zero_initialized_context();
++  ASSERT_EQ(RMW_RET_OK, rmw_init(&options, &context));
++  ASSERT_EQ(RMW_RET_OK, rmw_shutdown(&context));
++
++  EXPECT_EQ(nullptr, rmw_create_guard_condition(&context));
++  EXPECT_TRUE(rcutils_error_is_set());
++  rcutils_reset_error();
++
++  EXPECT_EQ(RMW_RET_OK, rmw_context_fini(&context));
++  EXPECT_EQ(RMW_RET_OK, rmw_init_options_fini(&options));
++}
++
++}  // namespace

@@ -1,8 +1,8 @@
 From 50f848f4741eec31b510763d46f7ce35a469dea2 Mon Sep 17 00:00:00 2001
 From: Yusheng Peng <jiusi0519@gmail.com>
 Date: Thu, 27 Aug 2026 17:39:18 +0800
-Subject: [PATCH] Adapt colcon build for OpenHarmony (aarch64-linux-ohos) cross
- build
+Subject: [PATCH 1/2] Adapt colcon build for OpenHarmony (aarch64-linux-ohos)
+ cross build
 
 package.xml: drop the iceoryx_binding_c depend; CycloneDDS is built with
 ENABLE_ICEORYX=OFF for OHOS (no /dev/shm), and the declared dep breaks
@@ -28,6 +28,385 @@ index f96911a..821d3ca 100644
    <depend>rcutils</depend>
    <depend>rcpputils</depend>
    <depend>rmw</depend>
+-- 
+2.55.0.windows.5
+
+
+From 42dd913ca9e71a490458b7018b8db6b6ab37bd06 Mon Sep 17 00:00:00 2001
+From: Peng Yusheng <jiusi0519@gmail.com>
+Date: Thu, 3 Sep 2026 10:45:22 +0800
+Subject: [PATCH 2/2] feat(rmw_cyclonedds): bound gateway subscription cache
+
+---
+ rmw_cyclonedds_cpp/CMakeLists.txt             |  13 ++
+ .../subscription_resource_limits.h            |  50 ++++++++
+ rmw_cyclonedds_cpp/src/rmw_node.cpp           |  36 +++++-
+ .../src/subscription_resource_limits.hpp      |  70 +++++++++++
+ .../test_subscription_resource_limits.cpp     | 113 ++++++++++++++++++
+ 5 files changed, 280 insertions(+), 2 deletions(-)
+ create mode 100644 rmw_cyclonedds_cpp/include/rmw_cyclonedds_cpp/subscription_resource_limits.h
+ create mode 100644 rmw_cyclonedds_cpp/src/subscription_resource_limits.hpp
+ create mode 100644 rmw_cyclonedds_cpp/test/test_subscription_resource_limits.cpp
+
+diff --git a/rmw_cyclonedds_cpp/CMakeLists.txt b/rmw_cyclonedds_cpp/CMakeLists.txt
+index cc98f39..35b63ca 100644
+--- a/rmw_cyclonedds_cpp/CMakeLists.txt
++++ b/rmw_cyclonedds_cpp/CMakeLists.txt
+@@ -80,6 +80,10 @@ add_library(rmw_cyclonedds_cpp
+   src/TypeSupport2.cpp
+   src/TypeSupport.cpp)
+ 
++target_include_directories(rmw_cyclonedds_cpp PUBLIC
++  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
++  $<INSTALL_INTERFACE:include>)
++
+ target_link_libraries(rmw_cyclonedds_cpp PUBLIC
+   rmw::rmw)
+ 
+@@ -125,8 +129,15 @@ register_rmw_implementation(
+   "cpp:rosidl_typesupport_cpp:rosidl_typesupport_introspection_cpp")
+ 
+ if(BUILD_TESTING)
++  find_package(ament_cmake_gtest REQUIRED)
+   find_package(ament_lint_auto REQUIRED)
+   ament_lint_auto_find_test_dependencies()
++
++  ament_add_gtest(test_subscription_resource_limits test/test_subscription_resource_limits.cpp)
++  if(TARGET test_subscription_resource_limits)
++    target_include_directories(test_subscription_resource_limits PRIVATE src include)
++    target_link_libraries(test_subscription_resource_limits CycloneDDS::ddsc)
++  endif()
+ endif()
+ 
+ ament_package()
+@@ -139,6 +150,8 @@ install(
+   RUNTIME DESTINATION bin
+ )
+ 
++install(DIRECTORY include/ DESTINATION include)
++
+ include(cmake/get_rmw_cyclonedds_output_filter.cmake)
+ get_rmw_cyclonedds_output_filter(rmw_cyclonedds_output_patterns)
+ ament_index_register_resource("rmw_output_patterns" CONTENT "${rmw_cyclonedds_output_patterns}")
+diff --git a/rmw_cyclonedds_cpp/include/rmw_cyclonedds_cpp/subscription_resource_limits.h b/rmw_cyclonedds_cpp/include/rmw_cyclonedds_cpp/subscription_resource_limits.h
+new file mode 100644
+index 0000000..ced06c5
+--- /dev/null
++++ b/rmw_cyclonedds_cpp/include/rmw_cyclonedds_cpp/subscription_resource_limits.h
+@@ -0,0 +1,50 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW_CYCLONEDDS_CPP__SUBSCRIPTION_RESOURCE_LIMITS_H_
++#define RMW_CYCLONEDDS_CPP__SUBSCRIPTION_RESOURCE_LIMITS_H_
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++/// Stable marker for the CycloneDDS-only subscription payload below.
++#define RMW_CYCLONEDDS_CPP_SUBSCRIPTION_RESOURCE_LIMITS_MAGIC UINT64_C(0x524D574344444C52)
++#define RMW_CYCLONEDDS_CPP_SUBSCRIPTION_RESOURCE_LIMITS_VERSION UINT32_C(1)
++
++/// Optional value for rmw_subscription_options_t::rmw_specific_subscription_payload.
++/**
++ * This is deliberately an RMW-private, versioned C-layout payload instead of
++ * an extension to the portable ROS QoS ABI.  Callers must keep this object
++ * valid for the complete rmw_create_subscription() call.  The RMW copies the
++ * scalar limits into the CycloneDDS QoS before that call returns.
++ */
++typedef struct rmw_cyclonedds_cpp_subscription_resource_limits_s
++{
++  uint64_t magic;
++  uint32_t version;
++  uint32_t struct_size;
++  int32_t max_samples;
++  int32_t max_instances;
++  int32_t max_samples_per_instance;
++} rmw_cyclonedds_cpp_subscription_resource_limits_t;
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW_CYCLONEDDS_CPP__SUBSCRIPTION_RESOURCE_LIMITS_H_
+diff --git a/rmw_cyclonedds_cpp/src/rmw_node.cpp b/rmw_cyclonedds_cpp/src/rmw_node.cpp
+index 090b1b2..0138b1a 100644
+--- a/rmw_cyclonedds_cpp/src/rmw_node.cpp
++++ b/rmw_cyclonedds_cpp/src/rmw_node.cpp
+@@ -85,6 +85,7 @@
+ #include "tracetools/tracetools.h"
+ 
+ #include "namespace_prefix.hpp"
++#include "subscription_resource_limits.hpp"
+ 
+ #include "dds/dds.h"
+ #include "dds/ddsc/dds_data_allocator.h"
+@@ -2932,7 +2933,8 @@ extern "C" rmw_ret_t rmw_destroy_publisher(rmw_node_t * node, rmw_publisher_t *
+ static CddsSubscription * create_cdds_subscription(
+   dds_entity_t dds_ppant, dds_entity_t dds_sub,
+   const rosidl_message_type_support_t * type_supports, const char * topic_name,
+-  const rmw_qos_profile_t * qos_policies, bool ignore_local_publications)
++  const rmw_qos_profile_t * qos_policies, bool ignore_local_publications,
++  const void * rmw_specific_subscription_payload)
+ {
+   if (!topic_name || topic_name[0] == '\0') {
+     RMW_SET_ERROR_MSG("topic_name is null or empty string");
+@@ -2970,6 +2972,35 @@ static CddsSubscription * create_cdds_subscription(
+   {
+     goto fail_qos;
+   }
++  switch (rmw_cyclonedds_cpp::apply_subscription_resource_limits(
++      qos, rmw_specific_subscription_payload))
++  {
++    case rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::NONE:
++      break;
++    case rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::APPLIED: {
++        const auto * const limits = static_cast<
++          const rmw_cyclonedds_cpp_subscription_resource_limits_t *>(
++          rmw_specific_subscription_payload);
++        RCUTILS_LOG_INFO_NAMED(
++          "rmw_cyclonedds_cpp",
++          "applied subscription resource limits: max_samples=%d max_instances=%d "
++          "max_samples_per_instance=%d",
++          limits->max_samples, limits->max_instances, limits->max_samples_per_instance);
++        break;
++      }
++    case rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::BAD_MAGIC:
++      RMW_SET_ERROR_MSG("invalid CycloneDDS subscription resource-limits payload magic");
++      goto fail_qos;
++    case rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::BAD_VERSION:
++      RMW_SET_ERROR_MSG("unsupported CycloneDDS subscription resource-limits payload version");
++      goto fail_qos;
++    case rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::BAD_SIZE:
++      RMW_SET_ERROR_MSG("invalid CycloneDDS subscription resource-limits payload size");
++      goto fail_qos;
++    case rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::BAD_VALUE:
++      RMW_SET_ERROR_MSG("invalid CycloneDDS subscription resource-limits values");
++      goto fail_qos;
++  }
+   if ((sub->enth = dds_create_reader(dds_sub, topic, qos, listener)) < 0) {
+     RMW_SET_ERROR_MSG("failed to create reader");
+     goto fail_reader;
+@@ -3028,7 +3059,8 @@ static rmw_subscription_t * create_subscription(
+   if (
+     (sub = create_cdds_subscription(
+       dds_ppant, dds_sub, type_supports, topic_name, qos_policies,
+-      subscription_options->ignore_local_publications)) == nullptr)
++      subscription_options->ignore_local_publications,
++      subscription_options->rmw_specific_subscription_payload)) == nullptr)
+   {
+     return nullptr;
+   }
+diff --git a/rmw_cyclonedds_cpp/src/subscription_resource_limits.hpp b/rmw_cyclonedds_cpp/src/subscription_resource_limits.hpp
+new file mode 100644
+index 0000000..7b45c62
+--- /dev/null
++++ b/rmw_cyclonedds_cpp/src/subscription_resource_limits.hpp
+@@ -0,0 +1,70 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW_CYCLONEDDS_CPP__SUBSCRIPTION_RESOURCE_LIMITS_HPP_
++#define RMW_CYCLONEDDS_CPP__SUBSCRIPTION_RESOURCE_LIMITS_HPP_
++
++#include <cstddef>
++
++#include <dds/dds.h>
++
++#include "rmw_cyclonedds_cpp/subscription_resource_limits.h"
++
++namespace rmw_cyclonedds_cpp
++{
++
++enum class SubscriptionResourceLimitsResult
++{
++  NONE,
++  APPLIED,
++  BAD_MAGIC,
++  BAD_VERSION,
++  BAD_SIZE,
++  BAD_VALUE,
++};
++
++inline SubscriptionResourceLimitsResult
++apply_subscription_resource_limits(
++  dds_qos_t * qos,
++  const void * payload) noexcept
++{
++  if (payload == nullptr) {
++    return SubscriptionResourceLimitsResult::NONE;
++  }
++  const auto * const limits =
++    static_cast<const rmw_cyclonedds_cpp_subscription_resource_limits_t *>(payload);
++  if (limits->magic != RMW_CYCLONEDDS_CPP_SUBSCRIPTION_RESOURCE_LIMITS_MAGIC) {
++    return SubscriptionResourceLimitsResult::BAD_MAGIC;
++  }
++  if (limits->version != RMW_CYCLONEDDS_CPP_SUBSCRIPTION_RESOURCE_LIMITS_VERSION) {
++    return SubscriptionResourceLimitsResult::BAD_VERSION;
++  }
++  if (limits->struct_size != sizeof(rmw_cyclonedds_cpp_subscription_resource_limits_t)) {
++    return SubscriptionResourceLimitsResult::BAD_SIZE;
++  }
++  if (limits->max_samples <= 0 || limits->max_instances <= 0 ||
++    limits->max_samples_per_instance <= 0 ||
++    limits->max_samples < limits->max_instances ||
++    limits->max_samples < limits->max_samples_per_instance)
++  {
++    return SubscriptionResourceLimitsResult::BAD_VALUE;
++  }
++  dds_qset_resource_limits(
++    qos, limits->max_samples, limits->max_instances, limits->max_samples_per_instance);
++  return SubscriptionResourceLimitsResult::APPLIED;
++}
++
++}  // namespace rmw_cyclonedds_cpp
++
++#endif  // RMW_CYCLONEDDS_CPP__SUBSCRIPTION_RESOURCE_LIMITS_HPP_
+diff --git a/rmw_cyclonedds_cpp/test/test_subscription_resource_limits.cpp b/rmw_cyclonedds_cpp/test/test_subscription_resource_limits.cpp
+new file mode 100644
+index 0000000..a99f6ca
+--- /dev/null
++++ b/rmw_cyclonedds_cpp/test/test_subscription_resource_limits.cpp
+@@ -0,0 +1,113 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#include <gtest/gtest.h>
++
++#include <dds/dds.h>
++
++#include "rmw_cyclonedds_cpp/subscription_resource_limits.h"
++#include "subscription_resource_limits.hpp"
++
++namespace
++{
++
++rmw_cyclonedds_cpp_subscription_resource_limits_t valid_limits()
++{
++  return rmw_cyclonedds_cpp_subscription_resource_limits_t{
++    RMW_CYCLONEDDS_CPP_SUBSCRIPTION_RESOURCE_LIMITS_MAGIC,
++    RMW_CYCLONEDDS_CPP_SUBSCRIPTION_RESOURCE_LIMITS_VERSION,
++    static_cast<uint32_t>(sizeof(rmw_cyclonedds_cpp_subscription_resource_limits_t)),
++    32, 1, 32};
++}
++
++TEST(SubscriptionResourceLimits, AppliesExactCycloneReaderLimits)
++{
++  dds_qos_t * const qos = dds_create_qos();
++  ASSERT_NE(qos, nullptr);
++  const auto limits = valid_limits();
++  EXPECT_EQ(
++    rmw_cyclonedds_cpp::apply_subscription_resource_limits(qos, &limits),
++    rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::APPLIED);
++  int32_t max_samples = 0;
++  int32_t max_instances = 0;
++  int32_t max_samples_per_instance = 0;
++  dds_qget_resource_limits(qos, &max_samples, &max_instances, &max_samples_per_instance);
++  EXPECT_EQ(max_samples, 32);
++  EXPECT_EQ(max_instances, 1);
++  EXPECT_EQ(max_samples_per_instance, 32);
++  dds_delete_qos(qos);
++}
++
++TEST(SubscriptionResourceLimits, RejectsMalformedPayloadWithoutChangingQos)
++{
++  dds_qos_t * const qos = dds_create_qos();
++  ASSERT_NE(qos, nullptr);
++  int32_t expected_max_samples = 0;
++  int32_t expected_max_instances = 0;
++  int32_t expected_max_samples_per_instance = 0;
++  dds_qget_resource_limits(
++    qos, &expected_max_samples, &expected_max_instances, &expected_max_samples_per_instance);
++  auto limits = valid_limits();
++  limits.magic = 0;
++  EXPECT_EQ(
++    rmw_cyclonedds_cpp::apply_subscription_resource_limits(qos, &limits),
++    rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::BAD_MAGIC);
++  limits = valid_limits();
++  limits.version++;
++  EXPECT_EQ(
++    rmw_cyclonedds_cpp::apply_subscription_resource_limits(qos, &limits),
++    rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::BAD_VERSION);
++  limits = valid_limits();
++  limits.struct_size--;
++  EXPECT_EQ(
++    rmw_cyclonedds_cpp::apply_subscription_resource_limits(qos, &limits),
++    rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::BAD_SIZE);
++  limits = valid_limits();
++  limits.max_samples = 0;
++  EXPECT_EQ(
++    rmw_cyclonedds_cpp::apply_subscription_resource_limits(qos, &limits),
++    rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::BAD_VALUE);
++  int32_t max_samples = 0;
++  int32_t max_instances = 0;
++  int32_t max_samples_per_instance = 0;
++  dds_qget_resource_limits(qos, &max_samples, &max_instances, &max_samples_per_instance);
++  EXPECT_EQ(max_samples, expected_max_samples);
++  EXPECT_EQ(max_instances, expected_max_instances);
++  EXPECT_EQ(max_samples_per_instance, expected_max_samples_per_instance);
++  dds_delete_qos(qos);
++}
++
++TEST(SubscriptionResourceLimits, NullPayloadLeavesPortableDefaultUntouched)
++{
++  dds_qos_t * const qos = dds_create_qos();
++  ASSERT_NE(qos, nullptr);
++  int32_t expected_max_samples = 0;
++  int32_t expected_max_instances = 0;
++  int32_t expected_max_samples_per_instance = 0;
++  dds_qget_resource_limits(
++    qos, &expected_max_samples, &expected_max_instances, &expected_max_samples_per_instance);
++  EXPECT_EQ(
++    rmw_cyclonedds_cpp::apply_subscription_resource_limits(qos, nullptr),
++    rmw_cyclonedds_cpp::SubscriptionResourceLimitsResult::NONE);
++  int32_t max_samples = 0;
++  int32_t max_instances = 0;
++  int32_t max_samples_per_instance = 0;
++  dds_qget_resource_limits(qos, &max_samples, &max_instances, &max_samples_per_instance);
++  EXPECT_EQ(max_samples, expected_max_samples);
++  EXPECT_EQ(max_instances, expected_max_instances);
++  EXPECT_EQ(max_samples_per_instance, expected_max_samples_per_instance);
++  dds_delete_qos(qos);
++}
++
++}  // namespace
 -- 
 2.55.0.windows.5
 

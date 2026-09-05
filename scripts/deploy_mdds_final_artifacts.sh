@@ -607,9 +607,11 @@ main() {
   add_target librmw_mdds "$BOARD_A" "install_ohos/lib/librmw_mdds.so" "lib/librmw_mdds.so" data || return 2
   add_target librmw_cyclonedds_cpp "$BOARD_A" "install_ohos/lib/librmw_cyclonedds_cpp.so" "lib/librmw_cyclonedds_cpp.so" data || return 2
   add_target rmw_mdds_dsoftbus_profile "$BOARD_A" "install_ohos/share/rmw_mdds/config/ohos_dsoftbus.env" "share/rmw_mdds/config/ohos_dsoftbus.env" data || return 2
+  add_target mdds_token_exec "$BOARD_A" "install_ohos/bin/mdds_token_exec" "bin/mdds_token_exec" exec || return 2
   add_target libmdds "$BOARD_B" "install_ohos/lib/libmdds.so" "lib/libmdds.so" data || return 2
   add_target librmw_mdds "$BOARD_B" "install_ohos/lib/librmw_mdds.so" "lib/librmw_mdds.so" data || return 2
   add_target rmw_mdds_dsoftbus_profile "$BOARD_B" "install_ohos/share/rmw_mdds/config/ohos_dsoftbus.env" "share/rmw_mdds/config/ohos_dsoftbus.env" data || return 2
+  add_target mdds_token_exec "$BOARD_B" "install_ohos/bin/mdds_token_exec" "bin/mdds_token_exec" exec || return 2
   # Board A is the sole gateway host in the requested topology.
   add_target mdds_gateway "$BOARD_A" "install_ohos/lib/mdds_gateway/mdds_gateway" "lib/mdds_gateway/mdds_gateway" exec || return 2
   add_target mdds_gateway_profile "$BOARD_A" "install_ohos/share/mdds_gateway/mdds_gateway_ohos_dsoftbus.conf" "share/mdds_gateway/mdds_gateway_ohos_dsoftbus.conf" data || return 2

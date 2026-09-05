@@ -20,22 +20,25 @@ HDC="${HDC:-C:/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/com
 BOARD_A=3e01ff55454d202020104033bf453b00
 BOARD_B=3e01ff55454d202020104433991c3b00
 DEVICE_DIR=/data/local/tmp/ros2
-LOGDIR=ohos_test_logs/mdds_cli
-mkdir -p "$LOGDIR"
+LOGROOT=ohos_test_logs/mdds_cli
 
 export MSYS2_ARG_CONV_EXCL='*'
 
-RENVS=". $DEVICE_DIR/env.sh; export RMW_IMPLEMENTATION=rmw_mdds;"
+RENVS=". $DEVICE_DIR/env.sh || exit 70; export MDDS_TOKEN_EXEC=$DEVICE_DIR/bin/mdds_token_exec; export RMW_IMPLEMENTATION=rmw_mdds;"
 CLI="python3.12 $DEVICE_DIR/Scripts/ros2-script.py"
 
 shell()  { "$HDC" -t "$1" shell "$2" </dev/null; }
-rbg()    { shell "$1" "$RENVS nohup $2 > $DEVICE_DIR/$3 2>&1 &" & }
+source scripts/lib/mdds_owned_processes.sh
+mdds_owned_init run_mdds_cli "$BOARD_A" "$BOARD_B" || exit 3
+LOGDIR="$LOGROOT/$MDDS_OWNED_RUN_ID"
+mkdir -p "$LOGDIR"
+rbg()    { mdds_owned_launch "$1" "$RENVS" "$2" "$3"; }
 # cli <board> <timeout_s> <logname> <verb args...>; output lands in $LOGDIR
 cli() {
   local b=$1 t=$2 log=$3; shift 3
   local args
   printf -v args '%q ' "$@"   # keep '{a: 5, b: 7}'-style args as one word remotely
-  shell "$b" "$RENVS timeout $t $CLI $args" > "$LOGDIR/$log" 2>&1
+  shell "$b" "$RENVS timeout $t \$MDDS_TOKEN_EXEC -- $CLI $args" > "$LOGDIR/$log" 2>&1
 }
 
 pass=0; fail=0; failed_ids=()
@@ -45,13 +48,6 @@ verdict() { # verdict <ID> <0|1> [detail]
 }
 
 setup_nodes() {
-  # long-running nodes on B; pkill runs in its own hdc call so the launching
-  # shell's own command line cannot match the pattern. Path-qualified: only
-  # executables/scripts under our deploy tree, never bare package names.
-  for b in "$BOARD_A" "$BOARD_B"; do
-    shell "$b" "pkill -f '$DEVICE_DIR/[Ll]ib/|$DEVICE_DIR/bin/ros2|$DEVICE_DIR/mdds_e2e/' 2>/dev/null; true" >/dev/null 2>&1 || true
-  done
-  sleep 1
   rbg "$BOARD_B" "$DEVICE_DIR/lib/demo_nodes_cpp/talker" cli_talker.log
   rbg "$BOARD_B" "$DEVICE_DIR/lib/demo_nodes_cpp/listener --ros-args -r chatter:=chatter_cli" cli_listener.log
   rbg "$BOARD_B" "$DEVICE_DIR/lib/demo_nodes_cpp/parameter_blackboard" cli_param_node.log
@@ -64,10 +60,7 @@ setup_nodes() {
 }
 
 teardown_nodes() {
-  for b in "$BOARD_A" "$BOARD_B"; do
-    shell "$b" "pkill -f '$DEVICE_DIR/[Ll]ib/|$DEVICE_DIR/bin/ros2|$DEVICE_DIR/mdds_e2e/' 2>/dev/null; true" >/dev/null 2>&1 || true
-  done
-  sleep 1
+  mdds_owned_stop_all
 }
 
 # --- scenarios ---------------------------------------------------------------
@@ -116,7 +109,7 @@ s_pub() {
   local marker="cli_probe_$$"
   cli "$BOARD_A" 40 cli07_pub.log topic pub --once /chatter_cli std_msgs/msg/String "{data: $marker}"
   sleep 3
-  shell "$BOARD_B" "grep -c '$marker' $DEVICE_DIR/cli_listener.log 2>/dev/null || true" | grep -q '^[1-9]'
+  shell "$BOARD_B" "grep -c '$marker' '$MDDS_OWNED_REMOTE_DIR/cli_listener.log' 2>/dev/null || true" | grep -q '^[1-9]'
   verdict "CLI-06" $? "topic pub --once reached B listener (marker=$marker)"
 }
 
@@ -143,7 +136,7 @@ s_service() {
 
 s_action() {
   cli "$BOARD_A" 30 cli10_action_list.log action list -t
-  shell "$BOARD_A" "$RENVS timeout 30 python3.12 $DEVICE_DIR/mdds_e2e/cli_probe_action.py" \
+  shell "$BOARD_A" "$RENVS timeout 30 \$MDDS_TOKEN_EXEC -- python3.12 $DEVICE_DIR/mdds_e2e/cli_probe_action.py" \
     > "$LOGDIR/cli10_action_probe.log" 2>&1
   local bad=0
   grep -q '/fibonacci \[action_tutorials_interfaces/action/Fibonacci\]' \
@@ -153,6 +146,8 @@ s_action() {
 }
 
 # --- driver ------------------------------------------------------------------
+
+trap 'rc=$?; trap - EXIT; mdds_owned_finish >/dev/null 2>&1 || rc=1; exit $rc' EXIT
 
 ids=("$@")
 [ ${#ids[@]} -eq 0 ] && ids=(all)

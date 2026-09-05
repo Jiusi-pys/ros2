@@ -156,8 +156,8 @@ UDP_BAND_RE='BA(C[3-9A-F]|D[0-9A-F]|E[0-2])'
 # bind DDoS protection on the d42 tuple (10 failed opens/60s => 600s deny);
 # libmdds now paces rebinds (kBindRetryMs/kBindDeniedBackoffMs) so a fresh
 # tuple stays clear.
-RENVS=". $DEVICE_DIR/env.sh; export RMW_IMPLEMENTATION=rmw_mdds;"
-DSB_ENVS="$RENVS . $DEVICE_DIR/share/rmw_mdds/config/ohos_dsoftbus.env; export MDDS_DEBUG=1; export ROS_DOMAIN_ID=43;"
+RENVS=". $DEVICE_DIR/env.sh || exit 70; export MDDS_TOKEN_EXEC=$DEVICE_DIR/bin/mdds_token_exec; export RMW_IMPLEMENTATION=rmw_mdds;"
+DSB_ENVS="$RENVS . $DEVICE_DIR/share/rmw_mdds/config/ohos_dsoftbus.env || exit 70; export MDDS_DEBUG=1; export ROS_DOMAIN_ID=43;"
 # DS-02 pins SYSTEM_DEFAULT on board B explicitly per the gate spec (already
 # in DSB_ENVS; kept separate so the requirement is visible at the call site).
 DSB_ENVS_B="$DSB_ENVS"
@@ -166,7 +166,7 @@ DSB_ENVS_B="$DSB_ENVS"
 # stale `pub_subs=1` appear only after the PC's volatile reader has timed out.
 # Force just this test process's ROS logs unbuffered so the gate observes the
 # current Cyclone match, not a delayed file flush.
-GWENVS=". $DEVICE_DIR/env.sh; unset RMW_IMPLEMENTATION; export CYCLONEDDS_URI=$DEVICE_DIR/mdds_e2e/cyclonedds_board_a.xml; export MDDS_DEBUG=1; export RCUTILS_LOGGING_BUFFERED_STREAM=0;"
+GWENVS=". $DEVICE_DIR/env.sh || exit 70; export MDDS_TOKEN_EXEC=$DEVICE_DIR/bin/mdds_token_exec; unset RMW_IMPLEMENTATION; export CYCLONEDDS_URI=$DEVICE_DIR/mdds_e2e/cyclonedds_board_a.xml; export MDDS_DEBUG=1; export RCUTILS_LOGGING_BUFFERED_STREAM=0;"
 
 # The deployed KaihongOS /bin/sh image has no external `tr`, yet the durable
 # launch-control protocol needs only LF-canonical board files.  Provide a
@@ -402,6 +402,9 @@ launch() { # launch <board> <env-prefix> <cmd> <log>; remote pid -> $LAST_PID
     echo "   ERROR: refusing unsafe launch arguments for [$3]" >&2
     return 1
   fi
+  # The launcher's AccessToken change is confined to the exact PID:start
+  # process owned by this run; the shared remote shell keeps its identity.
+  set -- "$1" "$2" "\$MDDS_TOKEN_EXEC -- $3" "$4"
   # The nonce is part of the identity *and* path, so an old process with a
   # reused MDDS_RUN_ID cannot be adopted or signalled by this invocation.
   record_path="$REMOTE_LOGDIR/launch/$4.$RUN_NONCE.pid"
@@ -1076,7 +1079,7 @@ push_dsb_files() {
 verify_final_artifacts() {
   local local_path name board remote want got
   : > "$LOGDIR/artifact_hashes.txt"
-  for name in libmdds.so librmw_mdds.so librmw_cyclonedds_cpp.so ohos_dsoftbus.env mdds_gateway; do
+  for name in libmdds.so librmw_mdds.so librmw_cyclonedds_cpp.so ohos_dsoftbus.env mdds_gateway mdds_token_exec; do
     case "$name" in
       libmdds.so) local_path="install_ohos/lib/libmdds.so"; remote="$DEVICE_DIR/lib/libmdds.so" ;;
       librmw_mdds.so) local_path="install_ohos/lib/librmw_mdds.so"; remote="$DEVICE_DIR/lib/librmw_mdds.so" ;;
@@ -1089,6 +1092,7 @@ verify_final_artifacts() {
         remote="$DEVICE_DIR/share/rmw_mdds/config/ohos_dsoftbus.env"
         ;;
       mdds_gateway) local_path="install_ohos/lib/mdds_gateway/mdds_gateway"; remote="$DEVICE_DIR/lib/mdds_gateway/mdds_gateway" ;;
+      mdds_token_exec) local_path="install_ohos/bin/mdds_token_exec"; remote="$DEVICE_DIR/bin/mdds_token_exec" ;;
     esac
     if [ ! -f "$local_path" ]; then
       echo "missing local final artifact: $local_path" | tee -a "$LOGDIR/artifact_hashes.txt"

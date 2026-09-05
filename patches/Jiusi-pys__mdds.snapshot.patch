@@ -1,0 +1,1482 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index cd544165c43e9fa684d1a73949d1aa3e0ad90f15..6018708f98e976a44a251ffc0ef9ae0dd7597d35 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -68,7 +68,9 @@ endif()
+ if(MDDS_WITH_DSOFTBUS)
+   target_sources(${PROJECT_NAME} PRIVATE src/transport_dsoftbus.cpp)
+   target_compile_definitions(${PROJECT_NAME} PUBLIC MDDS_WITH_DSOFTBUS=1)
+-  # Vendored DSoftBus SDK headers + board-pulled client/token libraries.
++  # Vendored DSoftBus SDK headers + board-pulled client library.  libmdds does
++  # not link the access-token mutator: process identity is provisioned before
++  # exec by the service manager or by the dedicated mdds_token_exec launcher.
+   # The same libraries exist on the device under /system/lib64/platformsdk.
+   target_include_directories(${PROJECT_NAME} PRIVATE
+     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dsoftbus/include"
+@@ -78,10 +80,30 @@ if(MDDS_WITH_DSOFTBUS)
+   )
+   target_link_libraries(${PROJECT_NAME} PRIVATE
+     -l:libsoftbus_client.z.so
++  )
++  target_link_options(${PROJECT_NAME} PRIVATE
++    -Wl,--allow-shlib-undefined
++    -Wl,-rpath,/system/lib64/platformsdk
++  )
++endif()
++
++# Explicit process-identity boundary for command-line deployments.  This is a
++# standalone executable rather than library initialization: it validates every
++# token API result and then execs the requested program, so loading libmdds in
++# a composable process can never silently change sibling nodes' identity.
++if(OHOS_CROSS_BUILD AND MDDS_WITH_DSOFTBUS)
++  add_executable(mdds_token_exec src/mdds_token_exec.cpp)
++  target_include_directories(mdds_token_exec PRIVATE
++    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dsoftbus/include"
++  )
++  target_link_directories(mdds_token_exec PRIVATE
++    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dsoftbus/lib"
++  )
++  target_link_libraries(mdds_token_exec PRIVATE
+     -l:libnativetoken_shared.z.so
+     -l:libtokensetproc_shared.z.so
+   )
+-  target_link_options(${PROJECT_NAME} PRIVATE
++  target_link_options(mdds_token_exec PRIVATE
+     -Wl,--allow-shlib-undefined
+     -Wl,-rpath,/system/lib64/platformsdk
+   )
+@@ -163,6 +185,36 @@ if(BUILD_TESTING)
+         target_link_libraries(test_transport_dsoftbus_fake mdds_dsoftbus_fake_runtime)
+       endif()
+     endif()
++    # Board-only identity-boundary probe. Register both authorization states
++    # in the generated CTest plan so run_board_tests.sh must archive one exact
++    # verdict for each: an explicit unprivileged bypass (startup must fail) and
++    # the normal mdds_token_exec path (startup must succeed). Both prove
++    # libmdds leaves the process token observed at entry unchanged.
++    if(OHOS_CROSS_BUILD AND TARGET mdds_token_exec)
++      add_executable(mdds_token_boundary_probe
++        test/mdds_token_boundary_probe.cpp)
++      target_include_directories(mdds_token_boundary_probe PRIVATE
++        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dsoftbus/include")
++      target_link_directories(mdds_token_boundary_probe PRIVATE
++        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dsoftbus/lib")
++      target_link_libraries(mdds_token_boundary_probe PRIVATE
++        ${PROJECT_NAME}
++        -l:libtokensetproc_shared.z.so)
++      target_link_options(mdds_token_boundary_probe PRIVATE
++        -Wl,--allow-shlib-undefined
++        -Wl,-rpath,/system/lib64/platformsdk)
++      ament_add_test(mdds_token_boundary_unprivileged
++        COMMAND $<TARGET_FILE:mdds_token_boundary_probe> failure 93
++        ENV MDDS_BOARDTEST_TOKEN_MODE=BYPASS_EXPECT_UNAUTHORIZED
++        GENERATE_RESULT_FOR_RETURN_CODE_ZERO
++        TIMEOUT 30)
++      ament_add_test(mdds_token_boundary_privileged
++        COMMAND $<TARGET_FILE:mdds_token_exec> --
++          $<TARGET_FILE:mdds_token_boundary_probe> success 93
++        ENV MDDS_BOARDTEST_TOKEN_MODE=LAUNCHER_UNDER_TEST
++        GENERATE_RESULT_FOR_RETURN_CODE_ZERO
++        TIMEOUT 30)
++    endif()
+   else()
+     find_package(GTest QUIET)
+     if(GTest_FOUND)
+@@ -206,5 +258,8 @@ if(ament_cmake_ros_FOUND)
+     LIBRARY DESTINATION lib
+     RUNTIME DESTINATION bin
+   )
++  if(TARGET mdds_token_exec)
++    install(TARGETS mdds_token_exec RUNTIME DESTINATION bin)
++  endif()
+   ament_package()
+ endif()
+diff --git a/docs/design.md b/docs/design.md
+index e7492a3406a529e430a9d0befa5bb59dce1c08d1..e8b79ab36b01961b207a2eec25f9a1ade1ec3500 100644
+--- a/docs/design.md
++++ b/docs/design.md
+@@ -164,8 +164,12 @@ best_effort 配对的乱序样本仍**立即交付**（窗口只服务于去重
+ 连续序列——`take()` 不会观察到 1,3,2 式乱序。重排内存双重约束：单 writer 上限 +
+ participant 全局上限（`max_reorder_bytes_total`，默认 64 MiB，全部 reader 共享）；
+ 全局预算为 **fetch_add 预留式**（先原子加账、超限即撤销），消除 load-then-add 的并发
+-穿透。基线跳转（offset ≥ 64 的窗口溢出、GAP、或重排预算耗尽）时：缓冲中 ≤ 新基线的
+-样本先按序交付，空洞的其余部分计丢失一次。
++穿透。基线跳转只发生在收到 GAP 或 best-effort 的 offset ≥ 64 窗口溢出时：缓冲中 ≤
++新基线的样本先按序交付，空洞的其余部分计丢失一次。reliable 收到 offset ≥ 64，或重排
++预算/分配无法接纳乱序副本时，都不得跳转基线：该副本先丢弃，保持当前
++`last_seq`/bitmap 并发送当前 64 位窗口的 ACKNACK；窗口头部补齐后，后续 ACKNACK
++（或 HEARTBEAT）逐窗请求原副本。这样窗口之外、但仍在 writer history 中可恢复的样本
++不会被误算成累计 ACK，也不会被 writer 提前回收。
+ **丢失只在 GAP 到达或基线跳变时计数**，检出空洞本身不计（可能被重传治愈，见
+ RetransmitHealsDroppedFrame 测试）。
+ 
+@@ -175,6 +179,13 @@ RetransmitHealsDroppedFrame 测试）。
+ 的 seq 直接滑过）。本地投递与线上投递共用同一入口，过滤语义一致。
+ rmw 层用它实现 service 响应按 client GUID 分流（见 §7）。
+ 
++同一 `Writer` 的并发 `write()` 从序号分配、所有本地 reader enqueue 到各 transport send
++共用一个 per-writer 有序发布区，保证 seq N 不会被 seq N+1 越过；reader 数据回调在发布区
++释放后才触发，可以正常回写。sample filter 执行时（远端 filter 仍可能持 participant 锁，
++本地 filter 持 writer 锁），从该 filter 栈调用任意 participant/writer 的嵌套 `write()` 都会
++在取锁前 fail-closed；否则两个 participant 的 filter 也能各持一把锁后交叉等待形成 ABBA。
++测试 send hook 递归写同一个 writer 也同样拒绝。这样既不自锁，也不生成越序序号。
++
+ HEARTBEAT body（32 B）：`writer_guid(16) | first_seq:uint64 | last_seq:uint64`。
+ 周期发送与 ANNOUNCE 共用 `announce_period_ms`（默认 2000 ms），由 `announce_loop`
+ 每轮发出（`send_heartbeats()`），仅覆盖 RELIABLE 且 history 非空的 writer
+@@ -387,20 +398,26 @@ ros2/src/Jiusi-pys/mdds/
+ - `transport_dsoftbus` 编译需要 DSoftBus SDK 头文件（vendor 自
+   `communication_dsoftbus/interfaces/kits/`，只拷头文件，不改生产代码）；头文件与
+   板上拉取的 `libsoftbus_client.z.so` / `libnativetoken_shared.z.so` /
+-  `libtokensetproc_shared.z.so` 一起 vendored 在 `third_party/dsoftbus/`，链接方式
++  `libtokensetproc_shared.z.so` 一起 vendored 在 `third_party/dsoftbus/`。`libmdds`
++  生产 `libmdds` 只链接 `libsoftbus_client`；ament 安装目标中，两个 token 库仅由独立的
++  `mdds_token_exec` launcher 链接（`examples/dsoftbus_probe` 是非安装的旧诊断例外）。链接方式
+   已定：`-l:<name>` + `-Wl,--allow-shlib-undefined -Wl,-rpath,/system/lib64/platformsdk`
+   （设备上同名库位于该系统目录，见 CMakeLists.txt）。
+ 
+ ## 9. 首要风险与验证顺序
+ 
+-1. ~~权限风险~~ **已解决**（2026-08-29，设备实测结论）：
++1. 权限边界（2026-09-04 修正）：
+    - shell 进程默认继承 hdcd token，被 softbus_server 拒绝
+-     `ohos.permission.DISTRIBUTED_DATASYNC`。解决：进程内调用
+-     `GetAccessTokenId` + `SetSelfTokenID` 设置 native token
+-     （DISTRIBUTED_DATASYNC + DISTRIBUTED_SOFTBUS_CENTER），且 pkgName/会话名
+-     必须匹配设备 `/system/etc/communication/softbus/softbus_trans_permission.json`
+-     白名单——复用已预注册的 `com.kaihong.mdds.*` 条目。
+-     → `transport_dsoftbus` 初始化必须固定使用白名单 pkgName 并先 SetSelfTokenID。
++     `ohos.permission.DISTRIBUTED_DATASYNC`。生产身份必须由 init/service/HAP launcher
++     在装载 `libmdds` 前配置；库初始化不得改变整个 ROS 进程的 token。命令行板测使用
++     `mdds_token_exec -- PROGRAM [ARG ...]`：launcher 严格检查
++     `GetAccessTokenId`、`SetSelfTokenID` 和 `GetSelfTokenID` 后再 `execvp`，任一步失败
++     都以 126 退出。所授权限为 DISTRIBUTED_DATASYNC +
++     DISTRIBUTED_SOFTBUS_CENTER；pkgName/会话名仍须匹配设备
++     `/system/etc/communication/softbus/softbus_trans_permission.json` 中预注册的
++     `com.kaihong.mdds.*` 条目。
++     → `transport_dsoftbus` 固定使用白名单 pkgName，但只以 Socket/Listen 返回值
++     做权威的 fail-closed 权限检查，绝不调用 `SetSelfTokenID`。
+    - **同步 `Bind()` 在 KaihongOS 该版本返回 -426115007
+      （SOFTBUS_TRANS_PEER_SESSION_NOT_CREATED），必须使用 `BindAsync()`**。
+    - hdc 在该 Windows 主机上 `file send`/stdin 管道不稳定（时好时坏），
+diff --git a/examples/build_e2e.sh b/examples/build_e2e.sh
+index 76dc03383c60e7d748beb30a24ca702352276788..ae0e2ed0b15832d9769fb6dd0a1d018971412643 100644
+--- a/examples/build_e2e.sh
++++ b/examples/build_e2e.sh
+@@ -1,7 +1,9 @@
+ #!/usr/bin/env bash
+ # Build mdds_e2e for OpenHarmony (aarch64) with the NDK clang++.
+ # Links against the freshly cross-built libmdds.so (build_ohos/mdds) and the
+-# board-pulled DSoftBus libs in third_party/dsoftbus/lib.
++# board-pulled DSoftBus client library in third_party/dsoftbus/lib. Run the
++# resulting executable through `mdds_token_exec --`; the example itself and
++# libmdds deliberately do not mutate the process token.
+ # Run from the mdds package root:  ./examples/build_e2e.sh
+ set -euo pipefail
+ cd "$(dirname "$0")/.."
+@@ -21,7 +23,7 @@ fi
+   examples/mdds_e2e.cpp \
+   -L "${MDDS_BUILD_DIR}" -lmdds \
+   -L third_party/dsoftbus/lib \
+-  -l:libsoftbus_client.z.so -l:libnativetoken_shared.z.so -l:libtokensetproc_shared.z.so \
++  -l:libsoftbus_client.z.so \
+   -Wl,--allow-shlib-undefined \
+   -Wl,-rpath,/data/local/tmp/mdds_e2e \
+   -Wl,-rpath,/system/lib64/platformsdk \
+diff --git a/include/mdds/participant.hpp b/include/mdds/participant.hpp
+index 1e5c6786488569f351ea455bf027d590a1af552f..d0f7a64955e8abcf30a7d1bb5e8a790bdf60022d 100644
+--- a/include/mdds/participant.hpp
++++ b/include/mdds/participant.hpp
+@@ -68,7 +68,11 @@ public:
+   virtual const std::string &topic() const = 0;
+   virtual const std::string &type_name() const = 0;
+   virtual const QosProfile &qos() const = 0;
+-  /// Publish one serialized sample. Thread-safe.
++  /// Publish one serialized sample. Concurrent calls on the same writer are
++  /// committed in sequence order. A recursive call on that same writer from
++  /// its send-hook stack, or from any sample-filter stack, fails instead of
++  /// deadlocking; ordinary data callbacks run after the ordered publish
++  /// section and may publish.
+   virtual bool write(const uint8_t *data, size_t len) = 0;
+   /// Number of matched readers (local + remote), QoS-compatible only. This
+   /// mirrors the DDS reference RMWs (cyclonedds/fastdds) and the official
+diff --git a/src/mdds_token_exec.cpp b/src/mdds_token_exec.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..9f889353dff3dab506545d7317658db468ed27ed
+--- /dev/null
++++ b/src/mdds_token_exec.cpp
+@@ -0,0 +1,84 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++// Explicit OpenHarmony command-line identity launcher for MDDS/DSoftBus.
++//
++// Usage: mdds_token_exec -- PROGRAM [ARG ...]
++//
++// The identity mutation intentionally happens in this short-lived process
++// before exec.  libmdds itself never mutates the process token, which keeps a
++// composable ROS process from changing the identity of unrelated nodes merely
++// because one component loads the DSoftBus transport.
++
++#include <cerrno>
++#include <cstdio>
++#include <cstring>
++
++#include <unistd.h>
++
++#include "nativetoken_kit.h"
++#include "softbus_error_code.h"
++#include "token_setproc.h"
++
++namespace {
++
++constexpr const char *kProcessName = "com.kaihong.mdds";
++constexpr int kUsageExit = 2;
++constexpr int kLaunchFailureExit = 126;
++
++int fail(const char *step, long long value) {
++  std::fprintf(stderr, "mdds_token_exec: %s failed (%lld)\n", step, value);
++  return kLaunchFailureExit;
++}
++
++} // namespace
++
++int main(int argc, char **argv) {
++  if (argc < 3 || std::strcmp(argv[1], "--") != 0 || argv[2][0] == '\0') {
++    std::fprintf(stderr,
++                 "usage: mdds_token_exec -- PROGRAM [ARG ...]\n");
++    return kUsageExit;
++  }
++
++  const char *permissions[] = {
++      "ohos.permission.DISTRIBUTED_DATASYNC",
++      "ohos.permission.DISTRIBUTED_SOFTBUS_CENTER",
++  };
++  NativeTokenInfoParams info{};
++  info.permsNum = static_cast<int32_t>(sizeof(permissions) /
++                                       sizeof(permissions[0]));
++  info.perms = permissions;
++  info.processName = kProcessName;
++  info.aplStr = "system_basic";
++
++  const uint64_t token_id = GetAccessTokenId(&info);
++  if (token_id == 0) {
++    return fail("GetAccessTokenId", 0);
++  }
++  const int32_t set_result = SetSelfTokenID(token_id);
++  if (set_result != SOFTBUS_OK) {
++    return fail("SetSelfTokenID", set_result);
++  }
++  const uint64_t installed_token = GetSelfTokenID();
++  if (installed_token != token_id) {
++    return fail("GetSelfTokenID verification",
++                static_cast<long long>(installed_token));
++  }
++
++  ::execvp(argv[2], argv + 2);
++  const int saved_errno = errno;
++  std::fprintf(stderr, "mdds_token_exec: execvp(%s) failed: %s (%d)\n",
++               argv[2], std::strerror(saved_errno), saved_errno);
++  return kLaunchFailureExit;
++}
+diff --git a/src/participant.cpp b/src/participant.cpp
+index 34440ce61de50af070597d95234b5869b45cb4c6..8fdc209c976afd082a5bd02bb967e900e75c0a22 100644
+--- a/src/participant.cpp
++++ b/src/participant.cpp
+@@ -29,8 +29,11 @@
+ // (reader data, participant graph) are
+ // serialized against their clear/replace path by a CV + depth counter +
+ // generation, so set_*_callback(nullptr) returns only when no invocation of
+-// the previous callback is still running — and no mutex is ever held across
+-// a user call, so a callback may itself trigger shutdown without deadlocking.
++// the previous callback is still running. Data/graph callbacks run with no
++// ordering mutex held and may trigger shutdown or publish. A sample filter or
++// test send hook can run inside an ordered/participant section; writes back
++// from any filter stack (or into the hook's same writer) are rejected before
++// taking a potentially conflicting lock instead of deadlocking.
+ 
+ #include "mdds/participant.hpp"
+ 
+@@ -113,6 +116,46 @@ PeerId peer_backend_id(PeerId peer) { return peer & 0x00ffffffffffffffULL; }
+ 
+ class ParticipantImpl;
+ class ReaderImpl;
++class WriterImpl;
++
++// Concurrent writes on one Writer must not allocate seq N+1 and reach a local
++// reader before seq N.  The dynamic TLS stack also makes re-entry through a
++// sample filter or test send hook fail closed instead of self-deadlocking on
++// the per-writer publish mutex.  Different writers remain independent.
++struct WriterPublishFrame {
++  WriterImpl *writer = nullptr;
++  WriterPublishFrame *previous = nullptr;
++};
++
++thread_local WriterPublishFrame *t_writer_publishing = nullptr;
++
++bool writer_publish_frame_active_on_this_thread(
++    const WriterImpl *writer) noexcept {
++  for (const WriterPublishFrame *frame = t_writer_publishing; frame != nullptr;
++       frame = frame->previous) {
++    if (frame->writer == writer) {
++      return true;
++    }
++  }
++  return false;
++}
++
++class WriterPublishScope {
++public:
++  explicit WriterPublishScope(WriterImpl *writer) noexcept {
++    frame_.writer = writer;
++    frame_.previous = t_writer_publishing;
++    t_writer_publishing = &frame_;
++  }
++
++  ~WriterPublishScope() { t_writer_publishing = frame_.previous; }
++
++  WriterPublishScope(const WriterPublishScope &) = delete;
++  WriterPublishScope &operator=(const WriterPublishScope &) = delete;
++
++private:
++  WriterPublishFrame frame_;
++};
+ 
+ // Reader callbacks can nest through application code (A's callback writes to
+ // B, whose callback retires A). A single TLS pointer mistakes that situation
+@@ -208,6 +251,10 @@ public:
+   std::string type_;
+   QosProfile qos_;
+   ParticipantImpl *owner_ = nullptr;
++  // Serializes sequence allocation, every matching local enqueue, and every
++  // transport send for this writer. Reader callbacks are collected and fired
++  // only after this mutex is released.
++  std::mutex publish_mutex_;
+   std::atomic<uint64_t> seq_{0};
+   std::atomic<size_t> matched_count_{0};
+   uint64_t birth_us_ = 0; // system_clock µs at create_writer(), announced
+@@ -451,12 +498,15 @@ public:
+   /// then serves dedup and lost accounting only). Reliable pairs buffer
+   /// out-of-order arrivals in `reorder` and deliver only contiguous
+   /// sequences, so take() never observes reordering (e.g. 1,3,2); holes are
+-  /// healed by precise NACK retransmission, or declared lost by GAP / window
+-  /// overflow — both advance the baseline and flush whatever then becomes
+-  /// contiguous. The reorder buffer is byte-bounded per writer AND against a
+-  /// participant-global budget (atomically reserved before buffering, so
+-  /// concurrent readers cannot overrun it); exceeding either bound gives up
+-  /// on the hole (counted lost) instead of growing memory.
++  /// healed by precise NACK retransmission, or declared lost by an explicit
++  /// writer GAP, which advances the baseline and flushes whatever then becomes
++  /// contiguous. A reliable sample beyond the 64-bit selective-ACK window, or
++  /// one that cannot fit the reorder budget, is dropped and NACKed from the
++  /// current baseline; neither condition may turn a recoverable hole into a
++  /// cumulative ACK. The reorder buffer is byte-bounded per writer AND against
++  /// a participant-global budget (atomically reserved before buffering, so
++  /// concurrent readers cannot overrun it); rejected copies are requested
++  /// again as the window advances rather than growing memory.
+   ///
+   /// Payload admission filter (sample_filter_, e.g. the service-response
+   /// lane): a rejected sample still counts as RECEIVED for sequencing — its
+@@ -566,9 +616,21 @@ public:
+       bool queued = false;
+       const uint64_t offset = seq - st.last_seq - 1;
+       if (offset >= 64) {
+-        // Too far ahead to track: jump the baseline to seq-1 (delivering
+-        // buffered samples in order, counting the rest of the hole lost),
+-        // then fall through to the contiguous path for `seq` itself.
++        if (reliable) {
++          // The ACKNACK bitmap can describe only [base, base+63].  A DATA
++          // beyond that range is still recoverable from reliable writer
++          // history, so do not advance `last_seq` and accidentally turn the
++          // unseen prefix into a cumulative ACK. Drop this copy and request
++          // the current window. Once its head is healed, the next ACKNACK (or
++          // heartbeat) exposes the following window and the writer resends
++          // this sample there.
++          gap_detected = true;
++          gap_base = st.last_seq + 1;
++          gap_bitmap = st.window;
++          return false;
++        }
++        // BEST_EFFORT has no retransmit contract. Preserve its bounded-window
++        // behavior: account the unobservable gap and accept the newest sample.
+         queued = jump_baseline_locked(st, seq - 1);
+       } else if (offset > 0) {
+         const uint64_t bit = 1ULL << offset;
+@@ -586,9 +648,15 @@ public:
+             return false;
+           }
+           if (!reorder_fits_locked(st, len) || !try_reserve_reorder(len)) {
+-            // Reorder budget exceeded: give up on the hole rather than grow
+-            // memory without bound; the jump accounts the hole lost once.
+-            queued = jump_baseline_locked(st, seq - 1);
++            // Bound memory without turning a recoverable reliable sample into
++            // a cumulative ACK. Drop this copy, retain the current receive
++            // window and request its missing head. Once the head advances, a
++            // later ACK/HEARTBEAT requests this sample again when it is
++            // contiguous (and therefore needs no reorder allocation).
++            gap_detected = true;
++            gap_base = st.last_seq + 1;
++            gap_bitmap = st.window;
++            return false;
+           } else {
+             // The global reservation precedes every payload/map allocation.
+             // It remains tentative until the map owns the sample; any exception
+@@ -622,12 +690,14 @@ public:
+               if (reorder_reserved) {
+                 release_global(reorder_budget_, len);
+               }
+-              // Treat allocation failure exactly like a bounded reorder
+-              // rejection: advance over the unbufferable hole and allow the
+-              // current sample to use the normal, independently bounded
+-              // delivery queue below. No exception may escape the transport
+-              // path.
+-              queued = jump_baseline_locked(st, seq - 1);
++              // Treat allocation failure like bounded reorder rejection: keep
++              // the reliable baseline, request the existing hole, and retry
++              // this sample later as the window advances. No exception may
++              // escape the transport path and no unseen prefix is ACKed.
++              gap_detected = true;
++              gap_base = st.last_seq + 1;
++              gap_bitmap = st.window;
++              return false;
+             }
+           }
+         } else {
+@@ -1307,8 +1377,8 @@ private:
+     return queued;
+   }
+ 
+-  /// Advance the baseline to new_base (> last_seq): a writer GAP, a sequence
+-  /// jump beyond the 64-seq tracking window, or a reorder-buffer overflow.
++  /// Advance the baseline to new_base (> last_seq): a writer GAP or a
++  /// BEST_EFFORT sequence jump beyond the 64-seq tracking window.
+   /// Buffered samples up to new_base are delivered first, in sequence order
+   /// (received data is never dropped); the never-received rest of the hole
+   /// is counted lost exactly once — unless count_lost is false (a PRE-JOIN
+@@ -1951,73 +2021,101 @@ public:
+   }
+ 
+   bool write_sample(WriterImpl *raw, const uint8_t *data, size_t len) {
+-    const uint64_t pub_time_us = now_us();
+-    const uint64_t pub_time_ms = pub_time_us / 1000;
++    // Remote DATA admission invokes a filter while its Participant mutex is
++    // held; local admission invokes it while a writer publish mutex is held.
++    // Publishing from any sample-filter stack can therefore self-lock or form
++    // a cross-Participant/cross-writer ABBA cycle. Reject before taking either
++    // mutex. Data callbacks run outside these locks and remain free to write.
++    if (t_sample_filter_delivering != nullptr) {
++      return false;
++    }
+ 
+     std::shared_ptr<WriterImpl> w;
+-    std::vector<PeerId> targets;
+-    std::vector<std::shared_ptr<ReaderImpl>> local_readers;
+-    uint64_t seq = 0;
+     {
+       std::lock_guard<std::mutex> lock(mutex_);
+       const auto it = writers_.find(raw);
+       if (it == writers_.end()) {
+         return false; // destroyed concurrently with this write
+       }
+-      w = it->second; // held for the unlocked section below
+-      // Claim the sequence number under the lock so a rejected cache write
+-      // (KEEP_ALL backpressure) does not burn a seq and open a hole.
+-      // Drain only entries proven received by every entitled current/suspended
+-      // association before checking a KEEP_ALL cap.  This makes the cap bound
+-      // actual unacknowledged history, not the process lifetime send count.
+-      reclaim_acked_history_locked(*w);
+-      seq = w->seq_.load() + 1;
+-      if (!w->cache_sample(seq, pub_time_ms, pub_time_us, data, len)) {
+-        return false; // KEEP_ALL history full: rejected, nothing sent
+-      }
+-      w->seq_.store(seq);
+-      // With no eligible remote reader, a VOLATILE reliable writer has no
+-      // retransmit obligation for this just-appended sample.  Re-evaluate now
+-      // so an idle/no-subscriber publisher cannot consume KEEP_ALL forever.
+-      reclaim_acked_history_locked(*w);
+-      targets = send_targets_locked(*w);
+-      // Intra-participant delivery: matching local readers get the sample
+-      // straight from the writer history, no wire hop. Shared_ptr copies keep
+-      // every reader alive past a concurrent destroy_reader(). Strict
+-      // requested/offered compatibility (RELIABLE reader never takes
+-      // BEST_EFFORT data) applies here; the payload admission filter
+-      // (service-response lanes) is applied inside enqueue() so the local and
+-      // wire paths cannot diverge.
+-      for (auto &kv : readers_) {
+-        ReaderImpl *r = kv.first;
+-        if (r->ignore_local_) {
+-          continue;
++      w = it->second; // lifetime pin before waiting on publish_mutex_
++    }
++
++    // A sample filter or test hook can call Writer::write(). Waiting on our
++    // own non-recursive mutex would deadlock; rejecting that nested write also
++    // prevents it from overtaking the sample whose filter is still running.
++    if (writer_publish_frame_active_on_this_thread(w.get())) {
++      return false;
++    }
++
++    std::vector<std::shared_ptr<ReaderImpl>> to_notify;
++    bool result = false;
++    {
++      std::unique_lock<std::mutex> publish_lock(w->publish_mutex_);
++      WriterPublishScope publish_scope(w.get());
++      const uint64_t pub_time_us = now_us();
++      const uint64_t pub_time_ms = pub_time_us / 1000;
++      std::vector<PeerId> targets;
++      std::vector<std::shared_ptr<ReaderImpl>> local_readers;
++      uint64_t seq = 0;
++      {
++        std::lock_guard<std::mutex> lock(mutex_);
++        const auto it = writers_.find(raw);
++        if (it == writers_.end() || it->second != w) {
++          return false; // detached while this call waited for its turn
+         }
+-        if (r->topic_ == w->topic_ && r->type_ == w->type_ &&
+-            qos_compatible(r->qos_, w->qos_)) {
+-          local_readers.push_back(kv.second);
++        // Claim the sequence number under both locks so cache insertion,
++        // local delivery and transport sends are one per-writer ordered lane.
++        // A rejected KEEP_ALL write does not burn a seq and open a hole.
++        reclaim_acked_history_locked(*w);
++        seq = w->seq_.load() + 1;
++        if (!w->cache_sample(seq, pub_time_ms, pub_time_us, data, len)) {
++          return false; // KEEP_ALL history full: rejected, nothing sent
++        }
++        w->seq_.store(seq);
++        // With no eligible remote reader, a VOLATILE reliable writer has no
++        // retransmit obligation for this just-appended sample.  Re-evaluate
++        // now so an idle publisher cannot consume KEEP_ALL forever.
++        reclaim_acked_history_locked(*w);
++        targets = send_targets_locked(*w);
++        // Matching local readers receive without a wire hop. Shared ownership
++        // keeps them alive past concurrent destroy_reader(); enqueue() applies
++        // the same requested/offered and payload-filter rules as wire ingress.
++        for (auto &kv : readers_) {
++          ReaderImpl *r = kv.first;
++          if (r->ignore_local_) {
++            continue;
++          }
++          if (r->topic_ == w->topic_ && r->type_ == w->type_ &&
++              qos_compatible(r->qos_, w->qos_)) {
++            local_readers.push_back(kv.second);
++          }
++        }
++      }
++
++      for (const auto &r : local_readers) {
++        bool gap = false;
++        uint64_t gap_base = 0;
++        uint64_t gap_bitmap = 0;
++        if (r->enqueue(w->guid_, seq, data, len, w->qos_, pub_time_ms, gap,
++                       gap_base, gap_bitmap)) {
++          to_notify.push_back(r);
+         }
+       }
+-    }
+ 
+-    for (const auto &r : local_readers) {
+-      bool gap = false;
+-      uint64_t gap_base = 0;
+-      uint64_t gap_bitmap = 0;
+-      if (r->enqueue(w->guid_, seq, data, len, w->qos_, pub_time_ms, gap,
+-                     gap_base, gap_bitmap)) {
+-        r->fire_callback();
++      const uint16_t flags =
++          w->qos_.reliability == Reliability::RELIABLE ? kFlagReliable : 0;
++      bool any = false;
++      for (PeerId peer : targets) {
++        any |= send_sample_to(peer, w->guid_, w->epoch_, seq, pub_time_ms, data,
++                              len, flags);
+       }
+-    }
++      result = any || targets.empty(); // no matched peers is not a failure
++    } // publish mutex and recursive-write guard are gone before callbacks
+ 
+-    const uint16_t flags =
+-        w->qos_.reliability == Reliability::RELIABLE ? kFlagReliable : 0;
+-    bool any = false;
+-    for (PeerId peer : targets) {
+-      any |= send_sample_to(peer, w->guid_, w->epoch_, seq, pub_time_ms, data,
+-                            len, flags);
++    for (const auto &r : to_notify) {
++      r->fire_callback();
+     }
+-    return any || targets.empty(); // no matched peers is not a failure
++    return result;
+   }
+ 
+   WriterHistoryStatus writer_history_status(WriterImpl *raw) {
+diff --git a/src/transport_dsoftbus.cpp b/src/transport_dsoftbus.cpp
+index 3bafb761aa6f571108b293904e9e2c3386380095..134b4c4754bd461bb9e8827932ebbcb8d0c0a297 100644
+--- a/src/transport_dsoftbus.cpp
++++ b/src/transport_dsoftbus.cpp
+@@ -16,11 +16,15 @@
+ // plane. OpenHarmony only; built when MDDS_WITH_DSOFTBUS is on.
+ //
+ // KaihongOS board facts that shape this code (verified 2026-08-29):
+-//  - The process must self-assign a native token carrying
+-//    ohos.permission.DISTRIBUTED_DATASYNC / DISTRIBUTED_SOFTBUS_CENTER via
+-//    GetAccessTokenId + SetSelfTokenID, and pkgName/session name must match
+-//    the device whitelist softbus_trans_permission.json: PKG_NAME
+-//    "com.kaihong.mdds", session names "com.kaihong.mdds.*".
++//  - The process must already carry a native token with
++//    ohos.permission.DISTRIBUTED_DATASYNC / DISTRIBUTED_SOFTBUS_CENTER, and
++//    pkgName/session name must match the device whitelist
++//    softbus_trans_permission.json: PKG_NAME "com.kaihong.mdds", session
++//    names "com.kaihong.mdds.*".  Identity is a process-launch concern:
++//    libmdds never calls SetSelfTokenID.  The installed mdds_token_exec helper
++//    provisions the dedicated process before exec when a native service
++//    launcher is not available; Socket()/Listen() remain the authoritative
++//    fail-closed permission check.
+ //  - Synchronous Bind() fails with SOFTBUS_TRANS_PEER_SESSION_NOT_CREATED on
+ //    this build; BindAsync() + OnBind works.
+ //  - Server side: Listen socket accepts each peer on a NEW socket fd
+@@ -85,11 +89,9 @@
+ #include <thread>
+ #include <vector>
+ 
+-#include "nativetoken_kit.h"
+ #include "socket.h"
+ #include "softbus_bus_center.h"
+ #include "softbus_error_code.h"
+-#include "token_setproc.h"
+ 
+ #include "callback_registry.hpp"
+ #include "send_lane.hpp"
+@@ -295,8 +297,6 @@ public:
+       session_name_ = session_name;
+     }
+ 
+-    setup_token();
+-
+     SocketInfo info{};
+     info.name = session_name_.data();
+     info.pkgName = const_cast<char *>(kPkgName);
+@@ -307,7 +307,10 @@ public:
+     if (sock_ret < 0) {
+       {
+         std::lock_guard<std::mutex> lock(mutex_);
+-        set_error("Socket(name=%s)=%d", session_name_.c_str(), sock_ret);
++        set_error("Socket(name=%s)=%d (process token must be provisioned "
++                  "before loading libmdds; use mdds_token_exec or the "
++                  "platform service launcher)",
++                  session_name_.c_str(), sock_ret);
+       }
+       reg_lock.unlock();
+       finish_unregistered_start_failure();
+@@ -918,20 +921,6 @@ private:
+     }
+   }
+ 
+-  static void setup_token() {
+-    const char *perms[] = {
+-        "ohos.permission.DISTRIBUTED_DATASYNC",
+-        "ohos.permission.DISTRIBUTED_SOFTBUS_CENTER",
+-    };
+-    NativeTokenInfoParams info{};
+-    info.permsNum = 2;
+-    info.perms = perms;
+-    info.processName = kPkgName;
+-    info.aplStr = "system_basic";
+-    uint64_t token_id = GetAccessTokenId(&info);
+-    SetSelfTokenID(token_id);
+-  }
+-
+   void poll_loop() {
+     // Keep this allocation alive independently of DsoftbusTransport.  A
+     // peer-down callback below may destroy the transport on this very worker;
+diff --git a/test/mdds_token_boundary_probe.cpp b/test/mdds_token_boundary_probe.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..2758dcc6bb367a822755c7664117abe12a6e1ec5
+--- /dev/null
++++ b/test/mdds_token_boundary_probe.cpp
+@@ -0,0 +1,113 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++// Board-only executable used by the release gate to prove that starting and
++// stopping libmdds does not mutate the caller's OpenHarmony process token.
++
++#include <cerrno>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <limits>
++#include <memory>
++#include <string>
++
++#include "mdds/participant.hpp"
++#include "token_setproc.h"
++
++namespace {
++
++enum class ExpectedStart { FAILURE, SUCCESS };
++
++bool parse_domain(const char *raw, uint32_t &domain) {
++  if (raw == nullptr || *raw == '\0') {
++    return false;
++  }
++  char *end = nullptr;
++  errno = 0;
++  const unsigned long value = std::strtoul(raw, &end, 10);
++  if (errno != 0 || end == raw || *end != '\0' ||
++      value > std::numeric_limits<uint32_t>::max()) {
++    return false;
++  }
++  domain = static_cast<uint32_t>(value);
++  return true;
++}
++
++} // namespace
++
++int main(int argc, char **argv) {
++  if (argc != 3 ||
++      (std::strcmp(argv[1], "success") != 0 &&
++       std::strcmp(argv[1], "failure") != 0)) {
++    std::fprintf(stderr,
++                 "usage: mdds_token_boundary_probe success|failure DOMAIN\n");
++    return 2;
++  }
++  const ExpectedStart expected = std::strcmp(argv[1], "success") == 0
++                                     ? ExpectedStart::SUCCESS
++                                     : ExpectedStart::FAILURE;
++  uint32_t domain = 0;
++  if (!parse_domain(argv[2], domain)) {
++    std::fprintf(stderr, "mdds_token_boundary_probe: invalid domain: %s\n",
++                 argv[2]);
++    return 2;
++  }
++
++  const uint64_t before = GetSelfTokenID();
++  mdds::ParticipantConfig config;
++  config.domain_id = domain;
++  config.use_udp_loopback = false;
++  config.udp_cross_device = false;
++  config.use_dsoftbus = true;
++  config.strict_transports = true;
++  std::string init_error;
++  std::unique_ptr<mdds::Participant> participant =
++      mdds::Participant::create(config, &init_error);
++  const bool started = participant != nullptr;
++  participant.reset();
++  const uint64_t after = GetSelfTokenID();
++
++  const bool expected_start = expected == ExpectedStart::SUCCESS;
++  const std::string expected_socket_failure =
++      "dsoftbus: Socket(name=com.kaihong.mdds.d" + std::to_string(domain) +
++      ")=-";
++  // The negative leg must fail at the real DSoftBus Socket authorization
++  // boundary, not at generic Participant validation or a later Listen/bind
++  // stage. Its paired positive leg runs this same binary and domain through
++  // the launcher-under-test, excluding a domain/session configuration error.
++  const bool socket_rejected =
++      init_error.find("active=[]") != std::string::npos &&
++      init_error.find(expected_socket_failure) != std::string::npos &&
++      init_error.find("process token must be provisioned") != std::string::npos;
++  const bool failure_reason_ok = expected_start || socket_rejected;
++  const bool passed =
++      before == after && started == expected_start && failure_reason_ok;
++  std::printf(
++      "MDDS_TOKEN_BOUNDARY V=1 BEFORE=%llu AFTER=%llu START=%s EXPECT=%s "
++      "FAILURE_STAGE=%s RESULT=%s\n",
++      static_cast<unsigned long long>(before),
++      static_cast<unsigned long long>(after), started ? "SUCCESS" : "FAILURE",
++      expected_start ? "SUCCESS" : "FAILURE",
++      expected_start ? "NOT_APPLICABLE"
++                     : (socket_rejected ? "DSOFTBUS_SOCKET_REJECTED"
++                                        : "UNEXPECTED"),
++      passed ? "PASS" : "FAIL");
++  if (!init_error.empty()) {
++    std::fprintf(stderr, "mdds_token_boundary_probe: init_error=%s\n",
++                 init_error.c_str());
++  }
++  return passed ? 0 : 1;
++}
+diff --git a/test/test_participant.cpp b/test/test_participant.cpp
+index 121c628cd7ebe4b424f145f2c4e87bdb49fd1209..0b0fb9e855e209e4df1ffbee7afa6156b58f91a8 100644
+--- a/test/test_participant.cpp
++++ b/test/test_participant.cpp
+@@ -19,6 +19,7 @@
+ #include <chrono>
+ #include <climits>
+ #include <condition_variable>
++#include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+ #include <limits>
+@@ -1506,11 +1507,11 @@ TEST(ReliabilityHistory, GatewaySizedLostAcksRetain1024AndRecoverByAckNack) {
+   std::atomic<bool> drop_acks{true};
+   // Keep the reader at its initial contiguous baseline while the real writer
+   // fills.  Dropping only seq 1 lets a 1024-frame burst outrun ReaderImpl's
+-  // deliberately bounded 64-sample reorder window; that correctly turns the
+-  // far-ahead frames into loss, but makes this ACK-recovery test ask for an
+-  // impossible all-1024 delivery.  Dropping the initial DATA burst instead
+-  // makes recovery proceed solely through the writer's retained history and
+-  // its bounded 64-bit ACKNACK windows.
++  // deliberately bounded 64-sample reorder window; far-ahead copies are then
++  // dropped (without advancing the ACK) and must recover over many later
++  // ACKNACK windows.  This test is about filling history before *any* recovery,
++  // so dropping the initial DATA burst keeps that concern isolated and makes
++  // recovery proceed solely through the writer's retained history.
+   std::atomic<bool> drop_initial_data{true};
+   std::atomic<size_t> dropped_initial_data{0};
+   std::atomic<size_t> seq1_sends{0};
+@@ -2179,10 +2180,148 @@ TEST(ReliabilityTest, DeliversInOrderAfterRetransmit) {
+   EXPECT_EQ(r->messages_lost(), 0u);
+ }
+ 
++// The selective ACK bitmap covers exactly 64 sequences starting at base.
++// A later DATA outside that window is not proof that the missing head was
++// lost: a KEEP_ALL writer still owns it and can retransmit it. Exercise the
++// last representable offset and both first out-of-window offsets while holding
++// seq 2 off the wire until every successor has reached the reader.
++TEST(ReliabilityTest,
++     FarAheadReliableDataNeverAdvancesCumulativeAckPastRecoverableHole) {
++  for (const uint64_t last_seq : {65u, 66u, 67u}) {
++    SCOPED_TRACE("last_seq=" + std::to_string(last_seq) +
++                 " offset=" + std::to_string(last_seq - 2));
++    std::atomic<bool> release_seq2{false};
++    std::atomic<size_t> seq2_sends{0};
++    std::atomic<size_t> acks_at_base2{0};
++    std::atomic<uint64_t> max_ack_base_before_release{0};
++
++    auto cfg_writer = test_config_3();
++    cfg_writer.max_keep_all_writer_history_samples = 128;
++    cfg_writer.max_keep_all_writer_history_bytes = 1024 * 1024;
++    cfg_writer.test_send_hook = [&](const uint8_t *frame, size_t len) {
++      mdds::FrameHeader header{};
++      if (mdds::decode_header(frame, len, header) &&
++          header.type == mdds::FrameType::HEARTBEAT &&
++          !release_seq2.load(std::memory_order_acquire)) {
++        // Keep discovery periodic but remove unsolicited ACKs from the causal
++        // per-DATA latch below. The explicit post-release heartbeat passes.
++        return true;
++      }
++      if (is_data_seq(frame, len, 2)) {
++        ++seq2_sends;
++        return !release_seq2.load(std::memory_order_acquire);
++      }
++      return false;
++    };
++    auto cfg_reader = test_config_3();
++    cfg_reader.max_delivery_samples_per_reader = 128;
++    cfg_reader.max_delivery_samples_total = 128;
++    cfg_reader.test_send_hook = [&](const uint8_t *frame, size_t len) {
++      mdds::AckNackBody body{};
++      if (!mdds::decode_acknack(frame, len, body)) {
++        return false;
++      }
++      if (body.base_seq == 2) {
++        ++acks_at_base2;
++      }
++      if (!release_seq2.load(std::memory_order_acquire)) {
++        uint64_t observed =
++            max_ack_base_before_release.load(std::memory_order_relaxed);
++        while (observed < body.base_seq &&
++               !max_ack_base_before_release.compare_exchange_weak(
++                    observed, body.base_seq, std::memory_order_relaxed)) {
++        }
++        // Count the reader's exact post-enqueue state, but do not let a
++        // delayed/duplicate ACK drive writer retransmissions that could satisfy
++        // the next iteration's latch. The explicit release heartbeat supplies
++        // the first ACK the writer is allowed to observe.
++        return true;
++      }
++      return false;
++    };
++
++    auto writer_participant = mdds::Participant::create(cfg_writer);
++    auto reader_participant = mdds::Participant::create(cfg_reader);
++    ASSERT_NE(writer_participant, nullptr);
++    ASSERT_NE(reader_participant, nullptr);
++
++    auto qos = default_qos();
++    qos.history = mdds::History::KEEP_ALL;
++    qos.durability = mdds::Durability::VOLATILE;
++    auto *writer = writer_participant->create_writer(
++        "/far_ahead_window_" + std::to_string(last_seq),
++        "test/FarAheadWindow", qos);
++    auto *reader = reader_participant->create_reader(
++        "/far_ahead_window_" + std::to_string(last_seq),
++        "test/FarAheadWindow", qos);
++    ASSERT_NE(writer, nullptr);
++    ASSERT_NE(reader, nullptr);
++    ASSERT_TRUE(wait_matched(writer, 1));
++    ASSERT_TRUE(wait_reader_matched(reader, 1));
++    ASSERT_TRUE(wait_until(
++        [&] { return writer->history_status().active_associations == 1; },
++        5s, 5ms));
++
++    const uint8_t payload = 0x64;
++    ASSERT_TRUE(writer->write(&payload, sizeof(payload))); // seq 1
++    std::vector<uint8_t> out;
++    mdds::MessageInfo info;
++    ASSERT_TRUE(wait_until([&] { return reader->take(out, info); }, 5s, 5ms));
++    ASSERT_EQ(info.seq, 1u);
++    ASSERT_TRUE(wait_until([&] { return acks_at_base2.load() >= 1; }, 5s, 5ms));
++
++    for (uint64_t seq = 2; seq <= last_seq; ++seq) {
++      const size_t acks_before = acks_at_base2.load(std::memory_order_acquire);
++      ASSERT_TRUE(writer->write(&payload, sizeof(payload))) << "seq=" << seq;
++      if (seq > 2) {
++        // With periodic HEARTBEAT disabled for this test, a fresh base-2 ACK
++        // proves this exact DATA reached enqueue(). This covers offsets 63,
++        // 64 and 65 instead of letting an earlier ACK satisfy a bulk count.
++        ASSERT_TRUE(wait_until(
++            [&] {
++              return acks_at_base2.load(std::memory_order_acquire) >
++                     acks_before;
++            },
++            5s, 5ms))
++            << "reader did not process seq=" << seq;
++      }
++    }
++    EXPECT_EQ(max_ack_base_before_release.load(), 2u)
++        << "an out-of-window DATA became a false cumulative ACK";
++    EXPECT_EQ(reader->messages_lost(), 0u);
++
++    release_seq2.store(true, std::memory_order_release);
++    writer->assert_liveliness(); // solicit the now-allowed seq-2 retransmit
++    std::vector<uint64_t> received{1};
++    ASSERT_TRUE(wait_until(
++        [&] {
++          while (reader->take(out, info)) {
++            received.push_back(info.seq);
++          }
++          return received.size() == last_seq;
++        },
++        15s, 5ms));
++    ASSERT_EQ(received.size(), last_seq);
++    for (uint64_t seq = 1; seq <= last_seq; ++seq) {
++      EXPECT_EQ(received[seq - 1], seq);
++    }
++    EXPECT_EQ(reader->messages_lost(), 0u);
++    EXPECT_GE(seq2_sends.load(), 2u);
++    ASSERT_TRUE(wait_until(
++        [&] { return writer->history_status().retained_samples == 0; },
++        5s, 5ms));
++    std::printf("MDDS_RELIABLE_WINDOW OFFSET=%llu LAST_SEQ=%llu RESULT=PASS\n",
++                static_cast<unsigned long long>(last_seq - 2),
++                static_cast<unsigned long long>(last_seq));
++    std::fflush(stdout);
++  }
++}
++
+ // Reliable out-of-order buffering reserves the participant-global reorder
+-// budget before vector/map allocation. A forced first failure must release it:
+-// the later independent hole gets a second reservation attempt under an
+-// exactly-one-sample global cap, then heals normally by ACKNACK retransmit.
++// budget before vector/map allocation. A forced first failure must release it
++// without advancing the reliable ACK baseline: the rejected sample is retried
++// after its missing head arrives. A later independent hole then gets a second
++// reservation attempt under an exactly-one-sample global cap.
+ TEST(ReliabilityTest, ReorderCopyAndMapInsertFailureRollBackGlobalReservation) {
+   for (const char *failure_stage : {"reorder_copy", "reorder_map_insert"}) {
+     std::atomic<bool> fail_once{true};
+@@ -2234,7 +2373,7 @@ TEST(ReliabilityTest, ReorderCopyAndMapInsertFailureRollBackGlobalReservation) {
+ 
+     auto deadline = std::chrono::steady_clock::now() + 10s;
+     while (std::chrono::steady_clock::now() < deadline &&
+-           (reorder_attempts.load() < 2 || r->available() < 4)) {
++           (reorder_attempts.load() < 2 || r->available() < 5)) {
+       std::this_thread::sleep_for(5ms);
+     }
+     EXPECT_EQ(reorder_attempts.load(), 2u)
+@@ -2248,8 +2387,137 @@ TEST(ReliabilityTest, ReorderCopyAndMapInsertFailureRollBackGlobalReservation) {
+     while (r->take(out, info)) {
+       received.push_back(info.seq);
+     }
+-    EXPECT_EQ(received, (std::vector<uint64_t>{1, 3, 4, 5})) << failure_stage;
+-    EXPECT_EQ(r->messages_lost(), 1u) << failure_stage;
++    EXPECT_EQ(received, (std::vector<uint64_t>{1, 2, 3, 4, 5}))
++        << failure_stage;
++    EXPECT_EQ(r->messages_lost(), 0u) << failure_stage;
++  }
++}
++
++// Per-writer and participant-global reorder caps are hostile-input hard limits,
++// not license to cumulatively ACK a recoverable hole.  Swallow every ACK and
++// HEARTBEAT until seq 3 has produced a fresh base-2 ACK, so writer-side retry
++// cannot heal seq 2 first and bypass the rejection path.  The rejected copy is
++// then requested again after seq 2 heals and arrives contiguously without a
++// reorder allocation.
++TEST(ReliabilityTest, ReorderBudgetRejectionRetriesWithoutCumulativeAck) {
++  struct BudgetCase {
++    const char *name;
++    size_t per_writer;
++    size_t total;
++  };
++  constexpr size_t kPayloadBytes = 4;
++  for (const BudgetCase budget : {
++           BudgetCase{"per_writer", kPayloadBytes - 1, kPayloadBytes * 2},
++           BudgetCase{"participant_global", kPayloadBytes,
++                      kPayloadBytes - 1},
++       }) {
++    SCOPED_TRACE(budget.name);
++    std::atomic<bool> release_seq2{false};
++    std::atomic<size_t> seq2_sends{0};
++    std::atomic<size_t> seq3_sends{0};
++    std::atomic<size_t> acks_at_base2{0};
++    std::atomic<uint64_t> max_ack_base_before_release{0};
++
++    auto writer_config = test_config_3();
++    writer_config.test_send_hook = [&](const uint8_t *frame, size_t len) {
++      mdds::FrameHeader header{};
++      if (mdds::decode_header(frame, len, header) &&
++          header.type == mdds::FrameType::HEARTBEAT &&
++          !release_seq2.load(std::memory_order_acquire)) {
++        return true;
++      }
++      if (is_data_seq(frame, len, 2)) {
++        seq2_sends.fetch_add(1, std::memory_order_relaxed);
++        return !release_seq2.load(std::memory_order_acquire);
++      }
++      if (is_data_seq(frame, len, 3)) {
++        seq3_sends.fetch_add(1, std::memory_order_relaxed);
++      }
++      return false;
++    };
++    auto reader_config = test_config_3();
++    reader_config.max_reorder_bytes_per_writer = budget.per_writer;
++    reader_config.max_reorder_bytes_total = budget.total;
++    reader_config.test_send_hook = [&](const uint8_t *frame, size_t len) {
++      mdds::AckNackBody body{};
++      if (!mdds::decode_acknack(frame, len, body)) {
++        return false;
++      }
++      if (body.base_seq == 2) {
++        acks_at_base2.fetch_add(1, std::memory_order_relaxed);
++      }
++      if (!release_seq2.load(std::memory_order_acquire)) {
++        uint64_t observed =
++            max_ack_base_before_release.load(std::memory_order_relaxed);
++        while (observed < body.base_seq &&
++               !max_ack_base_before_release.compare_exchange_weak(
++                   observed, body.base_seq, std::memory_order_relaxed)) {
++        }
++        return true;
++      }
++      return false;
++    };
++
++    auto publisher = mdds::Participant::create(writer_config);
++    auto subscriber = mdds::Participant::create(reader_config);
++    ASSERT_NE(publisher, nullptr);
++    ASSERT_NE(subscriber, nullptr);
++    auto qos = default_qos();
++    qos.history = mdds::History::KEEP_ALL;
++    auto *writer = publisher->create_writer(
++        "/reorder_budget_retry_" + std::string(budget.name),
++        "test/ReorderBudgetRetry", qos);
++    auto *reader = subscriber->create_reader(
++        "/reorder_budget_retry_" + std::string(budget.name),
++        "test/ReorderBudgetRetry", qos);
++    ASSERT_NE(writer, nullptr);
++    ASSERT_NE(reader, nullptr);
++    ASSERT_TRUE(wait_matched(writer, 1));
++    ASSERT_TRUE(wait_reader_matched(reader, 1));
++    ASSERT_TRUE(wait_until(
++        [&] { return writer->history_status().active_associations == 1; }, 5s,
++        5ms));
++
++    const uint8_t payload[kPayloadBytes] = {0xA1, 0xB2, 0xC3, 0xD4};
++    ASSERT_TRUE(writer->write(payload, sizeof(payload))); // seq 1
++    std::vector<uint8_t> out;
++    mdds::MessageInfo info;
++    ASSERT_TRUE(wait_until([&] { return reader->take(out, info); }, 5s, 5ms));
++    ASSERT_EQ(info.seq, 1u);
++    ASSERT_TRUE(wait_until([&] { return acks_at_base2.load() >= 1; }, 5s, 5ms));
++
++    const size_t acks_before =
++        acks_at_base2.load(std::memory_order_acquire);
++    ASSERT_TRUE(writer->write(payload, sizeof(payload))); // seq 2: dropped
++    ASSERT_TRUE(writer->write(payload, sizeof(payload))); // seq 3: rejected
++    ASSERT_TRUE(wait_until(
++        [&] {
++          return acks_at_base2.load(std::memory_order_acquire) > acks_before;
++        },
++        5s, 5ms));
++    EXPECT_EQ(max_ack_base_before_release.load(), 2u)
++        << "budget rejection became a false cumulative ACK";
++    EXPECT_EQ(reader->available(), 0u)
++        << "seq 3 was queued instead of rejected by the configured cap";
++    EXPECT_EQ(seq3_sends.load(std::memory_order_relaxed), 1u);
++
++    release_seq2.store(true, std::memory_order_release);
++    writer->assert_liveliness();
++    std::vector<uint64_t> received{1};
++    ASSERT_TRUE(wait_until(
++        [&] {
++          while (reader->take(out, info)) {
++            received.push_back(info.seq);
++          }
++          return received.size() == 3;
++        },
++        10s, 5ms));
++    EXPECT_EQ(received, (std::vector<uint64_t>{1, 2, 3}));
++    EXPECT_EQ(reader->messages_lost(), 0u);
++    EXPECT_GE(seq2_sends.load(std::memory_order_relaxed), 2u);
++    EXPECT_GE(seq3_sends.load(std::memory_order_relaxed), 2u);
++    std::printf("MDDS_REORDER_BUDGET CASE=%s RESULT=PASS\n", budget.name);
++    std::fflush(stdout);
+   }
+ }
+ 
+@@ -3161,6 +3429,279 @@ TEST_F(ParticipantFixture, SampleFilterAppliesToLocalDelivery) {
+   EXPECT_EQ(r->messages_lost(), 0u);
+ }
+ 
++// Writer::write is thread-safe, including same-participant delivery. Hold seq
++// 2 inside the reader's filter while another thread attempts seq 3..67. If
++// sequence allocation can outrun local enqueue, seq 66 is outside the 64-bit
++// receive window and has no wire ACK/retransmit path to recover it.
++TEST(WriterConcurrency, SameWriterLocalDeliveryCommitsInSequenceOrder) {
++  auto cfg = test_config_3();
++  cfg.max_delivery_samples_per_reader = 128;
++  cfg.max_delivery_samples_total = 128;
++  auto participant = mdds::Participant::create(cfg);
++  ASSERT_NE(participant, nullptr);
++
++  auto qos = default_qos();
++  qos.history = mdds::History::KEEP_ALL;
++  auto *writer = participant->create_writer(
++      "/concurrent_local", "test/ConcurrentLocal", qos);
++  auto *reader = participant->create_reader(
++      "/concurrent_local", "test/ConcurrentLocal", qos);
++  ASSERT_NE(writer, nullptr);
++  ASSERT_NE(reader, nullptr);
++  ASSERT_TRUE(wait_matched(writer, 1));
++
++  std::mutex gate_mutex;
++  std::condition_variable gate_cv;
++  bool release_seq2 = false;
++  std::atomic<bool> seq2_filter_entered{false};
++  reader->set_sample_filter([&](const uint8_t *data, size_t len) {
++    if (len == 1 && data[0] == 2) {
++      std::unique_lock<std::mutex> lock(gate_mutex);
++      seq2_filter_entered.store(true, std::memory_order_release);
++      gate_cv.notify_all();
++      gate_cv.wait(lock, [&] { return release_seq2; });
++    }
++    return true;
++  });
++
++  const uint8_t first = 1;
++  ASSERT_TRUE(writer->write(&first, sizeof(first)));
++
++  std::atomic<bool> seq2_ok{false};
++  const uint8_t second = 2;
++  std::thread first_thread([&] {
++    seq2_ok.store(writer->write(&second, sizeof(second)),
++                  std::memory_order_release);
++  });
++  if (!wait_until(
++          [&] { return seq2_filter_entered.load(std::memory_order_acquire); },
++          5s, 5ms)) {
++    {
++      std::lock_guard<std::mutex> lock(gate_mutex);
++      release_seq2 = true;
++    }
++    gate_cv.notify_all();
++    first_thread.join();
++    FAIL() << "seq-2 filter never entered";
++    return;
++  }
++
++  std::atomic<bool> follower_started{false};
++  std::atomic<size_t> follower_completed{0};
++  std::atomic<bool> follower_ok{true};
++  std::thread follower([&] {
++    follower_started.store(true, std::memory_order_release);
++    for (uint8_t value = 3; value <= 67; ++value) {
++      if (!writer->write(&value, sizeof(value))) {
++        follower_ok.store(false, std::memory_order_release);
++      }
++      follower_completed.fetch_add(1, std::memory_order_release);
++    }
++  });
++  const bool follower_did_start = wait_until(
++      [&] { return follower_started.load(std::memory_order_acquire); }, 2s,
++      1ms);
++  if (follower_did_start) {
++    std::this_thread::sleep_for(100ms);
++    EXPECT_EQ(follower_completed.load(std::memory_order_acquire), 0u)
++        << "a later write overtook seq 2 while its local enqueue was blocked";
++  }
++
++  {
++    std::lock_guard<std::mutex> lock(gate_mutex);
++    release_seq2 = true;
++  }
++  gate_cv.notify_all();
++  first_thread.join();
++  follower.join();
++  ASSERT_TRUE(follower_did_start);
++  ASSERT_TRUE(seq2_ok.load(std::memory_order_acquire));
++  ASSERT_TRUE(follower_ok.load(std::memory_order_acquire));
++  ASSERT_EQ(follower_completed.load(std::memory_order_acquire), 65u);
++
++  std::vector<uint64_t> sequences;
++  std::vector<uint8_t> payloads;
++  std::vector<uint8_t> out;
++  mdds::MessageInfo info;
++  while (reader->take(out, info)) {
++    sequences.push_back(info.seq);
++    ASSERT_EQ(out.size(), 1u);
++    payloads.push_back(out[0]);
++  }
++  ASSERT_EQ(sequences.size(), 67u);
++  ASSERT_EQ(payloads.size(), 67u);
++  for (uint64_t seq = 1; seq <= 67; ++seq) {
++    EXPECT_EQ(sequences[seq - 1], seq);
++    EXPECT_EQ(payloads[seq - 1], seq);
++  }
++  EXPECT_EQ(reader->messages_lost(), 0u);
++}
++
++// The ordered publish section spans the sample filter. A recursive write on
++// that same writer must fail promptly rather than deadlocking or overtaking
++// the sample currently being admitted. Data callbacks are outside this gate.
++TEST(WriterConcurrency, RecursiveSameWriterWriteFromFilterFailsClosed) {
++  auto participant = mdds::Participant::create(test_config_3());
++  ASSERT_NE(participant, nullptr);
++  auto *writer = participant->create_writer(
++      "/recursive_writer", "test/RecursiveWriter", default_qos());
++  auto *reader = participant->create_reader(
++      "/recursive_writer", "test/RecursiveWriter", default_qos());
++  ASSERT_NE(writer, nullptr);
++  ASSERT_NE(reader, nullptr);
++  ASSERT_TRUE(wait_matched(writer, 1));
++
++  std::atomic<bool> nested_called{false};
++  std::atomic<bool> nested_result{true};
++  reader->set_sample_filter([&](const uint8_t *data, size_t len) {
++    if (len == 1 && data[0] == 1) {
++      const uint8_t nested = 2;
++      nested_result.store(writer->write(&nested, sizeof(nested)),
++                          std::memory_order_release);
++      nested_called.store(true, std::memory_order_release);
++    }
++    return true;
++  });
++
++  const uint8_t sample = 1;
++  ASSERT_TRUE(writer->write(&sample, sizeof(sample)));
++  ASSERT_TRUE(nested_called.load(std::memory_order_acquire));
++  EXPECT_FALSE(nested_result.load(std::memory_order_acquire));
++
++  std::vector<uint8_t> out;
++  mdds::MessageInfo info;
++  ASSERT_TRUE(reader->take(out, info));
++  EXPECT_EQ(info.seq, 1u);
++  EXPECT_EQ(out, (std::vector<uint8_t>{1}));
++  EXPECT_FALSE(reader->take(out, info));
++}
++
++// Two filters on different Participants must not each hold one writer's
++// publish mutex and then wait forever for the other. Every filter-stack write
++// is rejected before any participant/publish mutex is acquired.
++TEST(WriterConcurrency, CrossParticipantFilterPublishCannotFormAbbaDeadlock) {
++  auto participant_a = mdds::Participant::create(test_config_3());
++  auto participant_b = mdds::Participant::create(test_config_3());
++  ASSERT_NE(participant_a, nullptr);
++  ASSERT_NE(participant_b, nullptr);
++  auto *writer_a = participant_a->create_writer(
++      "/filter_abba_a", "test/FilterAbbaA", default_qos());
++  auto *reader_a = participant_a->create_reader(
++      "/filter_abba_a", "test/FilterAbbaA", default_qos());
++  auto *writer_b = participant_b->create_writer(
++      "/filter_abba_b", "test/FilterAbbaB", default_qos());
++  auto *reader_b = participant_b->create_reader(
++      "/filter_abba_b", "test/FilterAbbaB", default_qos());
++  ASSERT_NE(writer_a, nullptr);
++  ASSERT_NE(reader_a, nullptr);
++  ASSERT_NE(writer_b, nullptr);
++  ASSERT_NE(reader_b, nullptr);
++  ASSERT_TRUE(wait_matched(writer_a, 1));
++  ASSERT_TRUE(wait_matched(writer_b, 1));
++
++  std::mutex barrier_mutex;
++  std::condition_variable barrier_cv;
++  size_t filters_entered = 0;
++  std::atomic<bool> nested_a_result{true};
++  std::atomic<bool> nested_b_result{true};
++  auto wait_for_both_filters = [&] {
++    std::unique_lock<std::mutex> lock(barrier_mutex);
++    ++filters_entered;
++    barrier_cv.notify_all();
++    barrier_cv.wait(lock, [&] { return filters_entered == 2; });
++  };
++  reader_a->set_sample_filter([&](const uint8_t *, size_t) {
++    wait_for_both_filters();
++    const uint8_t nested = 0xB1;
++    nested_a_result.store(writer_b->write(&nested, sizeof(nested)),
++                          std::memory_order_release);
++    return true;
++  });
++  reader_b->set_sample_filter([&](const uint8_t *, size_t) {
++    wait_for_both_filters();
++    const uint8_t nested = 0xA1;
++    nested_b_result.store(writer_a->write(&nested, sizeof(nested)),
++                          std::memory_order_release);
++    return true;
++  });
++
++  std::atomic<size_t> writes_done{0};
++  std::atomic<bool> outer_a_ok{false};
++  std::atomic<bool> outer_b_ok{false};
++  const uint8_t sample_a = 0xA0;
++  const uint8_t sample_b = 0xB0;
++  std::thread thread_a([&] {
++    outer_a_ok.store(writer_a->write(&sample_a, sizeof(sample_a)),
++                     std::memory_order_release);
++    writes_done.fetch_add(1, std::memory_order_release);
++  });
++  std::thread thread_b([&] {
++    outer_b_ok.store(writer_b->write(&sample_b, sizeof(sample_b)),
++                     std::memory_order_release);
++    writes_done.fetch_add(1, std::memory_order_release);
++  });
++  if (!wait_until(
++          [&] { return writes_done.load(std::memory_order_acquire) == 2; }, 5s,
++          5ms)) {
++    ADD_FAILURE() << "cross-writer sample-filter publish deadlocked";
++    std::abort();
++  }
++  thread_a.join();
++  thread_b.join();
++  EXPECT_TRUE(outer_a_ok.load(std::memory_order_acquire));
++  EXPECT_TRUE(outer_b_ok.load(std::memory_order_acquire));
++  EXPECT_FALSE(nested_a_result.load(std::memory_order_acquire));
++  EXPECT_FALSE(nested_b_result.load(std::memory_order_acquire));
++}
++
++// Remote DATA currently invokes the filter while its Participant discovery
++// mutex is held. A write back into that same Participant must be rejected
++// before trying to reacquire the mutex, while the admitted remote sample still
++// reaches the reader.
++TEST(WriterConcurrency, RemoteFilterPublishToSameParticipantFailsClosed) {
++  auto publisher_participant = mdds::Participant::create(test_config_3());
++  auto subscriber_participant = mdds::Participant::create(test_config_3());
++  ASSERT_NE(publisher_participant, nullptr);
++  ASSERT_NE(subscriber_participant, nullptr);
++  auto *remote_writer = publisher_participant->create_writer(
++      "/remote_filter", "test/RemoteFilter", default_qos());
++  auto *remote_reader = subscriber_participant->create_reader(
++      "/remote_filter", "test/RemoteFilter", default_qos());
++  auto *nested_writer = subscriber_participant->create_writer(
++      "/remote_filter_nested", "test/RemoteFilterNested", default_qos());
++  ASSERT_NE(remote_writer, nullptr);
++  ASSERT_NE(remote_reader, nullptr);
++  ASSERT_NE(nested_writer, nullptr);
++  ASSERT_TRUE(wait_matched(remote_writer, 1));
++  ASSERT_TRUE(wait_reader_matched(remote_reader, 1));
++
++  std::atomic<bool> nested_called{false};
++  std::atomic<bool> nested_result{true};
++  remote_reader->set_sample_filter([&](const uint8_t *, size_t) {
++    const uint8_t nested = 0x55;
++    nested_result.store(nested_writer->write(&nested, sizeof(nested)),
++                        std::memory_order_release);
++    nested_called.store(true, std::memory_order_release);
++    return true;
++  });
++
++  const uint8_t sample = 0x44;
++  ASSERT_TRUE(remote_writer->write(&sample, sizeof(sample)));
++  if (!wait_until(
++          [&] { return nested_called.load(std::memory_order_acquire); }, 5s,
++          5ms)) {
++    ADD_FAILURE() << "remote sample filter deadlocked on Participant mutex";
++    std::abort();
++  }
++  EXPECT_FALSE(nested_result.load(std::memory_order_acquire));
++  std::vector<uint8_t> out;
++  mdds::MessageInfo info;
++  ASSERT_TRUE(wait_until(
++      [&] { return remote_reader->take(out, info); }, 5s, 5ms));
++  EXPECT_EQ(out, (std::vector<uint8_t>{0x44}));
++  EXPECT_EQ(info.seq, 1u);
++}
++
+ // A response-lane filter is application code. It must be able to retire
+ // itself from inside operator() without attempting to take queue_mutex_ a
+ // second time. The old implementation called the filter while holding that
+diff --git a/test/test_transport_dsoftbus_fake.cpp b/test/test_transport_dsoftbus_fake.cpp
+index 6ccdc66f7c0c7b0bd6cdcf092c4967e0f8eda29f..b6c4e9135e1a7d081243a65cc5f2caf310c00f26 100644
+--- a/test/test_transport_dsoftbus_fake.cpp
++++ b/test/test_transport_dsoftbus_fake.cpp
+@@ -43,11 +43,9 @@
+ #include "mdds/transport.hpp"
+ 
+ extern "C" {
+-#include "nativetoken_kit.h"
+ #include "socket.h"
+ #include "softbus_bus_center.h"
+ #include "softbus_error_code.h"
+-#include "token_setproc.h"
+ }
+ 
+ namespace {
+@@ -1744,10 +1742,6 @@ extern "C" int32_t GetSessionOption(int32_t, int32_t, void *option_value,
+   return fake().get_option(option_value, value_size);
+ }
+ 
+-extern "C" uint64_t GetAccessTokenId(NativeTokenInfoParams *) { return 1; }
+-
+-extern "C" int32_t SetSelfTokenID(uint64_t) { return SOFTBUS_OK; }
+-
+ extern "C" int32_t Socket(SocketInfo info) { return fake().socket(info); }
+ 
+ extern "C" int32_t Listen(int32_t, const QosTV[], uint32_t,
+diff --git a/third_party/dsoftbus/include/nativetoken_kit.h b/third_party/dsoftbus/include/nativetoken_kit.h
+index 8de340b7c791e7fcce16eb8fed57bf41c97c4dbe..b13a45b4664a6ff18aa1643d3f608bb77ef3b56b 100644
+--- a/third_party/dsoftbus/include/nativetoken_kit.h
++++ b/third_party/dsoftbus/include/nativetoken_kit.h
+@@ -1,6 +1,7 @@
+ // Minimal declarations vendored from OpenHarmony security/access_token
+ // (interfaces/innerkits/nativetoken/include/nativetoken_kit.h). Only what the
+-// DSoftBus transport needs. Links against the board's libnativetoken_shared.z.so.
++// explicit mdds_token_exec launcher needs. libmdds never links this API.
++// The launcher links against the board's libnativetoken_shared.z.so.
+ #ifndef MDDS_THIRD_PARTY_NATIVETOKEN_KIT_H
+ #define MDDS_THIRD_PARTY_NATIVETOKEN_KIT_H
+ 
+diff --git a/third_party/dsoftbus/include/token_setproc.h b/third_party/dsoftbus/include/token_setproc.h
+index 195a07478e5875ed6d8109c7b0e1cd60f971b0a5..660f749a570ce14ac32720dbe289399662887d92 100644
+--- a/third_party/dsoftbus/include/token_setproc.h
++++ b/third_party/dsoftbus/include/token_setproc.h
+@@ -1,6 +1,7 @@
+ // Minimal declaration vendored from OpenHarmony security/access_token
+-// (interfaces/innerkits/token_setproc/include/token_setproc.h). Links against
+-// the board's libtokensetproc_shared.z.so.
++// (interfaces/innerkits/token_setproc/include/token_setproc.h). Used only by
++// the explicit mdds_token_exec launcher, which links against the board's
++// libtokensetproc_shared.z.so; libmdds never links or calls this API.
+ #ifndef MDDS_THIRD_PARTY_TOKEN_SETPROC_H
+ #define MDDS_THIRD_PARTY_TOKEN_SETPROC_H
+ 

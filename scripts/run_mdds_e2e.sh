@@ -14,29 +14,22 @@ HDC="${HDC:-C:/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/com
 BOARD_A=3e01ff55454d202020104033bf453b00
 BOARD_B=3e01ff55454d202020104433991c3b00
 DEVICE_DIR=/data/local/tmp/ros2
-LOGDIR=ohos_test_logs/mdds_e2e
-mkdir -p "$LOGDIR"
+LOGROOT=ohos_test_logs/mdds_e2e
 
 export MSYS2_ARG_CONV_EXCL='*'
 
 # remote env prefix: source board env and pin the RMW under test
-RENVS=". $DEVICE_DIR/env.sh; export RMW_IMPLEMENTATION=rmw_mdds;"
+RENVS=". $DEVICE_DIR/env.sh || exit 70; export MDDS_TOKEN_EXEC=$DEVICE_DIR/bin/mdds_token_exec; export RMW_IMPLEMENTATION=rmw_mdds;"
 
 shell()  { "$HDC" -t "$1" shell "$2" </dev/null; }
-rbg()    { shell "$1" "$RENVS nohup $2 > $DEVICE_DIR/$3 2>&1 &" & }
-runfg()  { shell "$1" "$RENVS $2"; }
-stopall() {
-  # Kill only processes running our test-installed executables/scripts; never
-  # a bare name match, and not even the whole deploy root (an editor or shell
-  # with the deploy dir in its command line must survive). Everything the
-  # scenarios launch lives under $DEVICE_DIR/{Lib,lib}/, is the ros2 CLI in
-  # $DEVICE_DIR/bin/, or a script under $DEVICE_DIR/mdds_e2e/.
-  for b in "$BOARD_A" "$BOARD_B"; do
-    shell "$b" "pkill -f '$DEVICE_DIR/[Ll]ib/|$DEVICE_DIR/bin/ros2|$DEVICE_DIR/mdds_e2e/' 2>/dev/null; true" >/dev/null 2>&1 || true
-  done
-  sleep 1
-}
-pull() { shell "$1" "cat $DEVICE_DIR/$2" > "$LOGDIR/$2" 2>/dev/null || true; }
+source scripts/lib/mdds_owned_processes.sh
+mdds_owned_init run_mdds_e2e "$BOARD_A" "$BOARD_B" || exit 3
+LOGDIR="$LOGROOT/$MDDS_OWNED_RUN_ID"
+mkdir -p "$LOGDIR"
+rbg()    { mdds_owned_launch "$1" "$RENVS" "$2" "$3"; }
+runfg()  { shell "$1" "$RENVS exec \$MDDS_TOKEN_EXEC -- $2"; }
+stopall() { mdds_owned_stop_all; }
+pull() { shell "$1" "cat '$MDDS_OWNED_REMOTE_DIR/$2'" > "$LOGDIR/$2" 2>/dev/null || true; }
 
 pass=0; fail=0; failed_ids=()
 verdict() { # verdict <ID> <0|1> [detail]
@@ -50,7 +43,7 @@ heard_count() { grep -c "I heard" "$LOGDIR/$1" 2>/dev/null || true; }
 s_preflight() {
   local ok=0 id
   for b in "$BOARD_A" "$BOARD_B"; do
-    id=$(shell "$b" "$RENVS python3.12 -c 'from rclpy.utilities import get_rmw_implementation_identifier as g; print(g())'" 2>/dev/null | tr -d '\r')
+    id=$(shell "$b" "$RENVS \$MDDS_TOKEN_EXEC -- python3.12 -c 'from rclpy.utilities import get_rmw_implementation_identifier as g; print(g())'" 2>/dev/null | tr -d '\r')
     echo "   preflight ${b:0:8}: rmw=$id"
     [ "$id" = "rmw_mdds" ] || ok=1
   done
@@ -171,7 +164,7 @@ s_sweep() {
   local i n
   for i in $(seq 1 30); do
     sleep 10
-    n=$(shell "$BOARD_A" "grep -c SWEEP_RESULT $DEVICE_DIR/e2e_sweep_sub.log 2>/dev/null || true" | tr -dc '0-9')
+    n=$(shell "$BOARD_A" "grep -c SWEEP_RESULT '$MDDS_OWNED_REMOTE_DIR/e2e_sweep_sub.log' 2>/dev/null || true" | tr -dc '0-9')
     [ -n "$n" ] && [ "$n" -ge 1 ] && break
   done
   stopall
@@ -268,13 +261,13 @@ s_off() {
   local bad=0 i n
   # rbg() cannot inject an extra export between RENVS and nohup, so these
   # launches call shell() directly with the env prefix spelled out.
-  shell "$BOARD_A" "$RENVS_OFF nohup python3.12 $DEVICE_DIR/mdds_e2e/off_check.py --role sub --expect off > $DEVICE_DIR/e2e_off_sub.log 2>&1 &" &
-  shell "$BOARD_A" "$RENVS_OFF nohup python3.12 $DEVICE_DIR/mdds_e2e/off_check.py --role pub --expect off > $DEVICE_DIR/e2e_off_pub.log 2>&1 &" &
+  mdds_owned_launch "$BOARD_A" "$RENVS_OFF" "python3.12 $DEVICE_DIR/mdds_e2e/off_check.py --role sub --expect off" e2e_off_sub.log
+  mdds_owned_launch "$BOARD_A" "$RENVS_OFF" "python3.12 $DEVICE_DIR/mdds_e2e/off_check.py --role pub --expect off" e2e_off_pub.log
   # hdc shell always exits 0 — poll on captured content. cat|grep -c gives one
   # total; the board has no paste/bc/awk.
   for i in $(seq 1 6); do
     sleep 5
-    n=$(shell "$BOARD_A" "cat $DEVICE_DIR/e2e_off_sub.log $DEVICE_DIR/e2e_off_pub.log 2>/dev/null | grep -c 'OFF_CHECK RESULT'" | tr -dc '0-9')
+    n=$(shell "$BOARD_A" "cat '$MDDS_OWNED_REMOTE_DIR/e2e_off_sub.log' '$MDDS_OWNED_REMOTE_DIR/e2e_off_pub.log' 2>/dev/null | grep -c 'OFF_CHECK RESULT'" | tr -dc '0-9')
     [ -n "$n" ] && [ "$n" -ge 2 ] && break
   done
   # control pair, default discovery range: must find each other and pass data
@@ -282,7 +275,7 @@ s_off() {
   rbg "$BOARD_A" "python3.12 $DEVICE_DIR/mdds_e2e/off_check.py --role pub --expect on" e2e_on_pub.log
   for i in $(seq 1 6); do
     sleep 5
-    n=$(shell "$BOARD_A" "cat $DEVICE_DIR/e2e_on_sub.log $DEVICE_DIR/e2e_on_pub.log 2>/dev/null | grep -c 'OFF_CHECK RESULT'" | tr -dc '0-9')
+    n=$(shell "$BOARD_A" "cat '$MDDS_OWNED_REMOTE_DIR/e2e_on_sub.log' '$MDDS_OWNED_REMOTE_DIR/e2e_on_pub.log' 2>/dev/null | grep -c 'OFF_CHECK RESULT'" | tr -dc '0-9')
     [ -n "$n" ] && [ "$n" -ge 2 ] && break
   done
   stopall
@@ -298,7 +291,7 @@ s_off() {
 
 # Clean up both boards on any exit (error, Ctrl-C, normal end) so a failed
 # run cannot leak nodes into the next scenario. Preserves the exit code.
-trap 'rc=$?; stopall >/dev/null 2>&1 || true; exit $rc' EXIT
+trap 'rc=$?; trap - EXIT; mdds_owned_finish >/dev/null 2>&1 || rc=1; exit $rc' EXIT
 
 if [ $# -eq 0 ]; then
   set -- preflight loopback bidir service action sweep

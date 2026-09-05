@@ -62,6 +62,8 @@ RMW_PROFILE_REMOTE="$DEVICE_DIR/share/rmw_mdds/config/ohos_dsoftbus.env"
 GATEWAY_PROFILE_LOCAL=install_ohos/share/mdds_gateway/mdds_gateway_ohos_dsoftbus.conf
 GATEWAY_PROFILE_REMOTE="$DEVICE_DIR/share/mdds_gateway/mdds_gateway_ohos_dsoftbus.conf"
 GATEWAY_BIN="$DEVICE_DIR/lib/mdds_gateway/mdds_gateway"
+TOKEN_EXEC_LOCAL=install_ohos/bin/mdds_token_exec
+TOKEN_EXEC_REMOTE="$DEVICE_DIR/bin/mdds_token_exec"
 
 LOGROOT="${MDDS_DOMAIN0_LOGROOT:-ohos_test_logs/mdds_domain0_chatter}"
 SAFE_LOGROOT_RE='^([A-Za-z0-9][A-Za-z0-9._-]*)(/[A-Za-z0-9][A-Za-z0-9._-]*)*$|^/[A-Za-z]/[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$'
@@ -310,9 +312,11 @@ verify_artifacts_and_helpers() {
   record_artifact rmw_mdds_dsoftbus_profile "$BOARD_A" "$RMW_PROFILE_LOCAL" "$RMW_PROFILE_REMOTE" || return 1
   record_artifact mdds_gateway "$BOARD_A" install_ohos/lib/mdds_gateway/mdds_gateway "$GATEWAY_BIN" || return 1
   record_artifact mdds_gateway_profile "$BOARD_A" "$GATEWAY_PROFILE_LOCAL" "$GATEWAY_PROFILE_REMOTE" || return 1
+  record_artifact mdds_token_exec "$BOARD_A" "$TOKEN_EXEC_LOCAL" "$TOKEN_EXEC_REMOTE" || return 1
   record_artifact libmdds.so "$BOARD_B" install_ohos/lib/libmdds.so "$DEVICE_DIR/lib/libmdds.so" || return 1
   record_artifact librmw_mdds.so "$BOARD_B" install_ohos/lib/librmw_mdds.so "$DEVICE_DIR/lib/librmw_mdds.so" || return 1
   record_artifact rmw_mdds_dsoftbus_profile "$BOARD_B" "$RMW_PROFILE_LOCAL" "$RMW_PROFILE_REMOTE" || return 1
+  record_artifact mdds_token_exec "$BOARD_B" "$TOKEN_EXEC_LOCAL" "$TOKEN_EXEC_REMOTE" || return 1
   send_verified_helper "$BOARD_B" domain0_chatter_probe.py "$PROBE_LOCAL" "$PROBE_REMOTE" || return 1
   send_verified_helper "$BOARD_A" domain0_remote_guard.sh "$REMOTE_GUARD_LOCAL" "$REMOTE_GUARD" || return 1
   send_verified_helper "$BOARD_B" domain0_remote_guard.sh "$REMOTE_GUARD_LOCAL" "$REMOTE_GUARD" || return 1
@@ -556,15 +560,15 @@ wait_board_result() { # <log> <role> <direction>
 
 start_gateway() { # <log>
   local env
-  env=". $DEVICE_DIR/env.sh; unset RMW_IMPLEMENTATION MDDS_DEPLOYMENT_PROFILE MDDS_TRANSPORT MDDS_UDP_PEER_ALLOW ROS_DOMAIN_ID; export CYCLONEDDS_URI=$CYCLONE_XML_REMOTE; export MDDS_DEBUG=1; export RCUTILS_LOGGING_BUFFERED_STREAM=0;"
-  launch_board "$BOARD_A" "$env" "$GATEWAY_BIN -c $GATEWAY_PROFILE_REMOTE" "$1" || return 1
+  env=". $DEVICE_DIR/env.sh || exit 70; export MDDS_TOKEN_EXEC=$DEVICE_DIR/bin/mdds_token_exec; unset RMW_IMPLEMENTATION MDDS_DEPLOYMENT_PROFILE MDDS_TRANSPORT MDDS_UDP_PEER_ALLOW ROS_DOMAIN_ID; export CYCLONEDDS_URI=$CYCLONE_XML_REMOTE; export MDDS_DEBUG=1; export RCUTILS_LOGGING_BUFFERED_STREAM=0;"
+  launch_board "$BOARD_A" "$env" "\$MDDS_TOKEN_EXEC -- $GATEWAY_BIN -c $GATEWAY_PROFILE_REMOTE" "$1" || return 1
   wait_gateway_ready "$1"
 }
 
 start_board_probe() { # <mode> <direction> <log>
   local mode="$1" direction="$2" log="$3" env payload
-  env=". $DEVICE_DIR/env.sh; . $RMW_PROFILE_REMOTE; export ROS_DOMAIN_ID=0; export MDDS_DEBUG=1;"
-  payload="python3.12 $PROBE_REMOTE --role board_b --mode $mode --direction $direction --token $RUN_TOKEN --topic $TOPIC --count $COUNT --payload-bytes $PAYLOAD_BYTES --rate-hz 5 --match-timeout-s 45 --receive-timeout-s 45 --settle-ms 3000 --flush-s 3 --quiet-s 2"
+  env=". $DEVICE_DIR/env.sh || exit 70; export MDDS_TOKEN_EXEC=$DEVICE_DIR/bin/mdds_token_exec; . $RMW_PROFILE_REMOTE || exit 70; export ROS_DOMAIN_ID=0; export MDDS_DEBUG=1;"
+  payload="\$MDDS_TOKEN_EXEC -- python3.12 $PROBE_REMOTE --role board_b --mode $mode --direction $direction --token $RUN_TOKEN --topic $TOPIC --count $COUNT --payload-bytes $PAYLOAD_BYTES --rate-hz 5 --match-timeout-s 45 --receive-timeout-s 45 --settle-ms 3000 --flush-s 3 --quiet-s 2"
   launch_board "$BOARD_B" "$env" "$payload" "$log"
 }
 

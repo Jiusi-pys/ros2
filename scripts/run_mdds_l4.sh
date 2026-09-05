@@ -11,27 +11,21 @@ HDC="${HDC:-C:/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/com
 BOARD_A=3e01ff55454d202020104033bf453b00
 BOARD_B=3e01ff55454d202020104433991c3b00
 DEVICE_DIR=/data/local/tmp/ros2
-LOGDIR=ohos_test_logs/mdds_l4
-mkdir -p "$LOGDIR"
+LOGROOT=ohos_test_logs/mdds_l4
 
 export MSYS2_ARG_CONV_EXCL='*'
 
-RENVS=". $DEVICE_DIR/env.sh; export RMW_IMPLEMENTATION=rmw_mdds;"
+RENVS=". $DEVICE_DIR/env.sh || exit 70; export MDDS_TOKEN_EXEC=$DEVICE_DIR/bin/mdds_token_exec; export RMW_IMPLEMENTATION=rmw_mdds;"
 SWEEP="python3.12 $DEVICE_DIR/mdds_e2e/board_sweep.py"
 
 shell()  { "$HDC" -t "$1" shell "$2" </dev/null; }
-rbg()    { shell "$1" "$RENVS nohup $2 > $DEVICE_DIR/$3 2>&1 &" & }
-pull()   { shell "$1" "cat $DEVICE_DIR/$2" > "$LOGDIR/$2" 2>/dev/null || true; }
-
-stopall() {
-  # Kill only processes running our test-installed executables/scripts; never
-  # a bare name match, and not even the whole deploy root (an editor or shell
-  # with the deploy dir in its command line must survive).
-  for b in "$BOARD_A" "$BOARD_B"; do
-    shell "$b" "pkill -f '$DEVICE_DIR/[Ll]ib/|$DEVICE_DIR/bin/ros2|$DEVICE_DIR/mdds_e2e/' 2>/dev/null; true" >/dev/null 2>&1 || true
-  done
-  sleep 1
-}
+source scripts/lib/mdds_owned_processes.sh
+mdds_owned_init run_mdds_l4 "$BOARD_A" "$BOARD_B" || exit 3
+LOGDIR="$LOGROOT/$MDDS_OWNED_RUN_ID"
+mkdir -p "$LOGDIR"
+rbg()    { mdds_owned_launch "$1" "$RENVS" "$2" "$3"; }
+pull()   { shell "$1" "cat '$MDDS_OWNED_REMOTE_DIR/$2'" > "$LOGDIR/$2" 2>/dev/null || true; }
+stopall() { mdds_owned_stop_all; }
 
 push_sweep() {
   for b in "$BOARD_A" "$BOARD_B"; do
@@ -49,7 +43,7 @@ verdict() { # verdict <ID> <0|1> [detail]
 
 # Remote grep counter that always prints exactly one integer (hdc shell exit
 # codes are unreliable; count matches, never status).
-rcount() { shell "$1" "grep -c '$2' $DEVICE_DIR/$3 2>/dev/null || true" | tr -dc '0-9'; }
+rcount() { shell "$1" "grep -c '$2' '$MDDS_OWNED_REMOTE_DIR/$3' 2>/dev/null || true" | tr -dc '0-9'; }
 
 # poll_until <board> <pattern> <logfile> <tries> <interval_s>
 poll_until() {
@@ -182,7 +176,7 @@ s_res01() {
   sleep 3
   rbg "$BOARD_B" "\$ROS2_LISTENER" res01_listener1.log
   sleep 10
-  shell "$BOARD_B" "pkill -f '$DEVICE_DIR/Lib/demo_nodes_cpp/listener' 2>/dev/null; true" >/dev/null 2>&1 || true
+  mdds_owned_stop_log "$BOARD_B" res01_listener1.log || return 1
   sleep 5
   rbg "$BOARD_B" "\$ROS2_LISTENER" res01_listener2.log
   # recovery: new messages in the restarted listener's log within 10 s
@@ -206,7 +200,7 @@ s_res02() {
   sleep 3
   rbg "$BOARD_A" "\$ROS2_TALKER" res02_talker1.log
   sleep 10
-  shell "$BOARD_A" "pkill -f '$DEVICE_DIR/Lib/demo_nodes_cpp/talker' 2>/dev/null; true" >/dev/null 2>&1 || true
+  mdds_owned_stop_log "$BOARD_A" res02_talker1.log || return 1
   local n_before
   n_before=$(rcount "$BOARD_B" "I heard" res02_listener.log)
   sleep 5
@@ -223,6 +217,8 @@ s_res02() {
 }
 
 # --- main --------------------------------------------------------------------
+
+trap 'rc=$?; trap - EXIT; mdds_owned_finish >/dev/null 2>&1 || rc=1; exit $rc' EXIT
 
 if [ $# -eq 0 ] || [ "$1" = all ]; then
   set -- perf01 perf02 res01 res02

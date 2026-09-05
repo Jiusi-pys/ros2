@@ -94,7 +94,12 @@ materialize_meta_candidate() {
   # though the candidate adds eol=lf. A matching Git tree conceals that drift.
   git -C "$destination" update-ref --no-deref HEAD "$base"
   git -C "$destination" read-tree "$base"
-  git -C "$destination" apply --cached --binary --whitespace=nowarn "$patch"
+  # Once the meta candidate itself is published, the local delta is empty.
+  # Applying an empty patch fails with "No valid patches in input" even
+  # though the checked-out base already is the requested candidate.
+  if [ -s "$patch" ]; then
+    git -C "$destination" apply --cached --binary --whitespace=nowarn "$patch"
+  fi
   git -C "$destination" checkout-index --all
 }
 materialize_meta_candidate "$DEST" "$META_URL" "$META_BASE" "$META_PATCH"

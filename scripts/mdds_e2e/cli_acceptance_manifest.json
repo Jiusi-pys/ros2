@@ -1,0 +1,1910 @@
+{
+  "schema_version": 1,
+  "run_id": null,
+  "target": {
+    "rmw_implementation": "rmw_mdds",
+    "transport": "dsoftbus",
+    "transport_scope": "middleware",
+    "board_serials": [
+      "3e01ff55454d202020104033bf453b00",
+      "3e01ff55454d202020104433991c3b00"
+    ]
+  },
+  "inventory": {
+    "commands": {
+      "action": "ros2action.command.action:ActionCommand",
+      "bag": "ros2bag.command.bag:BagCommand",
+      "component": "ros2component.command.component:ComponentCommand",
+      "daemon": "ros2cli.command.daemon:DaemonCommand",
+      "doctor": "ros2doctor.command.doctor:DoctorCommand",
+      "extension_points": "ros2cli.command.extension_points:ExtensionPointsCommand",
+      "extensions": "ros2cli.command.extensions:ExtensionsCommand",
+      "interface": "ros2interface.command.interface:InterfaceCommand",
+      "launch": "ros2launch.command.launch:LaunchCommand",
+      "lifecycle": "ros2lifecycle.command.lifecycle:LifecycleCommand",
+      "multicast": "ros2multicast.command.multicast:MulticastCommand",
+      "node": "ros2node.command.node:NodeCommand",
+      "param": "ros2param.command.param:ParamCommand",
+      "pkg": "ros2pkg.command.pkg:PkgCommand",
+      "plugin": "ros2plugin.command.plugin:PluginCommand",
+      "run": "ros2run.command.run:RunCommand",
+      "security": "sros2.command.security:SecurityCommand",
+      "service": "ros2service.command.service:ServiceCommand",
+      "test": "ros2test.command.test:TestCommand",
+      "topic": "ros2topic.command.topic:TopicCommand",
+      "trace": "ros2trace.command.trace:TraceCommand",
+      "wtf": "ros2doctor.command.doctor:WtfCommand"
+    },
+    "verb_groups": {
+      "ros2action.verb": {
+        "info": "ros2action.verb.info:InfoVerb",
+        "list": "ros2action.verb.list:ListVerb",
+        "send_goal": "ros2action.verb.send_goal:SendGoalVerb",
+        "type": "ros2action.verb.type:TypeVerb"
+      },
+      "ros2bag.verb": {
+        "burst": "ros2bag.verb.burst:BurstVerb",
+        "convert": "ros2bag.verb.convert:ConvertVerb",
+        "info": "ros2bag.verb.info:InfoVerb",
+        "list": "ros2bag.verb.list:ListVerb",
+        "play": "ros2bag.verb.play:PlayVerb",
+        "record": "ros2bag.verb.record:RecordVerb",
+        "reindex": "ros2bag.verb.reindex:ReindexVerb"
+      },
+      "ros2cli.daemon.verb": {
+        "start": "ros2cli.verb.daemon.start:StartVerb",
+        "status": "ros2cli.verb.daemon.status:StatusVerb",
+        "stop": "ros2cli.verb.daemon.stop:StopVerb"
+      },
+      "ros2component.verb": {
+        "list": "ros2component.verb.list:ListVerb",
+        "load": "ros2component.verb.load:LoadVerb",
+        "standalone": "ros2component.verb.standalone:StandaloneVerb",
+        "types": "ros2component.verb.types:TypesVerb",
+        "unload": "ros2component.verb.unload:UnloadVerb"
+      },
+      "ros2doctor.verb": {
+        "hello": "ros2doctor.verb.hello:HelloVerb"
+      },
+      "ros2interface.verb": {
+        "list": "ros2interface.verb.list:ListVerb",
+        "package": "ros2interface.verb.package:PackageVerb",
+        "packages": "ros2interface.verb.packages:PackagesVerb",
+        "proto": "ros2interface.verb.proto:ProtoVerb",
+        "show": "ros2interface.verb.show:ShowVerb"
+      },
+      "ros2lifecycle.verb": {
+        "get": "ros2lifecycle.verb.get:GetVerb",
+        "list": "ros2lifecycle.verb.list:ListVerb",
+        "nodes": "ros2lifecycle.verb.nodes:NodesVerb",
+        "set": "ros2lifecycle.verb.set:SetVerb"
+      },
+      "ros2multicast.verb": {
+        "receive": "ros2multicast.verb.receive:ReceiveVerb",
+        "send": "ros2multicast.verb.send:SendVerb"
+      },
+      "ros2node.verb": {
+        "info": "ros2node.verb.info:InfoVerb",
+        "list": "ros2node.verb.list:ListVerb"
+      },
+      "ros2param.verb": {
+        "delete": "ros2param.verb.delete:DeleteVerb",
+        "describe": "ros2param.verb.describe:DescribeVerb",
+        "dump": "ros2param.verb.dump:DumpVerb",
+        "get": "ros2param.verb.get:GetVerb",
+        "list": "ros2param.verb.list:ListVerb",
+        "load": "ros2param.verb.load:LoadVerb",
+        "set": "ros2param.verb.set:SetVerb"
+      },
+      "ros2pkg.verb": {
+        "create": "ros2pkg.verb.create:CreateVerb",
+        "executables": "ros2pkg.verb.executables:ExecutablesVerb",
+        "list": "ros2pkg.verb.list:ListVerb",
+        "prefix": "ros2pkg.verb.prefix:PrefixVerb",
+        "xml": "ros2pkg.verb.xml:XmlVerb"
+      },
+      "ros2plugin.verb": {
+        "list": "ros2plugin.verb.list:ListVerb"
+      },
+      "ros2service.verb": {
+        "call": "ros2service.verb.call:CallVerb",
+        "echo": "ros2service.verb.echo:EchoVerb",
+        "find": "ros2service.verb.find:FindVerb",
+        "info": "ros2service.verb.info:InfoVerb",
+        "list": "ros2service.verb.list:ListVerb",
+        "type": "ros2service.verb.type:TypeVerb"
+      },
+      "ros2topic.verb": {
+        "bw": "ros2topic.verb.bw:BwVerb",
+        "delay": "ros2topic.verb.delay:DelayVerb",
+        "echo": "ros2topic.verb.echo:EchoVerb",
+        "find": "ros2topic.verb.find:FindVerb",
+        "hz": "ros2topic.verb.hz:HzVerb",
+        "info": "ros2topic.verb.info:InfoVerb",
+        "list": "ros2topic.verb.list:ListVerb",
+        "pub": "ros2topic.verb.pub:PubVerb",
+        "type": "ros2topic.verb.type:TypeVerb"
+      },
+      "ros2trace.verb": {
+        "pause": "ros2trace.verb.pause:PauseVerb",
+        "resume": "ros2trace.verb.resume:ResumeVerb",
+        "start": "ros2trace.verb.start:StartVerb",
+        "stop": "ros2trace.verb.stop:StopVerb"
+      },
+      "sros2.verb": {
+        "create_enclave": "sros2.verb.create_enclave:CreateEnclaveVerb",
+        "create_key": "sros2.verb.create_enclave:CreateKeyVerb",
+        "create_keystore": "sros2.verb.create_keystore:CreateKeystoreVerb",
+        "create_permission": "sros2.verb.create_permission:CreatePermissionVerb",
+        "generate_artifacts": "sros2.verb.generate_artifacts:GenerateArtifactsVerb",
+        "generate_policy": "sros2.verb.generate_policy:GeneratePolicyVerb",
+        "list_enclaves": "sros2.verb.list_enclaves:ListEnclavesVerb",
+        "list_keys": "sros2.verb.list_enclaves:ListKeysVerb"
+      }
+    },
+    "metadata_files": [
+      {
+        "path": "Lib/site-packages/ros2action-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "169d15b7f8cba9c0b891a03dfaab3413a0497ead57d893c7284b7fa6c6a88f5b"
+      },
+      {
+        "path": "Lib/site-packages/ros2bag-0.26.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "6e8c8dbb27f638b11479c0c68b59047decf1a4f476e02a34f7e810a06378abbd"
+      },
+      {
+        "path": "Lib/site-packages/ros2cli-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "ff35608537dd987499d81a237853e5f503de0da0cff4b57c85295d99b57a6932"
+      },
+      {
+        "path": "Lib/site-packages/ros2component-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "08ca2ddc34362ec5fb9b7a6176360676ce702001c5bfca8677a1816f86f84822"
+      },
+      {
+        "path": "Lib/site-packages/ros2doctor-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "71196d3277ed66c361f20f2ce1ff2d255ed4f2356eebb7a891e96054dc3f3daf"
+      },
+      {
+        "path": "Lib/site-packages/ros2interface-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "cda73e5438fc033ea0f6d0f36bea49e61bcc954ef111c89b58328bf74b35cce8"
+      },
+      {
+        "path": "Lib/site-packages/ros2launch-0.26.12-py3.12.egg-info/entry_points.txt",
+        "sha256": "22da92ad349ff97e385b698a7301b65e5fc101ee26d8620f0e1eff155b8dcfcc"
+      },
+      {
+        "path": "Lib/site-packages/ros2lifecycle-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "7f40fd2441f842eb28b162cf4852400c27ec0157fa62a3512a518686cd7a6cab"
+      },
+      {
+        "path": "Lib/site-packages/ros2multicast-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "891d469c75b8f1699d92eedcf657508276e713dfce56f23b96e79d04c5db2a6e"
+      },
+      {
+        "path": "Lib/site-packages/ros2node-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "ed1e901151827667489a3f00d395118821806014c9ed74afb2899b13a2612c7c"
+      },
+      {
+        "path": "Lib/site-packages/ros2param-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "3102c17dbe6963b1b33ce874fdb08e4c22d2427aeefc0d0c2e8da033338d7bf6"
+      },
+      {
+        "path": "Lib/site-packages/ros2pkg-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "48576dd55c73177f7b2b57715df7e39f5aef77bbaf6e786848c322891ddba02a"
+      },
+      {
+        "path": "Lib/site-packages/ros2plugin-5.4.5-py3.12.egg-info/entry_points.txt",
+        "sha256": "9b6b6ca441f638afad9765dd1e5863b3ef8659d626e9bfafb817a92152a81c37"
+      },
+      {
+        "path": "Lib/site-packages/ros2run-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "18f8c7799e9b7e8673d5116c5641b1c66797b5928f90b443d54d7c99aa2f52de"
+      },
+      {
+        "path": "Lib/site-packages/ros2service-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "94d096f95da2e15c8920da5cbeb8871100eab6de17df692c3f480d611e7ad347"
+      },
+      {
+        "path": "Lib/site-packages/ros2test-0.6.1-py3.12.egg-info/entry_points.txt",
+        "sha256": "1e6a02be4aa1bb9e27c21793d0b9fdd2f3eedf5c47e4073be490940c20f5b1b4"
+      },
+      {
+        "path": "Lib/site-packages/ros2topic-0.32.11-py3.12.egg-info/entry_points.txt",
+        "sha256": "7d6b259099ff1b3e5c49a87c0fffb8d48eb99d78c492a779b2efd341c018c538"
+      },
+      {
+        "path": "Lib/site-packages/ros2trace-8.2.6-py3.12.egg-info/entry_points.txt",
+        "sha256": "510aefe1174b127afdd924182d2643bdb4f214d84c2336cbd6fbe8646fe66414"
+      },
+      {
+        "path": "Lib/site-packages/sros2-0.13.6-py3.12.egg-info/entry_points.txt",
+        "sha256": "9623a58836f9a14714c6171de24fef5953d5990f9b1d17ad6abef45e9a1ce1a3"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "cli:action/info",
+      "command": [
+        "ros2",
+        "action",
+        "info"
+      ],
+      "requirement": "Inspect the remote action server and client names and exact counts.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:action/list",
+      "command": [
+        "ros2",
+        "action",
+        "list"
+      ],
+      "requirement": "Find the isolated remote action with its exact canonical type.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:action/send_goal",
+      "command": [
+        "ros2",
+        "action",
+        "send_goal"
+      ],
+      "requirement": "Send order 5 to the peer with --feedback; assert accepted goal, feedback, exact result sequence [0, 1, 1, 2, 3, 5] and SUCCEEDED status.",
+      "assertions": [
+        "goal_accepted",
+        "feedback_received",
+        "result_exact",
+        "status_succeeded"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:action/type",
+      "command": [
+        "ros2",
+        "action",
+        "type"
+      ],
+      "requirement": "Return action_tutorials_interfaces/action/Fibonacci for the remote action.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:bag/burst",
+      "command": [
+        "ros2",
+        "bag",
+        "burst"
+      ],
+      "requirement": "Use a paused player and burst the requested number of messages; assert exactly that many peer callbacks.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:bag/convert",
+      "command": [
+        "ros2",
+        "bag",
+        "convert"
+      ],
+      "requirement": "Convert a run-owned fixture bag with an explicit output configuration; verify selected topics/types and exact samples.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:bag/info",
+      "command": [
+        "ros2",
+        "bag",
+        "info"
+      ],
+      "requirement": "Inspect a recorded fixture bag and compare storage ID, topics, types, count and duration to the fixture.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:bag/list",
+      "command": [
+        "ros2",
+        "bag",
+        "list"
+      ],
+      "requirement": "List actual available reader, writer, storage and serialization plugins; verify sqlite3 and mcap.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:bag/play",
+      "command": [
+        "ros2",
+        "bag",
+        "play"
+      ],
+      "requirement": "Replay the fixture bag through rmw_mdds to the peer; verify exact ordered payloads and counts.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:bag/record",
+      "command": [
+        "ros2",
+        "bag",
+        "record"
+      ],
+      "requirement": "Record run-specific peer samples to sqlite3 and mcap; stop cleanly and verify exact sample identities/counts.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:bag/reindex",
+      "command": [
+        "ros2",
+        "bag",
+        "reindex"
+      ],
+      "requirement": "Reindex a run-owned bag copy with missing metadata and verify restored metadata and playable exact samples.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:component/list",
+      "command": [
+        "ros2",
+        "component",
+        "list"
+      ],
+      "requirement": "Inspect the peer component container and verify its loaded node IDs/names.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:component/load",
+      "command": [
+        "ros2",
+        "component",
+        "load"
+      ],
+      "requirement": "Load a Talker into the peer container; verify assigned ID, node ownership and received payload.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:component/standalone",
+      "command": [
+        "ros2",
+        "component",
+        "standalone"
+      ],
+      "requirement": "Start an installed component through standalone; receive its payload remotely and cleanly stop its owned process.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:component/types",
+      "command": [
+        "ros2",
+        "component",
+        "types"
+      ],
+      "requirement": "List the installed composition fixtures and exact plugin type names.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:component/unload",
+      "command": [
+        "ros2",
+        "component",
+        "unload"
+      ],
+      "requirement": "Unload the exact run-owned component ID and assert its graph endpoints disappear while other components remain.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:daemon/start",
+      "command": [
+        "ros2",
+        "daemon",
+        "start"
+      ],
+      "requirement": "Start a run-owned daemon using rmw_mdds and prove it observes remote fixture nodes.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:daemon/status",
+      "command": [
+        "ros2",
+        "daemon",
+        "status"
+      ],
+      "requirement": "Assert running/stopped status around an owned daemon lifecycle.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:daemon/stop",
+      "command": [
+        "ros2",
+        "daemon",
+        "stop"
+      ],
+      "requirement": "Stop the owned daemon; verify process exit and successful subsequent no-daemon queries.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:doctor",
+      "command": [
+        "ros2",
+        "doctor"
+      ],
+      "requirement": "Run checks and --report against live fixtures; verify the reported RMW is rmw_mdds and diagnose any failing checks.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:doctor/hello",
+      "command": [
+        "ros2",
+        "doctor",
+        "hello"
+      ],
+      "requirement": "Exchange doctor hello messages with the peer and assert the participant/message report.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:extension_points",
+      "command": [
+        "ros2",
+        "extension_points"
+      ],
+      "requirement": "Execute the inventory command and verify ros2cli.command and every declared verb extension group.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:extensions",
+      "command": [
+        "ros2",
+        "extensions"
+      ],
+      "requirement": "Execute the inventory command and compare registered commands/verbs to this manifest.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:interface/list",
+      "command": [
+        "ros2",
+        "interface",
+        "list"
+      ],
+      "requirement": "Verify installed message, service and action names appear in the correct sections.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:interface/package",
+      "command": [
+        "ros2",
+        "interface",
+        "package"
+      ],
+      "requirement": "Verify exact interfaces exported by a selected installed fixture package.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:interface/packages",
+      "command": [
+        "ros2",
+        "interface",
+        "packages"
+      ],
+      "requirement": "Verify installed interface packages including std_msgs and action_tutorials_interfaces.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:interface/proto",
+      "command": [
+        "ros2",
+        "interface",
+        "proto"
+      ],
+      "requirement": "Generate a prototype, parse it as YAML and verify the selected interface field values.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:interface/show",
+      "command": [
+        "ros2",
+        "interface",
+        "show"
+      ],
+      "requirement": "Show a message, service and action; assert exact field names/types and section boundaries.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:launch",
+      "command": [
+        "ros2",
+        "launch"
+      ],
+      "requirement": "Launch a run-owned multi-node fixture with arguments/remaps; assert all remote graph entities and payloads, then verify shutdown.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:lifecycle/get",
+      "command": [
+        "ros2",
+        "lifecycle",
+        "get"
+      ],
+      "requirement": "Read the remote fixture state and assert its label and ID.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:lifecycle/list",
+      "command": [
+        "ros2",
+        "lifecycle",
+        "list"
+      ],
+      "requirement": "Verify the available transitions for the current remote fixture state.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:lifecycle/nodes",
+      "command": [
+        "ros2",
+        "lifecycle",
+        "nodes"
+      ],
+      "requirement": "Find the remote lifecycle fixture and exclude ordinary nodes.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:lifecycle/set",
+      "command": [
+        "ros2",
+        "lifecycle",
+        "set"
+      ],
+      "requirement": "Drive configure, activate, deactivate, cleanup and shutdown remotely; verify state and transition events after each step.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:multicast/receive",
+      "command": [
+        "ros2",
+        "multicast",
+        "receive"
+      ],
+      "requirement": "Receive the exact standalone multicast diagnostic payload; keep its UDP traffic separate from MDDS transport evidence.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:multicast/send",
+      "command": [
+        "ros2",
+        "multicast",
+        "send"
+      ],
+      "requirement": "Test the standalone UDP multicast diagnostic in an isolated utility fixture; this is not an MDDS transport or fallback test.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:node/info",
+      "command": [
+        "ros2",
+        "node",
+        "info"
+      ],
+      "requirement": "Verify each remote fixture node owns exactly its own publishers, subscriptions, services, clients and actions.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:node/list",
+      "command": [
+        "ros2",
+        "node",
+        "list"
+      ],
+      "requirement": "List exactly the fixture nodes, including multiple nodes in one remote context; compare daemon and --no-daemon modes.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:param/delete",
+      "command": [
+        "ros2",
+        "param",
+        "delete"
+      ],
+      "requirement": "Delete a declared dynamic peer parameter; assert that it disappears and a subsequent get fails as expected.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:param/describe",
+      "command": [
+        "ros2",
+        "param",
+        "describe"
+      ],
+      "requirement": "Verify peer parameter type, description, read-only flag and constraints.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:param/dump",
+      "command": [
+        "ros2",
+        "param",
+        "dump"
+      ],
+      "requirement": "Dump peer parameters to a run-owned YAML file and verify exact names, types and values.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:param/get",
+      "command": [
+        "ros2",
+        "param",
+        "get"
+      ],
+      "requirement": "Read each supported scalar/array type from the peer and assert exact values.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:param/list",
+      "command": [
+        "ros2",
+        "param",
+        "list"
+      ],
+      "requirement": "List the peer fixture parameters and assert their exact names.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:param/load",
+      "command": [
+        "ros2",
+        "param",
+        "load"
+      ],
+      "requirement": "Load a run-owned YAML file into the peer and verify every changed value by get.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:param/set",
+      "command": [
+        "ros2",
+        "param",
+        "set"
+      ],
+      "requirement": "Change the peer parameter, read it back, assert the matching parameter event, then restore the initial value.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:pkg/create",
+      "command": [
+        "ros2",
+        "pkg",
+        "create"
+      ],
+      "requirement": "Create a package only in the run-owned scratch directory and validate its generated package.xml/build files.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:pkg/executables",
+      "command": [
+        "ros2",
+        "pkg",
+        "executables"
+      ],
+      "requirement": "Resolve installed C++ and Python demo executables and verify the actual files exist.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:pkg/list",
+      "command": [
+        "ros2",
+        "pkg",
+        "list"
+      ],
+      "requirement": "Find rmw_mdds and all packages required by the fixtures.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:pkg/prefix",
+      "command": [
+        "ros2",
+        "pkg",
+        "prefix"
+      ],
+      "requirement": "Resolve rmw_mdds to the deployed prefix and verify the package marker exists.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:pkg/xml",
+      "command": [
+        "ros2",
+        "pkg",
+        "xml"
+      ],
+      "requirement": "Parse the emitted rmw_mdds package XML and verify its name and RMW group membership.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:plugin/list",
+      "command": [
+        "ros2",
+        "plugin",
+        "list"
+      ],
+      "requirement": "List plugins for an installed base class and verify the expected implementation and library.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:run",
+      "command": [
+        "ros2",
+        "run"
+      ],
+      "requirement": "Run installed C++ and Python demos through ros2 run and receive their exact payloads on the peer.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:security/create_enclave",
+      "command": [
+        "ros2",
+        "security",
+        "create_enclave"
+      ],
+      "requirement": "Create a run-owned enclave and validate identities, signed permissions and governance files.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:security/create_key",
+      "command": [
+        "ros2",
+        "security",
+        "create_key"
+      ],
+      "requirement": "Exercise the create_key alias in scratch and verify the generated enclave artifacts.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:security/create_keystore",
+      "command": [
+        "ros2",
+        "security",
+        "create_keystore"
+      ],
+      "requirement": "Create a run-owned scratch keystore and validate its generated CA/key files.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:security/create_permission",
+      "command": [
+        "ros2",
+        "security",
+        "create_permission"
+      ],
+      "requirement": "Generate signed permissions for a scratch enclave from a known policy and validate its contents/signature.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:security/generate_artifacts",
+      "command": [
+        "ros2",
+        "security",
+        "generate_artifacts"
+      ],
+      "requirement": "Generate scratch keystore/enclave artifacts from a fixture policy and validate all expected files.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:security/generate_policy",
+      "command": [
+        "ros2",
+        "security",
+        "generate_policy"
+      ],
+      "requirement": "Observe isolated live rmw_mdds fixture nodes and verify generated policy topic/service/action permissions.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:security/list_enclaves",
+      "command": [
+        "ros2",
+        "security",
+        "list_enclaves"
+      ],
+      "requirement": "List exactly the enclaves created in the run-owned keystore.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:security/list_keys",
+      "command": [
+        "ros2",
+        "security",
+        "list_keys"
+      ],
+      "requirement": "Exercise the list_keys alias and verify the same scratch enclave identities.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:service/call",
+      "command": [
+        "ros2",
+        "service",
+        "call"
+      ],
+      "requirement": "Call the peer with run-specific operands and assert the exact sum and successful completion.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:service/echo",
+      "command": [
+        "ros2",
+        "service",
+        "echo"
+      ],
+      "requirement": "Enable service introspection on a fixture, execute a peer call and validate request/response event content and identity.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:service/find",
+      "command": [
+        "ros2",
+        "service",
+        "find"
+      ],
+      "requirement": "Find all and only the fixture services of the requested type.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:service/info",
+      "command": [
+        "ros2",
+        "service",
+        "info"
+      ],
+      "requirement": "Assert exact remote client/server counts and service type.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:service/list",
+      "command": [
+        "ros2",
+        "service",
+        "list"
+      ],
+      "requirement": "List all remote fixture services with exact types, including hidden filtering.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:service/type",
+      "command": [
+        "ros2",
+        "service",
+        "type"
+      ],
+      "requirement": "Return example_interfaces/srv/AddTwoInts for the remote isolated service.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:test",
+      "command": [
+        "ros2",
+        "test"
+      ],
+      "requirement": "Run an installed launch-testing fixture through ros2 test; require real assertions and a passing test report.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:topic/bw",
+      "command": [
+        "ros2",
+        "topic",
+        "bw"
+      ],
+      "requirement": "Collect remote samples and compare reported bandwidth and message size against the fixture payload.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:topic/delay",
+      "command": [
+        "ros2",
+        "topic",
+        "delay"
+      ],
+      "requirement": "Publish synchronized Header-bearing messages remotely and assert finite delay measurements within a declared bound.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:topic/echo",
+      "command": [
+        "ros2",
+        "topic",
+        "echo"
+      ],
+      "requirement": "Receive a run-specific peer payload with --once, and validate field/filter and QoS options with matching fixtures.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:topic/find",
+      "command": [
+        "ros2",
+        "topic",
+        "find"
+      ],
+      "requirement": "Find all and only fixture topics of the requested type.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:topic/hz",
+      "command": [
+        "ros2",
+        "topic",
+        "hz"
+      ],
+      "requirement": "Collect multiple remote samples and assert the reported numeric rate within the fixture tolerance.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:topic/info",
+      "command": [
+        "ros2",
+        "topic",
+        "info"
+      ],
+      "requirement": "Use --verbose and verify endpoint node, namespace, GID, type hash and actual QoS on both boards.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:topic/list",
+      "command": [
+        "ros2",
+        "topic",
+        "list"
+      ],
+      "requirement": "Find all remote topics and canonical types; compare visible and --include-hidden-topics modes.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:topic/pub",
+      "command": [
+        "ros2",
+        "topic",
+        "pub"
+      ],
+      "requirement": "Publish a run-specific payload with --once; require the peer callback to receive exactly that payload.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:topic/type",
+      "command": [
+        "ros2",
+        "topic",
+        "type"
+      ],
+      "requirement": "Return the exact type of the remote isolated topic.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:trace",
+      "command": [
+        "ros2",
+        "trace"
+      ],
+      "requirement": "Exercise interactive trace start/stop with run-owned session state and decode actual ROS events.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:trace/pause",
+      "command": [
+        "ros2",
+        "trace",
+        "pause"
+      ],
+      "requirement": "Pause the owned session and verify fixture events in the paused interval are absent.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:trace/resume",
+      "command": [
+        "ros2",
+        "trace",
+        "resume"
+      ],
+      "requirement": "Resume the owned session and verify fixture events appear again.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:trace/start",
+      "command": [
+        "ros2",
+        "trace",
+        "start"
+      ],
+      "requirement": "Start a run-owned tracing session, publish across rmw_mdds and decode actual rcl/rmw events.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:trace/stop",
+      "command": [
+        "ros2",
+        "trace",
+        "stop"
+      ],
+      "requirement": "Stop the owned session, verify clean termination and decode the final trace artifact.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:wtf",
+      "command": [
+        "ros2",
+        "wtf"
+      ],
+      "requirement": "Run the doctor alias against live fixtures and verify matching diagnostic behavior and rmw_mdds identity.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "cli:wtf/hello",
+      "command": [
+        "ros2",
+        "wtf",
+        "hello"
+      ],
+      "requirement": "Exercise the hello verb through the wtf alias with peer message evidence.",
+      "assertions": [
+        "functional_result"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:abrupt_exit",
+      "command": [],
+      "requirement": "Kill only a run-owned fixture and verify lease-bounded graph removal and unaffected surviving participants.",
+      "assertions": [
+        "expired_removed",
+        "survivor_preserved"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:churn",
+      "command": [],
+      "requirement": "Repeatedly create/destroy remote nodes and endpoints while querying; assert no stale attribution, ghosts, crashes or missed final removal.",
+      "assertions": [
+        "snapshot_consistent",
+        "final_set_exact"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:discovery_off",
+      "command": [],
+      "requirement": "With discovery OFF require zero remote graph/matches/data; explicitly enabled control must communicate.",
+      "assertions": [
+        "remote_graph_zero",
+        "remote_matches_zero",
+        "remote_samples_zero",
+        "positive_control"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:domain_isolation",
+      "command": [],
+      "requirement": "Run matching names/types in different domains; require no foreign graph, matches or samples, then prove same-domain positive control.",
+      "assertions": [
+        "foreign_graph_zero",
+        "foreign_matches_zero",
+        "foreign_samples_zero",
+        "positive_control"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:duplicate_node_names",
+      "command": [],
+      "requirement": "Create identical node name/namespace in distinct contexts/participants; retain the required multiplicity and correct endpoints through one participant removal.",
+      "assertions": [
+        "multiplicity_exact",
+        "survivor_preserved"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:endpoint_metadata",
+      "command": [],
+      "requirement": "Check remote endpoint type, type hash, GID, node name/namespace, QoS and direction; reject QoS-incompatible matches.",
+      "assertions": [
+        "metadata_exact",
+        "qos_match_exact"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:hidden_entities",
+      "command": [],
+      "requirement": "Test hidden nodes/topics/services/actions and no-demangle APIs without leaking hidden entities into default CLI views.",
+      "assertions": [
+        "visible_set_exact",
+        "hidden_set_exact"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:late_join",
+      "command": [],
+      "requirement": "Start the observer after the peer multi-node graph is established and obtain the complete exact graph before a bounded deadline.",
+      "assertions": [
+        "snapshot_complete"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:local_guard",
+      "command": [],
+      "requirement": "Create/destroy nodes and each endpoint kind inside one context; graph guard must wake an already-blocked waiter after every change.",
+      "assertions": [
+        "create_wakes",
+        "destroy_wakes"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:reconnect",
+      "command": [],
+      "requirement": "Interrupt and restore the fixture transport, restart the peer and verify fresh identities plus complete graph/data recovery without ghosts.",
+      "assertions": [
+        "recovered_graph_exact",
+        "recovered_payload_exact"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:remote_guard",
+      "command": [],
+      "requirement": "Peer node/endpoint additions and removals must wake graph waiters and converge to the expected set.",
+      "assertions": [
+        "remote_create_wakes",
+        "remote_destroy_wakes"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:remote_multi_node",
+      "command": [],
+      "requirement": "One remote participant has at least two nodes with disjoint pub/sub/service/client/action endpoints; every by-node query and verbose endpoint report must preserve exact ownership.",
+      "assertions": [
+        "node_ownership_exact",
+        "endpoint_metadata_exact"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "graph:service_client_ownership",
+      "command": [],
+      "requirement": "Verify get_service_names_and_types_by_node, get_client_names_and_types_by_node, counts and availability for multiple clients/servers.",
+      "assertions": [
+        "ownership_exact",
+        "counts_exact",
+        "availability_exact"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "transport:a_to_b",
+      "command": [],
+      "requirement": "Board A ROS 2 rmw_mdds payload must reach the exact board B callback through DSoftBus Socket/Listen/Bind/SendBytes/OnBytes.",
+      "assertions": [
+        "socket_listen",
+        "socket_bind",
+        "send_bytes",
+        "on_bytes_exact",
+        "ros_payload_exact"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "transport:b_to_a",
+      "command": [],
+      "requirement": "Reverse the real ROS 2 payload path and prove board B to A DSoftBus Socket API callbacks and exact delivery.",
+      "assertions": [
+        "socket_listen",
+        "socket_bind",
+        "send_bytes",
+        "on_bytes_exact",
+        "ros_payload_exact"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "transport:no_udp_fallback",
+      "command": [],
+      "requirement": "Set MDDS_TRANSPORT=dsoftbus and force DSoftBus startup/link failure; require failure or disconnection with no MDDS UDP socket/backend traffic, then restore and prove positive control.",
+      "assertions": [
+        "dsoftbus_selected",
+        "failure_observed",
+        "udp_backend_absent",
+        "positive_control"
+      ],
+      "execution_boards": [
+        "3e01ff55454d202020104033bf453b00",
+        "3e01ff55454d202020104433991c3b00"
+      ],
+      "status": "NOT_RUN",
+      "evidence": []
+    }
+  ]
+}

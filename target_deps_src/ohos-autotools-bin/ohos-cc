@@ -1,2 +1,9 @@
 #!/usr/bin/env bash
-exec "/c/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/command-line-tools/sdk/default/openharmony/native/llvm/bin/clang.exe" --target=aarch64-linux-ohos --sysroot="C:/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/command-line-tools/sdk/default/openharmony/native/sysroot" -D__MUSL__ "$@"
+set -euo pipefail
+native="${OHOS_NATIVE_SDK:-}"
+[ -n "$native" ] || { echo "ERROR: set OHOS_NATIVE_SDK" >&2; exit 2; }
+compiler="$(cygpath -m "$native/llvm/bin/clang.exe")"
+sysroot="$(cygpath -m "$native/sysroot")"
+[ -f "$compiler" ] || { echo "ERROR: OHOS clang is missing: $compiler" >&2; exit 2; }
+[ -d "$sysroot" ] || { echo "ERROR: OHOS sysroot is missing: $sysroot" >&2; exit 2; }
+exec "$compiler" --target=aarch64-linux-ohos --sysroot="$sysroot" -D__MUSL__ "$@"

@@ -1,51 +1,138 @@
 #!/usr/bin/env bash
-# Export every src/ subrepo's local (OHOS port) commits as a patch series into
-# patches/, so the port survives without push access to the upstream repos.
-#
-# For each git repo under src/ with commits ahead of origin/<branch>, writes
-#   patches/<repo-path-with-__>.patch   (git format-patch --stdout series)
-#   patches/<repo-path-with-__>.base    (upstream base commit the series sits on)
-#
-# Re-run after changing/amending any subrepo commit. The generated files are
-# tracked in THIS repository; apply them on a fresh checkout with
-# scripts/apply_patches.sh.
+# Export unpublished commits plus an exact dirty-worktree snapshot for every
+# src/ repository.  A temporary index captures tracked and non-ignored
+# untracked files without touching the real index or working tree.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Repos owned by Jiusi-pys are registered in ros2.repos and pushed directly
-# to their own GitHub remotes; never mirror them into patches/.
 OWNED_REPOS="Jiusi-pys/mdds ros2/rmw_mdds"
-
 mkdir -p patches
-found=0
+TMP_BASE="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+TMP_ROOT="$(mktemp -d "$TMP_BASE/mdds-patch-export.XXXXXX")"
+case "$TMP_ROOT" in "$TMP_BASE"/mdds-patch-export.*) ;; *) exit 70 ;; esac
+cleanup() {
+  case "$TMP_ROOT" in "$TMP_BASE"/mdds-patch-export.*) rm -rf -- "$TMP_ROOT" ;; esac
+}
+trap cleanup EXIT
+
+series_count=0
+snapshot_count=0
+failed=0
+
+manifest_version_for() { # <repository-key>
+  # ros2.repos is generated in the conventional vcstool shape.  Read only
+  # the exact entry's scalar version so a locally renamed branch (for example
+  # jiusi on top of origin/jazzy) still has a fetchable provenance boundary.
+  awk -v target="$1" '
+    $0 == "  " target ":" { in_target = 1; next }
+    in_target && /^  [^ ]/ { exit }
+    in_target && /^    version: / {
+      sub(/^    version: /, "")
+      gsub(/^['\''"]|['\''"]$/, "")
+      print
+      exit
+    }
+  ' ros2.repos
+}
+
+provenance_ref_for() { # <repo> <relative-path> <local-branch>
+  local repo="$1" rel="$2" branch="$3" candidate manifest_version
+  candidate="$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  if [ -n "$candidate" ] && git -C "$repo" cat-file -e "$candidate^{commit}" 2>/dev/null; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  candidate="origin/$branch"
+  if git -C "$repo" cat-file -e "$candidate^{commit}" 2>/dev/null; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  manifest_version="$(manifest_version_for "$rel")"
+  [ -n "$manifest_version" ] || return 1
+  for candidate in "origin/$manifest_version" "$manifest_version"; do
+    if git -C "$repo" cat-file -e "$candidate^{commit}" 2>/dev/null; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 while IFS= read -r gitdir; do
   repo="${gitdir%/.git}"
   rel="${repo#src/}"
   key="${rel//\//__}"
-  case " $OWNED_REPOS " in
-    *" $rel "*)
-      # owned repo: drop any stale series exported before this exemption
-      rm -f "patches/$key.patch" "patches/$key.base"
-      continue
-      ;;
-  esac
   branch="$(git -C "$repo" symbolic-ref --short -q HEAD || true)"
-  [ -n "$branch" ] || continue                       # detached HEAD: skip (warn below)
-  git -C "$repo" rev-parse --verify -q "origin/$branch" >/dev/null || continue
-  ahead="$(git -C "$repo" rev-list --count "origin/$branch..HEAD")"
-  if [ "$ahead" -eq 0 ]; then
-    # no local commits left: remove a stale exported series if present
-    rm -f "patches/$key.patch" "patches/$key.base"
+  if [ -z "$branch" ]; then
+    echo "ERROR: $rel is detached; attach the intended release branch" >&2
+    failed=1
     continue
   fi
-  # true base = parent of the first local commit (origin/<branch> may have
-  # moved forward since the local branch was created, e.g. after a vcs pull)
-  first="$(git -C "$repo" rev-list "origin/$branch..HEAD" | tail -1)"
-  base="$(git -C "$repo" rev-parse "$first^")"
-  git -C "$repo" format-patch --stdout "$base..HEAD" > "patches/$key.patch"
-  echo "$base" > "patches/$key.base"
-  echo "== $rel: $ahead commit(s) on $branch -> patches/$key.patch"
-  found=$((found+1))
-done < <(find src -maxdepth 3 -name .git -type d | sort)
+  provenance_ref="$(provenance_ref_for "$repo" "$rel" "$branch" || true)"
+  if [ -z "$provenance_ref" ]; then
+    echo "ERROR: $rel has no fetchable branch/manifest provenance boundary" >&2
+    failed=1
+    continue
+  fi
 
-echo "exported $found repo series into patches/"
+  if git -C "$repo" merge-base --is-ancestor HEAD "$provenance_ref"; then
+    rm -f "patches/$key.patch" "patches/$key.base" "patches/$key.tree"
+  else
+    base="$(git -C "$repo" merge-base "$provenance_ref" HEAD)"
+    if [ -z "$base" ]; then
+      echo "ERROR: $rel has no merge base with $provenance_ref" >&2
+      failed=1
+      continue
+    fi
+    ahead="$(git -C "$repo" rev-list --count "$base..HEAD")"
+    if [ "$ahead" -le 0 ]; then
+      echo "ERROR: empty unpublished range for $rel" >&2
+      failed=1
+      continue
+    fi
+    git -C "$repo" format-patch --stdout "$base..HEAD" > "patches/$key.patch"
+    printf '%s\n' "$base" > "patches/$key.base"
+    git -C "$repo" rev-parse 'HEAD^{tree}' > "patches/$key.tree"
+    exported="$(grep -Ec '^From [0-9a-f]{40} ' "patches/$key.patch" || true)"
+    if [ "$exported" -ne "$ahead" ]; then
+      echo "ERROR: patch count mismatch for $rel: range=$ahead patch=$exported" >&2
+      failed=1
+      continue
+    fi
+    echo "== $rel: $ahead unpublished commit(s) -> patches/$key.patch"
+    case " $OWNED_REPOS " in
+      *" $rel "*) echo "   note: owned HEAD is not reachable from origin; fallback series retained" ;;
+    esac
+    series_count=$((series_count + 1))
+  fi
+
+  # Snapshot the index+worktree through a private index. `git add -A` includes
+  # tracked changes and non-ignored untracked files, while the user's actual
+  # index and staging state remain byte-for-byte untouched.
+  private_index="$TMP_ROOT/$key.index"
+  GIT_INDEX_FILE="$private_index" git -C "$repo" read-tree HEAD
+  GIT_INDEX_FILE="$private_index" git -C "$repo" add -A
+  snapshot_tree="$(GIT_INDEX_FILE="$private_index" git -C "$repo" write-tree)"
+  head_tree="$(git -C "$repo" rev-parse 'HEAD^{tree}')"
+  if [ "$snapshot_tree" = "$head_tree" ]; then
+    rm -f "patches/$key.snapshot.patch" "patches/$key.snapshot.base" "patches/$key.snapshot.tree"
+  else
+    GIT_INDEX_FILE="$private_index" git -C "$repo" diff --cached --binary --full-index HEAD -- > \
+      "patches/$key.snapshot.patch"
+    # Record tree IDs as values, not as objects that a fresh clone must
+    # already possess. git-am may recreate an equivalent commit with a new
+    # committer timestamp/SHA; its HEAD tree is the stable snapshot base.
+    printf '%s\n' "$head_tree" > "patches/$key.snapshot.base"
+    printf '%s\n' "$snapshot_tree" > "patches/$key.snapshot.tree"
+    [ -s "patches/$key.snapshot.patch" ] || {
+      echo "ERROR: non-empty snapshot tree produced an empty patch for $rel" >&2
+      failed=1
+      continue
+    }
+    echo "== $rel: dirty tracked/untracked snapshot -> patches/$key.snapshot.patch"
+    snapshot_count=$((snapshot_count + 1))
+  fi
+done < <(find src -maxdepth 3 -name .git -type d | LC_ALL=C sort)
+
+echo "exported $series_count commit series and $snapshot_count worktree snapshots"
+[ "$failed" -eq 0 ] || exit 1

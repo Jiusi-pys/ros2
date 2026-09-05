@@ -12,9 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Clone project
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Install dependencies
-        run: python3 -m pip install vcs2l yamllint
+        run: python3 -m pip install vcstool yamllint PyYAML
       - name: Validate formatting
         run: >
           yamllint ros2.repos
@@ -22,3 +22,20 @@ jobs:
           -d "{extends: default, rules: {document-start: {present: false}, key-ordering: {}}}"
       - name: Validate repositories
         run: vcs validate --input ros2.repos
+      - name: Validate immutable KaihongOS release inputs
+        run: |
+          vcs validate --input ros2.ohos.lock.repos
+          python3 scripts/verify_release_inputs.py
+          bash scripts/test_target_deps_lock.sh
+
+  fresh_lock_replay:
+    name: Fresh KaihongOS lock replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v4
+      - name: Install replay dependencies
+        run: python3 -m pip install vcstool PyYAML
+      - name: Import immutable lock and replay port patches
+        run: bash scripts/verify_fresh_lock_replay.sh "$RUNNER_TEMP/ros2-ohos-replay"

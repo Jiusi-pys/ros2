@@ -1,6 +1,31 @@
 # Shell scripts and patch/base files must keep LF everywhere: git am would
 # otherwise import \r into patched sources, and sh rejects CRLF scripts.
 *.sh text eol=lf
-patches/*.patch text eol=lf
+# Build receipts bind raw input bytes, not only Git's normalized tree. Keep
+# extensionless compiler wrappers executable and all recipe inputs identical
+# when cloning with core.autocrlf=true. The ignore file is preserved byte-for-
+# byte because it also participates in the clean materialization contract.
+.gitignore -text
+.gitattributes text eol=lf
+*.py text eol=lf
+*.cmake text eol=lf
+*.json text eol=lf
+*.lock text eol=lf
+target_deps_src/ohos-autotools-bin/ohos-cc text eol=lf
+target_deps_src/ohos-autotools-bin/ohos-cxx text eol=lf
+target_deps_src/qt-host-tools/cross-qmake.bat text eol=lf
+target_deps_src/qt_smoke/*.cpp text eol=lf
+# Mbox/unified-diff syntax intentionally contains one-space context blank
+# lines and the conventional "-- " signature separator. Do not diagnose
+# those syntax bytes as whitespace defects in the meta repository.
+patches/*.patch text eol=lf -whitespace
 patches/*.base text eol=lf
+patches/*.tree text eol=lf
+ros2.ohos.lock.repos text eol=lf
 target_deps_src/*.patch text eol=lf
+scripts/python_runtime_artifact.py text eol=lf
+scripts/python_target.py text eol=lf
+scripts/python_source/*.py text eol=lf
+scripts/python_source/*.json text eol=lf
+scripts/python_source/*.patch text eol=lf
+scripts/python/ohos_python.lock.json text eol=lf

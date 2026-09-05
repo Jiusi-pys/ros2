@@ -1,0 +1,43 @@
+diff --git a/ament_cmake_vendor_package/cmake/ament_vendor.cmake b/ament_cmake_vendor_package/cmake/ament_vendor.cmake
+index c9b963cd061854760e9597c1583fb89454afddf7..76f4be8b3909a362823953f53f74f85d4396f495 100644
+--- a/ament_cmake_vendor_package/cmake/ament_vendor.cmake
++++ b/ament_cmake_vendor_package/cmake/ament_vendor.cmake
+@@ -148,6 +148,13 @@ macro(ament_vendor TARGET_NAME)
+ endmacro()
+ 
+ function(_ament_vendor TARGET_NAME VCS_TYPE VCS_URL VCS_VERSION PATCHES CMAKE_ARGS SOURCE_SUBDIR SKIP_INSTALL)
++  set(OHOS_VENDOR_URL_HASH "")
++  if(OHOS_CROSS_BUILD)
++    include("${OHOS_WORKSPACE_ROOT}/cmake/ohos-vendor-lock.cmake")
++    ohos_resolve_vendor_source("${VCS_TYPE}" "${VCS_URL}" "${VCS_VERSION}"
++      VCS_VERSION OHOS_VENDOR_URL_HASH)
++    list(PREPEND CMAKE_ARGS -DCMAKE_SKIP_RPATH=ON)
++  endif()
+   set(PATCH_FILES)
+   foreach(PATCH ${PATCHES})
+     if(NOT IS_ABSOLUTE ${PATCH})
+@@ -271,6 +278,13 @@ function(_ament_vendor TARGET_NAME VCS_TYPE VCS_URL VCS_VERSION PATCHES CMAKE_AR
+       APPEND EXTERNALPROJECT_ARGS
+       SOURCE_DIR ${VCS_URL}
+     )
++  elseif(OHOS_VENDOR_URL_HASH)
++    list(APPEND EXTERNALPROJECT_ARGS
++      URL "${VCS_URL}"
++      URL_HASH "${OHOS_VENDOR_URL_HASH}"
++      DOWNLOAD_EXTRACT_TIMESTAMP FALSE
++      SOURCE_SUBDIR ${SOURCE_SUBDIR}
++    )
+   else()
+     set(REPOS_FILE "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}.repos")
+     configure_file("${ament_cmake_vendor_package_DIR}/templates/target.repos.in" ${REPOS_FILE} @ONLY)
+@@ -296,7 +310,9 @@ function(_ament_vendor TARGET_NAME VCS_TYPE VCS_URL VCS_VERSION PATCHES CMAKE_AR
+     ${EXTERNALPROJECT_ARGS}
+   )
+ 
+-  externalproject_add_stepdependencies(${TARGET_NAME} download ${REPOS_FILE})
++  if(REPOS_FILE)
++    externalproject_add_stepdependencies(${TARGET_NAME} download ${REPOS_FILE})
++  endif()
+   if(PATCH_FILES)
+     externalproject_add_stepdependencies(${TARGET_NAME} download ${PATCH_FILES})
+   endif()

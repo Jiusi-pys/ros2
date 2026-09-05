@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "kind": "cpython-ohos-source-input-lock",
+  "target": {
+    "architecture": "aarch64",
+    "platform": "linux-ohos",
+    "python_version": "3.12.7",
+    "python_api_version": "3.12",
+    "soabi": "cpython-312-aarch64-linux-ohos",
+    "extension_suffix": ".cpython-312-aarch64-linux-ohos.so",
+    "remote_prefix": "/data/python312-rk3588a"
+  },
+  "inputs": {
+    "cpython": {
+      "filename": "Python-3.12.7.tar.xz",
+      "url": "https://www.python.org/ftp/python/3.12.7/Python-3.12.7.tar.xz",
+      "sha256": "24887b92e2afd4a2ac602419ad4b596372f67ac9b077190f459aba390faf5550"
+    },
+    "jiusi_python": {
+      "url": "https://github.com/Jiusi-pys/python.git",
+      "branch": "python3.12.12",
+      "commit": "098f200c30f1f35051d73041e6acbad46af60904",
+      "config_sub": {
+        "path": "Python-3.12.12/config.sub",
+        "git_blob": "5ce8f1edddb7e7507109dc9a6d5c5a160938ec04",
+        "sha256": "c2d7579743cdc855c42c8ba03b94e761182d9539ebb832e81559346e47e44a1a"
+      },
+      "config_site": {
+        "path": "Python-3.12.12/config.site",
+        "git_blob": "c186915836bb40a35f5bc2f4bb3656aa18029bcc",
+        "sha256": "c7b23c773c190ccd13a35de1b149fd2bfc947df2365104ce1f1fb6c6766b76f7"
+      }
+    },
+    "portable_patch": {
+      "path": "scripts/python_source/ohos-platform-triplet.patch",
+      "sha256": "01d07dc7ae46b26ed0b2da9fcbd042e9e770d18187e585e429f9c886491cdd29"
+    },
+    "prepared_source": {
+      "tree_algorithm": "sha256sum-lines-and-symlinks-v1",
+      "tree_sha256": "79a84087d59a6ae975f15ba2fe052d864383726226ecd6203ae5d778564f606a"
+    },
+    "ohos_clang": {
+      "filename": "clang_linux-x86_64-3f002d-20260617.tar.gz",
+      "url": "https://repo.huaweicloud.com/openharmony/compiler/clang/15.0.4-3f002d_sp1/linux/clang_linux-x86_64-3f002d-20260617.tar.gz",
+      "sha256": "c145541d4ba1be88c6f94f96707a1a8d84f93e3c7e447e3d8adc8581ddbf2169",
+      "version": "15.0.4",
+      "commit": "3f002d04ba6b3a7659c601207c89d3a896b82546",
+      "clang_sha256": "e3b580892979131819c2ad7c6f49e881e2f1fbfeeeb8e31e5f7c41a8f62f521c",
+      "llvm_readelf_sha256": "f884962908063b04c1c0048136f4a1925fd15e0c5ff4a751432e8bf7dbe220b3"
+    },
+    "ohos_native_sdk": {
+      "repository": "https://gitcode.com/openharmony-tpc/chromium_src.git",
+      "commit": "5d687ae46ec7b819e063073e3c8989c5c29bb8f9",
+      "path": "ohos_sdk/native-linux-x64-6.1.1.125-Release.zip",
+      "filename": "native-linux-x64-6.1.1.125-Release.zip",
+      "lfs_oid_sha256": "01f0a5214821f3e55fa55f75829f62be53aeeb368a64e6ad541dec9512b778bb",
+      "bytes": 837090203,
+      "metadata_sha256": "e197b5d3dfcdd498247b8143d931f1b00789dbc67bcc713c52511953500c5068",
+      "sysroot_tree_algorithm": "sha256sum-lines-and-symlinks-v1",
+      "sysroot_tree_sha256": "7e5a83d88743d34c123d9e9d6b90f31ff1a5a7e446c71be2d51b25550812021a"
+    },
+    "dependencies": [
+      {
+        "name": "bzip2",
+        "version": "1.0.8",
+        "filename": "bzip2-1.0.8.tar.gz",
+        "url": "https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz",
+        "sha256": "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269"
+      },
+      {
+        "name": "libffi",
+        "version": "3.6.0",
+        "filename": "libffi-3.6.0.tar.gz",
+        "url": "https://github.com/libffi/libffi/releases/download/v3.6.0/libffi-3.6.0.tar.gz",
+        "sha256": "31ff1fe32deaebfbb388727f32677bb254bf2a41382c51464c0b1837c9ee9828"
+      },
+      {
+        "name": "openssl",
+        "version": "3.0.16",
+        "filename": "openssl-3.0.16.tar.gz",
+        "url": "https://github.com/openssl/openssl/releases/download/openssl-3.0.16/openssl-3.0.16.tar.gz",
+        "sha256": "57e03c50feab5d31b152af2b764f10379aecd8ee92f16c985983ce4a99f7ef86"
+      },
+      {
+        "name": "sqlite",
+        "version": "3.37.2",
+        "filename": "sqlite-amalgamation-3370200.zip",
+        "url": "https://www.sqlite.org/2022/sqlite-amalgamation-3370200.zip",
+        "sha256": "cb25df0fb90b77be6660f6ace641bbea88f3d0441110d394ce418f35f7561bb0"
+      },
+      {
+        "name": "xz",
+        "version": "5.8.3",
+        "filename": "xz-5.8.3.tar.xz",
+        "url": "https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.xz",
+        "sha256": "fff1ffcf2b0da84d308a14de513a1aa23d4e9aa3464d17e64b9714bfdd0bbfb6"
+      }
+    ]
+  },
+  "build_recipe": {
+    "algorithm": "sha256-length-framed-path-size-content-v1",
+    "files": [
+      "scripts/python_runtime_artifact.py",
+      "scripts/python_source/board_overlay_probe.py",
+      "scripts/python_source/board_runtime_probe.py",
+      "scripts/python_source/normalize_cpython_metadata.py",
+      "scripts/python_source/ohos-platform-triplet.patch",
+      "scripts/python_source/prepare_cpython_source.sh",
+      "scripts/python_source/rebuild_cpython_ohos.sh",
+      "scripts/python_source/rebuild_host_python.sh",
+      "scripts/python_source/rebuild_openssl_ohos.sh",
+      "scripts/python_source/rebuild_python_dependencies.sh",
+      "scripts/python_source/rebuild_source_release.sh",
+      "scripts/python_source/verify_cpython_runtime.sh",
+      "scripts/python_target.py"
+    ]
+  },
+  "required_stdlib_extensions": [
+    "_bz2",
+    "_ctypes",
+    "_hashlib",
+    "_lzma",
+    "_posixsubprocess",
+    "_socket",
+    "_sqlite3",
+    "_ssl",
+    "select",
+    "zlib"
+  ],
+  "bundled_dsos": [
+    {"path": "lib/libbz2.so.1.0.8", "soname": "libbz2.so.1.0"},
+    {"path": "lib/libcrypto.so.3", "soname": "libcrypto.so.3"},
+    {"path": "lib/libffi.so.8.3.1", "soname": "libffi.so.8"},
+    {"path": "lib/liblzma.so.5.8.3", "soname": "liblzma.so.5"},
+    {"path": "lib/libsqlite3.so.0.8.6", "soname": "libsqlite3.so.0"},
+    {"path": "lib/libssl.so.3", "soname": "libssl.so.3"}
+  ]
+}

@@ -1,11 +1,29 @@
 # ROS 2 for OpenHarmony (RK3588A)
 
-This fork ports the full ROS 2 Jazzy Jalisco stack to OpenHarmony boards
-(aarch64-linux-ohos, musl libc) — tested on RK3588A / KaihongOS. Everything
-except the Connext RMW works on the board: CycloneDDS and Fast-DDS RMWs,
-rclcpp/rclpy, ros2cli, rosbag2, tf2, iceoryx zero-copy, LTTng tracing, and
-the Qt5 GUI stack (rqt, turtlesim, rviz with GLES2 OGRE). 364 packages
-cross-build cleanly; the package ctest suites run on the board.
+This fork contains a ROS 2 Jazzy Jalisco port for OpenHarmony
+(`aarch64-linux-ohos`, musl libc), developed on RK3588A / KaihongOS. The
+workspace has historically cross-built 364 packages, but that is build
+evidence for the recorded source snapshot—not a blanket runtime claim for
+every package or RMW.
+
+Current generic-port verification is deliberately reported by layer:
+
+- Fast DDS is the default RMW candidate. Its focused RK3588A regression gate
+  has passed; a newly built release must pass the generic acceptance suite too.
+- CPython, C++/Python messaging, CLI, services, actions, rosbag2 replay, decoded
+  tracing events and process cleanup are mandatory generic runtime gates.
+- GUI is experimental; SHM is disabled by default and experimental. DDS
+  Security/TLS and Connext are outside this release profile.
+- `rmw_mdds`, `mdds` and `mdds_gateway` are excluded by default and retain
+  their independent workflows. They are not prerequisites for generic ROS 2.
+
+See [the support matrix](docs/kaihongos_support_matrix.md) for evidence limits.
+
+Source locking covers both the 111 top-level repositories and build-time
+vendor downloads. The OHOS `ament_vendor` hook resolves mutable upstream tags
+through `cmake/ohos-vendor-sources.lock.json`, rejects unknown tag/URL pairs,
+and checks archive SHA-256 before extraction. Foonathan's separate download
+is pinned to a full public commit. Non-OHOS vendor behavior is unchanged.
 
 The OHOS work lives on the `jazzy_ohos` branch.
 
@@ -17,55 +35,156 @@ OpenHarmony command-line-tools SDK (NDK), and `hdc` access to the board(s).
 ```bash
 git clone -b jazzy_ohos git@github.com:Jiusi-pys/ros2.git
 cd ros2
-pixi install && pixi shell
+pixi install --locked
 
-# fetch the upstream ROS 2 sources, then replay the OHOS port patches
-vcs import --input ros2.repos src/
-./scripts/apply_patches.sh
+# Fetch the exact release bases into an empty retained directory, replay every
+# patch/snapshot, initialize the exact Fast-DDS Asio/TinyXML2 gitlinks, and
+# compare all resulting trees. Continue the release build in REPLAY_DIR.
+REPLAY_DIR=/absolute/empty/ros2-ohos-replay
+./scripts/verify_fresh_lock_replay.sh "$REPLAY_DIR"
+cd "$REPLAY_DIR"
+pixi install --locked
 
-# one-time target dependencies (CPython sysroot, tinyxml2, OGRE, Qt, ...)
-./scripts/pull_python_target.sh
-./scripts/build_target_deps.sh
-./target_deps_src/build_ogre_ohos.sh
-./target_deps_src/build_assimp_ohos.sh
-./target_deps_src/build_qtsvg_ohos.sh
-# Qt5 / PyQt5 cross builds: see target_deps_src/pyqt/ and AGENTS.md
+# Select one SDK consistently for dependency build, ROS build and provenance.
+export OHOS_NATIVE_SDK=C:/absolute/path/to/native
+export HDC=C:/absolute/path/to/hdc.exe
 
-# cross-build everything, then deploy to the board(s) over hdc
-./scripts/build_ohos.sh
-./scripts/install_board_python_deps.sh
-./scripts/deploy_ohos.sh
+# Materialize hash-verified Python inputs at python_target/usr and
+# python_target/sitepkgs, plus the runtime archive and its .manifest.json.
+# Use the public-source CPython workflow below, not a runtime pulled from a board.
+export OHOS_PYTHON_RUNTIME_ARCHIVE="$PWD/python_target/runtime-artifacts/cpython-3.12.7-ohos-aarch64-source.tar.gz"
+pixi run python scripts/python_target.py verify-runtime --root python_target/usr
+pixi run python scripts/python_target.py verify-stage --site python_target/sitepkgs
 
-# verify
-./scripts/smoke_loopback.sh          # same-board talker/listener
-./scripts/run_bidirectional_test.sh  # board A <-> board B
-./scripts/run_board_tests.sh         # ctest suites on the board
+# Requires an absent install prefix and no downloaded/extracted dependency cache.
+./target_deps_src/build_all_clean_ohos.sh
+OHOS_REQUIRE_CLEAN=1 ./scripts/build_ohos.sh
+
+# Use the COMPLETE receipt path printed by the build; never substitute a log.
+export OHOS_BUILD_RECEIPT=/absolute/path/to/ohos_build_receipt.json
+./scripts/deploy_python_runtime_artifact.sh "$OHOS_PYTHON_RUNTIME_ARCHIVE" BOARD_A BOARD_B
+# Select the isolated Python prefix printed by runtime deployment.
+python_archive_sha=$(sha256sum "$OHOS_PYTHON_RUNTIME_ARCHIVE" | cut -d ' ' -f1)
+export PYTHON_REMOTE_PREFIX="/data/python312-rk3588a-verify-${python_archive_sha:0:12}"
+PYTHON_REQUIRE_RUNTIME_ARTIFACT=1 \
+  PYTHON_RUNTIME_ARTIFACT_ARCHIVE="$OHOS_PYTHON_RUNTIME_ARCHIVE" \
+  PYTHON_RUNTIME_ARTIFACT_MANIFEST="$OHOS_PYTHON_RUNTIME_ARCHIVE.manifest.json" \
+  ./scripts/install_board_python_deps.sh BOARD_A BOARD_B
+./scripts/deploy_ohos_generic.sh BOARD_A BOARD_B
+ROS2_BOARD_A=BOARD_A ROS2_BOARD_B=BOARD_B ./scripts/run_ohos_generic_acceptance.sh
 ```
 
-On the board: `. /data/local/tmp/ros2/env.sh`, then `ros2`, `rqt`, `rviz2`,
-`$ROS2_TALKER`/`$ROS2_LISTENER`, `turtlesim_node`, ...
+The locked interface, full runtime artifact, source-build receipt and Python
+overlay must first be materialized and verified. Do not obtain an arbitrary
+board runtime and call it publicly source-reproducible. Generic deployment binds the COMPLETE build
+receipt, archive, exact source state, SDK and Python payloads. Acceptance checks
+both boards' OS identities and payload trees before and after runtime tests.
+The clean ROS receipt and generic release collector reject artifact-only Python
+inputs; the legacy artifact deployment path remains available for diagnostics.
+Generic deployment uses `/data/local/tmp/ros2-generic`, leaving the legacy
+`/data/local/tmp/ros2` tree untouched. Here, clean-board acceptance means an
+isolated payload/environment with no pre-existing acceptance processes; it
+does not mean reflashing the OS or deleting unrelated board data.
 
-See [AGENTS.md](AGENTS.md) for the full porting details (toolchain, musl
-quirks, Qt/OGRE recipes, board-test infrastructure, debugging tips).
+### Public-source CPython input
 
-## How the port is maintained (no upstream push access)
+The source recipe has completed an empty-directory build of CPython 3.12.7
+with 70 target extension modules. This is source-build evidence, not a substitute
+for the Python and ROS board-runtime gates. The
+[input lock](scripts/python_source/source_build.lock.json) pins the official
+CPython archive, the `Jiusi-pys/python` port configuration at an exact commit,
+Linux OHOS compiler/SDK inputs and the five native dependency sources. The
+[entry point](scripts/python_source/rebuild_source_release.sh) verifies the
+prepared source tree and the recipe hashes before and after the build.
 
-The `src/` subrepos are read-only upstream clones. Every OHOS modification
-is kept as local commits in the subrepo **and** as an exported patch series
-in `patches/` (one `.patch` + `.base` per repo):
-
-- `./scripts/export_patches.sh` — re-export `patches/` after committing or
-  amending anything in a subrepo (commit the result here).
-- `./scripts/apply_patches.sh` — replay `patches/` onto a fresh
-  `vcs import` checkout; idempotent, 3-way apply.
-
-Syncing with upstream ROS 2:
+Run that entry point in a Linux build environment (the verified host is WSL
+Ubuntu 20.04 with GNU build tools, Git LFS and curl), from this checkout:
 
 ```bash
-vcs pull src/                  # fetch upstream updates
-./scripts/apply_patches.sh     # re-apply the port (resolve 3-way conflicts)
-./scripts/export_patches.sh    # re-export and commit the updated series
+bash scripts/python_source/rebuild_source_release.sh \
+  --output /var/tmp/cpython-ohos-release
 ```
+
+The output path must not exist. An optional `--cache` accepts only downloaded
+archives that match the public input lock; it never reuses a build or extracted
+source tree. Retain `source-build.trace`, the runtime archive and
+`release/PYTHON_SOURCE_BUILD_RECEIPT.json`. Copy the two release files, without
+renaming them, into the Windows workspace's `python_target/runtime-artifacts/`.
+Then, in Git Bash:
+
+```bash
+export OHOS_PYTHON_RUNTIME_ARCHIVE="$PWD/python_target/runtime-artifacts/cpython-3.12.7-ohos-aarch64-source.tar.gz"
+pixi run python scripts/python_runtime_artifact.py seal \
+  --archive "$OHOS_PYTHON_RUNTIME_ARCHIVE" --origin public-source-build \
+  --source-build-receipt "$PWD/python_target/runtime-artifacts/PYTHON_SOURCE_BUILD_RECEIPT.json"
+./scripts/pull_python_target.sh --runtime-usr /path/to/source-build/target-build/runtime/usr
+pixi run python scripts/python_target.py fetch-artifacts
+./scripts/stage_python_wheels.sh
+```
+
+The `usr` path must expose the just-built runtime to Git Bash; no existing board
+runtime is used. The seal and staging commands reject outputs that do not match
+the checked-in Python lock. That lock identifies one accepted candidate: a new
+build receipt can require a reviewed output-lock update even when its source
+inputs are unchanged. A different source/SDK/recipe likewise needs a new reviewed
+lock and build receipt, not a bypass of these checks. The receipt
+binds the actual build and output hashes; cross-host bit-for-bit reproducibility
+and cryptographic attestation are not claimed.
+
+For source-runtime overlay acceptance, use
+`scripts/verify_python_source_overlay.py`. The older
+`scripts/python_source/board_overlay_probe.py` is retained only as a frozen
+recipe companion for reproducing the recorded build-input digest; it is not
+an acceptance entry point. Its historical prefix assertion rejects even the
+current isolated deployment. The replacement rejects the legacy runtime and
+other verification prefixes while allowing only the expected current prefix.
+
+## MDDS release boundary
+
+The generic profile neither builds nor validates MDDS/rmw_mdds/mdds_gateway.
+Their lock entries reference public commits; unpublished MDDS series, dirty
+snapshots and legacy launcher/deployment changes are intentionally not part of
+this release. Existing committed MDDS test history is retained, without turning
+it into generic-port acceptance evidence. Use a separately reviewed MDDS
+workflow when those components are needed.
+
+## Reproducible port snapshot
+
+`ros2.repos` remains the moving development manifest. A release uses
+`ros2.ohos.lock.repos`, whose revisions are immutable commit IDs. OHOS changes
+are represented in `patches/` as:
+
+- `.patch`, `.base`, `.tree`: unpublished commit series and expected tree;
+- `.snapshot.patch`, `.snapshot.base`, `.snapshot.tree`: tracked plus
+  non-ignored untracked working-tree state captured through a temporary Git
+  index. The real subrepo index/worktree is not changed.
+
+- `./scripts/export_patches.sh` — development-only export of unpublished commits
+  and current worktree snapshots. Inspect its output before publication; this
+  tool can include work outside the generic release scope.
+- `pixi run python scripts/freeze_ros2_repos.py` — regenerate the immutable
+  base manifest after exporting patches.
+- `./scripts/apply_patches.sh` — replay `patches/` onto a fresh
+  locked-manifest checkout and verify the resulting commit/worktree trees.
+- `./scripts/verify_fresh_lock_replay.sh /path/to/empty-dir` — perform a real
+  all-repository locked import, apply every series/snapshot, and compare all
+  111 reconstructed worktree trees with the source workspace. The evidence
+  directory is intentionally retained.
+
+Deliberately refreshing against upstream ROS 2 (development, not release
+replay):
+
+```bash
+vcs pull src/                  # fetch upstream updates/rebase each port branch
+./scripts/export_patches.sh
+pixi run python scripts/freeze_ros2_repos.py
+```
+
+Before release, reproduce in an empty directory using the lock manifest and
+run the full build and relevant board gates. Only explicitly authorized port
+changes belong in the published patch inventory. In this generic profile the
+owned MDDS repositories have no unpublished fallback patches; local MDDS work
+remains outside the release checkout. Pushing is a separate human gate.
 
 # About 
 The Robot Operating System (ROS) is a set of software libraries and tools that help you build robot applications.

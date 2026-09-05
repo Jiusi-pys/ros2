@@ -1,5 +1,24 @@
 # Agent Guide for `ros2/ros2`
 
+## Current generic KaihongOS release profile
+
+Use README.md and docs/kaihongos_support_matrix.md for the current release
+workflow and support verdicts; the porting notes below are historical context.
+Run pixi install --locked, import ros2.ohos.lock.repos, replay only the checked-in
+patch inventory, build fixed-source CPython, then run
+target_deps_src/build_all_clean_ohos.sh and OHOS_REQUIRE_CLEAN=1 scripts/build_ohos.sh.
+Deploy with scripts/deploy_ohos_generic.sh and validate with
+scripts/run_ohos_generic_acceptance.sh. Do not use legacy MDDS launchers or
+board-pulled Python as generic acceptance evidence. Never kill unrelated board
+processes or overwrite an old install to make a test pass. Keep GUI/SHM
+experimental and DDS Security/TLS outside this release profile.
+
+Existing unpublished MDDS work is deliberately excluded from this generic
+release. Its two repositories remain at the public commits in the lock, without
+local series/snapshots. Do not regenerate/export all dirty repositories and
+publish them implicitly. Preserving local work is not authorization to release it.
+The nine previously committed meta-repository changes are retained separately.
+
 This repository is the **source distribution workspace for ROS 2**. It does not contain the actual ROS 2 package source code. Instead, it provides the manifest and dependency declarations needed to fetch, build, and validate a complete ROS 2 distribution from source.
 
 ## Project Overview

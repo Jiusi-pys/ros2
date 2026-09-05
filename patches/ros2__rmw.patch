@@ -1,0 +1,6176 @@
+From d5ccbcf7c3cb94c38ef18e9b77e829f225165de4 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Thu, 27 Aug 2026 07:36:34 +0800
+Subject: [PATCH] Add Simplified Chinese localized header translations for rmw
+ API
+
+---
+ rmw/include/rmw/allocators_zh.h               |  159 +
+ .../rmw/dynamic_message_type_support_zh.h     |   90 +
+ rmw/include/rmw/error_handling_zh.h           |  186 +
+ rmw/include/rmw/event_callback_type_zh.h      |   52 +
+ rmw/include/rmw/event_zh.h                    |  148 +
+ .../rmw/get_service_names_and_types_zh.h      |   92 +
+ rmw/include/rmw/get_topic_endpoint_info_zh.h  |  171 +
+ .../rmw/get_topic_names_and_types_zh.h        |   92 +
+ rmw/include/rmw/impl/cpp/demangle_zh.hpp      |   62 +
+ rmw/include/rmw/init_zh.h                     |  166 +
+ rmw/include/rmw/macros_zh.h                   |   27 +
+ rmw/include/rmw/message_sequence_zh.h         |  119 +
+ rmw/include/rmw/names_and_types_zh.h          |  148 +
+ rmw/include/rmw/publisher_options_zh.h        |   37 +
+ rmw/include/rmw/qos_profiles_zh.h             |  203 ++
+ rmw/include/rmw/rmw_zh.h                      | 3025 +++++++++++++++++
+ rmw/include/rmw/sanity_checks_zh.h            |   45 +
+ rmw/include/rmw/subscription_options_zh.h     |   37 +
+ rmw/include/rmw/types_zh.h                    |  683 ++++
+ rmw/include/rmw/validate_full_topic_name_zh.h |  130 +
+ rmw/include/rmw/validate_namespace_zh.h       |  131 +
+ rmw/include/rmw/validate_node_name_zh.h       |  119 +
+ rmw/include/rmw/visibility_control_zh.h       |   58 +
+ 23 files changed, 5980 insertions(+)
+ create mode 100644 rmw/include/rmw/allocators_zh.h
+ create mode 100644 rmw/include/rmw/dynamic_message_type_support_zh.h
+ create mode 100644 rmw/include/rmw/error_handling_zh.h
+ create mode 100644 rmw/include/rmw/event_callback_type_zh.h
+ create mode 100644 rmw/include/rmw/event_zh.h
+ create mode 100644 rmw/include/rmw/get_service_names_and_types_zh.h
+ create mode 100644 rmw/include/rmw/get_topic_endpoint_info_zh.h
+ create mode 100644 rmw/include/rmw/get_topic_names_and_types_zh.h
+ create mode 100644 rmw/include/rmw/impl/cpp/demangle_zh.hpp
+ create mode 100644 rmw/include/rmw/init_zh.h
+ create mode 100644 rmw/include/rmw/macros_zh.h
+ create mode 100644 rmw/include/rmw/message_sequence_zh.h
+ create mode 100644 rmw/include/rmw/names_and_types_zh.h
+ create mode 100644 rmw/include/rmw/publisher_options_zh.h
+ create mode 100644 rmw/include/rmw/qos_profiles_zh.h
+ create mode 100644 rmw/include/rmw/rmw_zh.h
+ create mode 100644 rmw/include/rmw/sanity_checks_zh.h
+ create mode 100644 rmw/include/rmw/subscription_options_zh.h
+ create mode 100644 rmw/include/rmw/types_zh.h
+ create mode 100644 rmw/include/rmw/validate_full_topic_name_zh.h
+ create mode 100644 rmw/include/rmw/validate_namespace_zh.h
+ create mode 100644 rmw/include/rmw/validate_node_name_zh.h
+ create mode 100644 rmw/include/rmw/visibility_control_zh.h
+
+diff --git a/rmw/include/rmw/allocators_zh.h b/rmw/include/rmw/allocators_zh.h
+new file mode 100644
+index 0000000..2abc9c6
+--- /dev/null
++++ b/rmw/include/rmw/allocators_zh.h
+@@ -0,0 +1,159 @@
++// Copyright 2014 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__ALLOCATORS_H_
++#define RMW__ALLOCATORS_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/types.h"
++#include "rmw/visibility_control.h"
++
++/// 使用 rcutils 默认分配器的 allocate() 按指定字节数分配内存
++/**
++ * \param[in] size 要分配的字节数
++ * \return 指向已分配内存的指针
++ */
++RMW_PUBLIC
++void *
++rmw_allocate(size_t size);
++
++/// 使用 rcutils 默认分配器的 deallocate() 释放内存
++/**
++ * \param[in] pointer 指向已分配内存的指针
++ */
++RMW_PUBLIC
++void
++rmw_free(void * pointer);
++
++/// 使用 rcutils 默认分配器的 allocate() 为 `rmw_node_t` 分配内存
++/**
++ * \return 指向已分配内存的指针
++ */
++RMW_PUBLIC
++rmw_node_t *
++rmw_node_allocate(void);
++
++/// 使用 rcutils 默认分配器的 deallocate() 释放分配给该节点指针的内存
++/**
++ * \param[in] node 指向已分配内存的指针
++ */
++RMW_PUBLIC
++void
++rmw_node_free(rmw_node_t * node);
++
++/// 使用 rcutils 默认分配器的 allocate() 为 `rmw_publisher_t` 分配内存
++/**
++ * \return 指向已分配内存的指针
++ */
++RMW_PUBLIC
++rmw_publisher_t *
++rmw_publisher_allocate(void);
++
++/// 使用 rcutils 默认分配器的 deallocate() 释放内存
++/**
++ * \param[in] publisher 指向已分配内存的指针
++ */
++RMW_PUBLIC
++void
++rmw_publisher_free(rmw_publisher_t * publisher);
++
++/// 使用 rcutils 默认分配器的 allocate() 为 `rmw_subscription_t` 分配内存
++/**
++ * \return 指向已分配内存的指针
++ */
++RMW_PUBLIC
++rmw_subscription_t *
++rmw_subscription_allocate(void);
++
++/// 使用 rcutils 默认分配器的 deallocate() 释放内存
++/**
++ * \param[in] subscription 指向已分配内存的指针
++ */
++RMW_PUBLIC
++void
++rmw_subscription_free(rmw_subscription_t * subscription);
++
++/// 使用 rcutils 默认分配器的 allocate() 为 `rmw_guard_condition_t` 分配内存
++/**
++ * \return 指向已分配内存的指针
++ */
++RMW_PUBLIC
++rmw_guard_condition_t *
++rmw_guard_condition_allocate(void);
++
++/// 使用 rcutils 默认分配器的 deallocate() 释放内存
++/**
++ * \param[in] guard_condition 指向已分配内存的指针
++ */
++RMW_PUBLIC
++void
++rmw_guard_condition_free(rmw_guard_condition_t * guard_condition);
++
++/// 使用 rcutils 默认分配器的 allocate() 为 `rmw_client_t` 分配内存
++/**
++ * \return 指向已分配内存的指针
++ */
++RMW_PUBLIC
++rmw_client_t *
++rmw_client_allocate(void);
++
++/// 使用 rcutils 默认分配器的 deallocate() 释放内存
++/**
++ * \param[in] client 指向已分配内存的指针
++ */
++RMW_PUBLIC
++void
++rmw_client_free(rmw_client_t * client);
++
++/// 使用 rcutils 默认分配器的 allocate() 为 `rmw_service_t` 分配内存
++/**
++ * \return 指向已分配内存的指针
++ */
++RMW_PUBLIC
++rmw_service_t *
++rmw_service_allocate(void);
++
++/// 使用 rcutils 默认分配器的 deallocate() 释放内存
++/**
++ * \param[in] service 指向已分配内存的指针
++ */
++RMW_PUBLIC
++void
++rmw_service_free(rmw_service_t * service);
++
++/// 使用 rcutils 默认分配器的 allocate() 为 `rmw_wait_set_t` 分配内存
++/**
++ * \return 指向已分配内存的指针
++ */
++RMW_PUBLIC
++rmw_wait_set_t *
++rmw_wait_set_allocate(void);
++
++/// 使用 rcutils 默认分配器的 deallocate() 释放内存
++/**
++ * \param[in] wait_set 指向已分配内存的指针
++ */
++RMW_PUBLIC
++void
++rmw_wait_set_free(rmw_wait_set_t * wait_set);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__ALLOCATORS_H_
+diff --git a/rmw/include/rmw/dynamic_message_type_support_zh.h b/rmw/include/rmw/dynamic_message_type_support_zh.h
+new file mode 100644
+index 0000000..3579bb1
+--- /dev/null
++++ b/rmw/include/rmw/dynamic_message_type_support_zh.h
+@@ -0,0 +1,90 @@
++// Copyright 2022 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__DYNAMIC_MESSAGE_TYPE_SUPPORT_H_
++#define RMW__DYNAMIC_MESSAGE_TYPE_SUPPORT_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include <rcutils/allocator.h>
++
++#include <rosidl_dynamic_typesupport/api/serialization_support.h>
++#include <rosidl_dynamic_typesupport/dynamic_message_type_support_struct.h>
++#include <rosidl_dynamic_typesupport/identifier.h>
++#include <rosidl_dynamic_typesupport/types.h>
++
++#include <rosidl_runtime_c/message_type_support_struct.h>
++#include <rosidl_runtime_c/type_description/type_description__struct.h>
++#include <rosidl_runtime_c/type_description/type_source__struct.h>
++
++#include "rmw/features.h"
++#include "rmw/serialized_message.h"
++#include "rmw/visibility_control.h"
++
++/// 运行时接口反射的接口
++
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_dynamic_message(
++  const rmw_subscription_t * subscription,
++  rosidl_dynamic_typesupport_dynamic_data_t * dynamic_message,
++  bool * taken,
++  rmw_subscription_allocation_t * allocation);
++
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_dynamic_message_with_info(
++  const rmw_subscription_t * subscription,
++  rosidl_dynamic_typesupport_dynamic_data_t * dynamic_message,
++  bool * taken,
++  rmw_message_info_t * message_info,
++  rmw_subscription_allocation_t * allocation);
++
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_serialization_support_init(
++  const char * serialization_lib_name,
++  rcutils_allocator_t * allocator,
++  rosidl_dynamic_typesupport_serialization_support_t * serialization_support);  // 输出参数
++
++// TODO(methylDragon): 仅作为可选增强功能
++// RMW_PUBLIC
++// RMW_WARN_UNUSED
++// rmw_ret_t
++// rmw_get_dynamic_type_from_middleware(
++//   const rmw_node_t * node,
++//   const char * topic_name,
++//   const rosidl_message_type_support_t type_support,
++//   rosidl_dynamic_typesupport_dynamic_type_t * dynamic_message_type);
++//
++// RMW_PUBLIC
++// RMW_WARN_UNUSED
++// rmw_ret_t
++// rmw_get_dynamic_data_from_middleware(
++//   const rmw_node_t * node,
++//   const char * topic_name,
++//   const rosidl_message_type_support_t type_support,
++//   rosidl_dynamic_typesupport_dynamic_data_t * dynamic_message);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__DYNAMIC_MESSAGE_TYPE_SUPPORT_H_
+diff --git a/rmw/include/rmw/error_handling_zh.h b/rmw/include/rmw/error_handling_zh.h
+new file mode 100644
+index 0000000..3b32160
+--- /dev/null
++++ b/rmw/include/rmw/error_handling_zh.h
+@@ -0,0 +1,186 @@
++// Copyright 2014 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++/**
++ * @file error_handling.h
++ * @brief 用于与错误处理机制交互的函数和宏
++ *
++ * 此逻辑本质上重命名了许多 `rcutils` 函数和宏。有关更多信息，也请查看该包的文档。
++ */
++
++#ifndef RMW__ERROR_HANDLING_H_
++#define RMW__ERROR_HANDLING_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include <rcutils/error_handling.h>
++
++/// 封装固定大小 C 字符串的结构体，用于返回格式化后的错误字符串。
++typedef rcutils_error_string_t rmw_error_string_t;
++
++/// 封装由 RMW_SET_ERROR_MSG() 设置的错误状态的结构体。
++typedef rcutils_error_state_t rmw_error_state_t;
++
++/// 限制 `fwrite` 调用中的缓冲区大小，以在 `msg` 非空终止时为缓冲区溢出设置上限。
++#define RMW_SAFE_FWRITE_TO_STDERR RCUTILS_SAFE_FWRITE_TO_STDERR
++
++/// 如果在新创建的线程中调用，则强制初始化线程本地存储。
++/**
++ * 如果事先未调用此函数，则在首次设置错误状态或首次检索错误消息时，
++ * 将使用默认分配器来分配线程本地存储。
++ *
++ * 此函数可能会也可能不会分配内存。
++ * 系统的线程本地存储实现可能需要分配内存，
++ * 因为通常如果不了解将创建多少线程，就无法知道需要多少存储空间。
++ * 大多数实现（例如 C11、C++11 和 pthread）无法指定如何分配此内存，
++ * 但如果实现允许，将使用传递给此函数的分配器，否则该分配器不被使用。
++ * 这种情况只在线程创建和销毁时发生，可通过在线程池中复用线程来避免
++ * 处于“稳定”状态时发生。
++ *
++ * 值得考虑的是，反复创建和销毁线程会导致重复分配内存，并可能导致
++ * 内存碎片。
++ * 通常通过使用线程池来避免此问题。
++ *
++ * 如果返回码指示出错，则不会设置任何错误消息。
++ *
++ * 如果在线程中多次调用此函数，或者在通过设置错误状态隐式初始化之后调用，
++ * 即使给定的分配器无效，它仍将返回 `RCUTILS_RET_OK`。
++ * 从本质上讲，如果线程本地存储已经被调用过，此函数不执行任何操作。
++ * 如果已经初始化，则忽略给定的分配器，即使它与最初用于初始化
++ * 线程本地存储的分配器不匹配。
++ *
++ * \return 成功时返回 `RCUTILS_RET_OK`，或
++ * \return 分配器无效时返回 `RCUTILS_RET_INVALID_ARGUMENT`，或
++ * \return 内存分配失败时返回 `RCUTILS_RET_BAD_ALLOC`，或
++ * \return 发生未指定错误时返回 `RCUTILS_RET_ERROR`。
++ */
++#define rmw_initialize_error_handling_thread_local_storage \
++  rcutils_initialize_error_handling_thread_local_storage
++
++/// 设置错误消息，以及错误发生所在的文件和行号。
++/**
++ * 这不应该直接使用，而应通过 RMW_SET_ERROR_MSG(msg) 宏使用。
++ *
++ * error_msg 参数被复制到内部错误存储中，必须以空字符结尾。
++ * file 参数被复制到内部错误存储中，必须以空字符结尾。
++ *
++ * \param[in] error_string 要设置的错误消息。
++ * \param[in] file 错误发生的文件路径。
++ * \param[in] line_number 错误发生的行号。
++ */
++#define rmw_set_error_state rcutils_set_error_state
++
++/// 检查参数是否为空值。
++/**
++ * 如果参数的值为 `NULL`，则设置相应的错误消息并返回 `error_return_type`。
++ *
++ * \param[in] argument 要测试的参数。
++ * \param[in] error_return_type 如果参数为 `NULL` 时返回的类型。
++ */
++#define RMW_CHECK_ARGUMENT_FOR_NULL(argument, error_return_type) \
++  RCUTILS_CHECK_ARGUMENT_FOR_NULL(argument, error_return_type)
++
++/// 检查值是否为空，并附带错误消息和错误语句。
++/**
++ * 如果 `value` 为 `NULL`，则在设置错误消息后执行错误语句。
++ *
++ * \param[in] value 要测试的值。
++ * \param[in] msg `value` 为 `NULL` 时的错误消息。
++ * \param[in] error_statement `value` 为 `NULL` 时执行的语句。
++ */
++#define RMW_CHECK_FOR_NULL_WITH_MSG(value, msg, error_statement) \
++  RCUTILS_CHECK_FOR_NULL_WITH_MSG(value, msg, error_statement)
++
++/// 设置错误消息，并追加当前文件和行号。
++/**
++ * 如果此前已设置错误消息，且之后未调用 rmw_reset_error()，
++ * 并且构建本库时开启了 RCUTILS_REPORT_ERROR_HANDLING_ERRORS，
++ * 则此前设置的错误消息将被打印到 stderr。
++ * 错误状态存储是线程本地的，因此所有与错误相关的函数也是线程本地的。
++ *
++ * \param[in] msg 要设置的错误消息。
++ */
++#define RMW_SET_ERROR_MSG(msg) RCUTILS_SET_ERROR_MSG(msg)
++
++/// 使用格式字符串和格式参数设置错误消息。
++/**
++ * 此函数使用给定的格式字符串设置错误消息。
++ * 生成的格式化字符串将在 RCUTILS_ERROR_MESSAGE_MAX_LENGTH 处静默截断。
++ *
++ * \param[in] format_string 用作错误消息格式的字符串。
++ * \param[in] ... 格式字符串的参数。
++ */
++#define RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(format_string, ...) \
++  RCUTILS_SET_ERROR_MSG_WITH_FORMAT_STRING(format_string, __VA_ARGS__)
++
++/// 如果错误已设置则返回 `true`，否则返回 `false`。
++/**
++ * 当前被定义为 `rcutils_error_is_set`
++ */
++#define rmw_error_is_set rcutils_error_is_set
++
++/// 返回一个由 rcutils_set_error_state() 设置的 rcutils_error_state_t。
++/**
++ * 如果本线程中未设置任何错误，则返回的指针将为 NULL。
++ *
++ * 返回的指针一直有效，直到在同一线程中调用 RCUTILS_SET_ERROR_MSG、
++ * rcutils_set_error_state 或 rcutils_reset_error。
++ *
++ * \return 指向当前错误状态结构体的指针。
++ */
++#define rmw_get_error_state rcutils_get_error_state
++
++/// 如果错误已设置，则返回错误消息并附加 `, at <file>:<line>`，否则返回 "error not set"。
++/**
++ * 此函数是“安全的”，因为它返回当前错误字符串的副本；
++ * 如果未设置错误，则返回包含字符串 "error not set" 的副本。
++ * 这可确保该副本归调用线程所有，因此不会因其他错误处理调用而失效，
++ * 并且其中的 C 字符串始终有效且以空字符结尾。
++ *
++ * \return 当前错误字符串，包含文件和行号；如果未设置错误，则返回 "error not set"。
++ */
++#define rmw_get_error_string rcutils_get_error_string
++
++/// 通过清除任何先前设置的错误状态来重置错误状态。
++#define rmw_reset_error rcutils_reset_error
++
++/// 使用 RCUTILS_SET_ERROR_MSG 设置错误消息，并追加之前的错误。
++/**
++ * 如果没有之前的错误，则与 RCUTILS_SET_ERROR_MSG 行为相同。
++ * \param[in] msg 要设置的错误消息。
++ */
++#define RMW_SET_ERROR_MSG_AND_APPEND_PREV_ERROR(msg) \
++  RCUTILS_SET_ERROR_MSG_AND_APPEND_PREV_ERROR(msg)
++
++/// 使用 RCUTILS_SET_ERROR_MSG_WITH_FORMAT_STRING 设置错误消息，并追加之前的错误。
++/**
++ * 此函数使用给定的格式字符串设置错误消息，并追加并重置最新的错误字符串。
++ * 生成的格式化字符串将在 RCUTILS_ERROR_MESSAGE_MAX_LENGTH 处静默截断。
++ *
++ * 如果没有之前的错误，则与 RCUTILS_SET_ERROR_MSG_WITH_FORMAT_STRING 行为相同。
++ *
++ * \param[in] format_string 用作错误消息格式的字符串。
++ * \param[in] ... 格式字符串的参数。
++ */
++#define RMW_SET_ERROR_MSG_WITH_FORMAT_STRING_AND_APPEND_PREV_ERROR(format_string, ...) \
++  RCUTILS_SET_ERROR_MSG_WITH_FORMAT_STRING_AND_APPEND_PREV_ERROR(format_string, __VA_ARGS__)
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__ERROR_HANDLING_H_
+diff --git a/rmw/include/rmw/event_callback_type_zh.h b/rmw/include/rmw/event_callback_type_zh.h
+new file mode 100644
+index 0000000..73f1f47
+--- /dev/null
++++ b/rmw/include/rmw/event_callback_type_zh.h
+@@ -0,0 +1,52 @@
++// Copyright 2021 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__EVENT_CALLBACK_TYPE_H_
++#define RMW__EVENT_CALLBACK_TYPE_H_
++
++#include <stddef.h>
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++/// 通用事件回调类型签名。
++/**
++ * 此类型的事件回调可以在多种场景下被调用，例如
++ * 订阅上有数据可用、发生了 QoS 事件，或
++ * 类似情况。
++ *
++ * user_data 参数由用户在注册回调时提供，
++ * 并在每次调用回调时回传，以便其可以携带关联的、
++ * 用户定义的状态。
++ *
++ * number_of_events 参数表示自上次调用该回调以来
++ * 发生的事件数量。
++ * 大多数情况下为 1，但当事件在回调注册之前发生时，
++ * 可能大于 1。
++ * 它不应该为 0。
++ *
++ * \sa rmw_subscription_set_on_new_message_callback()
++ * \sa rmw_service_set_on_new_request_callback()
++ * \sa rmw_client_set_on_new_response_callback()
++ * \sa rmw_event_set_callback()
++ */
++typedef void (* rmw_event_callback_t)(const void * user_data, size_t number_of_events);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__EVENT_CALLBACK_TYPE_H_
+diff --git a/rmw/include/rmw/event_zh.h b/rmw/include/rmw/event_zh.h
+new file mode 100644
+index 0000000..3879b52
+--- /dev/null
++++ b/rmw/include/rmw/event_zh.h
+@@ -0,0 +1,148 @@
++// Copyright 2019 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__EVENT_H_
++#define RMW__EVENT_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include <stdint.h>
++
++#include "rcutils/allocator.h"
++
++#include "rmw/macros.h"
++#include "rmw/types.h"
++#include "rmw/ret_types.h"
++#include "rmw/visibility_control.h"
++
++/// 定义发布者/订阅事件
++typedef enum rmw_event_type_e
++{
++  // 订阅事件
++  RMW_EVENT_LIVELINESS_CHANGED,
++  RMW_EVENT_REQUESTED_DEADLINE_MISSED,
++  RMW_EVENT_REQUESTED_QOS_INCOMPATIBLE,
++  RMW_EVENT_MESSAGE_LOST,
++  RMW_EVENT_SUBSCRIPTION_INCOMPATIBLE_TYPE,
++  RMW_EVENT_SUBSCRIPTION_MATCHED,
++
++  // 发布者事件
++  RMW_EVENT_LIVELINESS_LOST,
++  RMW_EVENT_OFFERED_DEADLINE_MISSED,
++  RMW_EVENT_OFFERED_QOS_INCOMPATIBLE,
++  RMW_EVENT_PUBLISHER_INCOMPATIBLE_TYPE,
++  RMW_EVENT_PUBLICATION_MATCHED,
++
++  // 哨兵值
++  RMW_EVENT_INVALID
++} rmw_event_type_t;
++
++/// 封装 RMW 事件的实现、数据和类型。
++typedef struct RMW_PUBLIC_TYPE rmw_event_s
++{
++  /// 实现标识符，用于确保不会混合使用两个不同的实现。
++  const char * implementation_identifier;
++  /// 来自发布者或订阅者的、特定于此事件类型的数据。
++  void * data;
++  /// 发生的事件类型。
++  rmw_event_type_t event_type;
++} rmw_event_t;
++
++/// 返回一个零初始化的事件结构体。
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_event_t
++rmw_get_zero_initialized_event(void);
++
++/// 初始化一个 rmw 发布者事件。
++/**
++ * \param[inout] rmw_event 要初始化的事件
++ * \param[in] publisher 用于初始化的事件
++ * \param[inout] event_type 要初始化的事件类型
++ * \return 成功时返回 `RMW_RET_OK`，否则
++ * \return 参数无效时返回 `RMW_RET_INVALID_ARGUMENT`，否则
++ * \return event_type 不受支持时返回 `RMW_RET_UNSUPPORTED`，否则
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_publisher_event_init(
++  rmw_event_t * rmw_event,
++  const rmw_publisher_t * publisher,
++  rmw_event_type_t event_type);
++
++/// 初始化一个 rmw 订阅事件。
++/**
++ * \param[inout] rmw_event 要初始化的事件
++ * \param[in] subscription 用于初始化的事件
++ * \param[inout] event_type 要处理的事件类型
++ * \return 成功时返回 `RMW_RET_OK`，否则
++ * \return 参数无效时返回 `RMW_RET_INVALID_ARGUMENT`，否则
++ * \return event_type 不受支持时返回 `RMW_RET_UNSUPPORTED`，否则
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_subscription_event_init(
++  rmw_event_t * rmw_event,
++  const rmw_subscription_t * subscription,
++  rmw_event_type_t event_type);
++
++/// 从事件句柄中获取一个事件。
++/**
++ * \param[in] event_handle 要从中获取事件的事件对象
++ * \param[inout] event_info 用于写入获取到的数据的事件信息对象
++ * \param[out] taken 布尔标志，指示是否已获取事件
++ * \return 成功时返回 `RMW_RET_OK`，否则
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，否则
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_event(
++  const rmw_event_t * event_handle,
++  void * event_info,
++  bool * taken);
++
++/// 终结一个 rmw_event_t。
++/**
++ * \param[in] event 要终结的事件
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_event_fini(rmw_event_t * event);
++
++
++/// 检查 RMW 实现是否支持某种事件类型。
++/*
++ * \param[in] rmw_event_type 要检查的事件类型
++ * \return 如果支持该事件则返回 true，否则返回 false。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++bool
++rmw_event_type_is_supported(rmw_event_type_t rmw_event_type);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__EVENT_H_
+diff --git a/rmw/include/rmw/get_service_names_and_types_zh.h b/rmw/include/rmw/get_service_names_and_types_zh.h
+new file mode 100644
+index 0000000..f28cbca
+--- /dev/null
++++ b/rmw/include/rmw/get_service_names_and_types_zh.h
+@@ -0,0 +1,92 @@
++// Copyright 2017 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__GET_SERVICE_NAMES_AND_TYPES_H_
++#define RMW__GET_SERVICE_NAMES_AND_TYPES_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/macros.h"
++#include "rmw/names_and_types.h"
++#include "rmw/types.h"
++#include "rmw/visibility_control.h"
++
++/// 返回 ROS 图中的所有服务名称和类型。
++/**
++ * 该函数返回 ROS 图中所有服务名称和类型的数组，
++ * 即给定本地节点到目前为止发现的存在服务器和/或客户端的服务。
++ *
++ * <hr>
++ * 属性          | 遵循情况
++ * ------------------ | -------------
++ * 分配内存   | 是
++ * 线程安全        | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁          | 可能 [1]
++ * <i>[1] 由 rmw 实现定义，请参阅实现文档</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是一个同步操作。
++ *   它也是非阻塞的，但不能保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，
++ *   但不允许等待没有保证时间边界的事件（因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 线程安全性
++ *   节点是线程安全的对象，除了终结操作外，对节点的所有操作也都是线程安全的。
++ *   因此，使用同一个节点并发查询 ROS 图是安全的。
++ *   但在查询服务名称和类型时：
++ *   - 对名称和类型数组的访问不是同步的。
++ *     在 rmw_get_service_names_and_types() 使用 `service_names_and_types`
++ *     时读取或写入它是不安全的。
++ *   - 默认分配器是线程安全的对象，但任何自定义 `allocator` 可能不是。
++ *     请查阅分配器文档以获取更多参考。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，由 rmw_create_node() 返回。
++ * \pre 给定的 `services_names_and_types` 必须是零初始化的名称和类型数组，
++ *   由 rmw_get_zero_initialized_names_and_types() 返回。
++ *
++ * \param[in] node 用于查询 ROS 图的节点。
++ * \param[in] allocator 用于填充 `service_names_and_types` 数组的分配器。
++ * \param[out] service_names_and_types 服务名称及其类型的数组，
++ *   成功时填充，失败时保持不变。
++ *   如果已填充，调用者需稍后使用 rmw_names_and_types_fini()
++ *   终结此数组。
++ * \return 如果查询成功，返回 `RMW_RET_OK`，或者
++ * \return 如果 `node` 为 NULL，返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \return 如果 `allocator` 按照 rcutils_allocator_is_valid() 的定义无效，
++ *   返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \return 如果 `service_names_and_types` 为 NULL，返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \return 如果 `service_names_and_types` 不是零初始化的数组，
++ *   返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \return 如果 `node` 的实现标识符与此实现不匹配，
++ *   返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或者
++ * \return 如果内存分配失败，返回 `RMW_RET_BAD_ALLOC`，或者
++ * \return 如果发生未指定的错误，返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_get_service_names_and_types(
++  const rmw_node_t * node,
++  rcutils_allocator_t * allocator,
++  rmw_names_and_types_t * service_names_and_types);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__GET_SERVICE_NAMES_AND_TYPES_H_
+diff --git a/rmw/include/rmw/get_topic_endpoint_info_zh.h b/rmw/include/rmw/get_topic_endpoint_info_zh.h
+new file mode 100644
+index 0000000..0087f2e
+--- /dev/null
++++ b/rmw/include/rmw/get_topic_endpoint_info_zh.h
+@@ -0,0 +1,171 @@
++// Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__GET_TOPIC_ENDPOINT_INFO_H_
++#define RMW__GET_TOPIC_ENDPOINT_INFO_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/topic_endpoint_info_array.h"
++#include "rmw/visibility_control.h"
++
++/// 检索指定主题的每个已知发布端点信息。
++/**
++ * 此函数返回由指定节点当前发现的、指定主题的每个发布端点信息数组。
++ * 端点信息包括发布端的节点名称和命名空间、关联的主题类型、发布端的 gid，以及发布端的 QoS 配置文件。
++ * 允许使用不存在的主题名称，此时将返回空数组。
++ *
++ * 根据所使用的 RMW 实现，发现过程可能是异步的。因此，创建发布端后立即调用此 API 可能不会立即显示新创建的发布端。
++ *
++ * \par 可正确读取的 QoS
++ * 返回的 QoS 配置文件可能包含某些无效字段。
++ * rmw 实现必须将无效字段设置为 `RMW_QOS_POLICY_*_UNKNOWN`。
++ * 对于基于 DDS 的实现，在发现过程中保证共享的 QoS 策略仅包括参与端点匹配的那些。
++ * 在当前可用的 QoS 设置中，基于 DDS 的实现不会共享 `history` 和 `history_depth`。
++ *
++ * <hr>
++ * Attribute          | Adherence
++ * ------------------ | -------------
++ * Allocates Memory   | Yes
++ * Thread-Safe        | Yes
++ * Uses Atomics       | Maybe [1]
++ * Lock-Free          | Maybe [1]
++ * <i>[1] rmw implementation defined, check the implementation documentation</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是一个同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不得等待没有保证时间上限的事件（因操作系统调度导致饥饿的情况除外）。
++ *
++ * \par 线程安全
++ *   节点是线程安全对象，除终结（finalization）外，对节点的所有操作都是线程安全的。
++ *   因此，使用同一节点并发查询 ROS 图是安全的。
++ *   但是，在查询主题名称和类型时：
++ *   - 对主题端点信息数组的访问不是同步的。
++ *     在 rmw_get_publishers_info_by_topic() 使用 `publishers_info` 期间，读取或写入它是不安全的。
++ *   - 对 C 风格字符串参数的访问是只读的，但不是同步的。
++ *     并发读取 `topic_name` 是安全的，但并发读写是不安全的。
++ *   - 默认分配器是线程安全对象，但任何自定义 `allocator` 可能不是。
++ *     请查阅 allocator 文档以获取更多参考。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，由 rmw_create_node() 返回。
++ * \pre 给定的 `publishers_info` 必须是零初始化的端点信息数组，
++ *   由 rmw_get_zero_initialized_topic_endpoint_info_array() 返回。
++ *
++ * \param[in] node 用于查询 ROS 图的节点。
++ * \param[in] allocator 用于填充 `publishers_info` 数组的分配器。
++ * \param[in] topic_name 用于查找发布端的主题名称，通常是完整限定主题名称，但也不一定（参见 rmw_create_publisher()）。
++ * \param[in] no_mangle 在查找发布端之前是否不对主题名称进行改写（mangle）。
++ * \param[out] publishers_info 发布端信息数组，成功时填充，失败时保持不变。
++ *   如果已填充，调用者稍后需要负责终结此数组，
++ *   使用 rmw_topic_endpoint_info_array_fini()。
++ *   信息数组中的 QoS 配置文件将对无限持续时间使用 RMW_DURATION_INFINITE，
++ *   以避免暴露任何实现相关的值。
++ * \return 查询成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `allocator` 无效时返回 `RMW_RET_INVALID_ARGUMENT`，
++ *   以 rcutils_allocator_is_valid() 的定义为准，或
++ * \return `topic_name` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `publishers_info` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `publishers_info` 不是零初始化数组时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return 发生未指定错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_get_publishers_info_by_topic(
++  const rmw_node_t * node,
++  rcutils_allocator_t * allocator,
++  const char * topic_name,
++  bool no_mangle,
++  rmw_topic_endpoint_info_array_t * publishers_info);
++
++/// 检索指定主题的每个已知订阅端点信息。
++/**
++ * 此函数返回由指定节点当前发现的、指定主题的每个订阅端点信息数组。
++ * 端点信息包括订阅端的节点名称和命名空间、关联的主题类型、订阅端的 gid，以及订阅端的 QoS 配置文件。
++ * 允许使用不存在的主题名称，此时将返回空数组。
++ *
++ * 根据所使用的 RMW 实现，发现过程可能是异步的。因此，创建订阅端后立即调用此 API 可能不会立即显示新创建的订阅端。
++ *
++ * \par 可正确读取的 QoS
++ * 并非所有 QoS 都能正确读取，详见 \sa rmw_get_publishers_info_by_topic()。
++ *
++ * <hr>
++ * Attribute          | Adherence
++ * ------------------ | -------------
++ * Allocates Memory   | Yes
++ * Thread-Safe        | Yes
++ * Uses Atomics       | Maybe [1]
++ * Lock-Free          | Maybe [1]
++ * <i>[1] rmw implementation defined, check the implementation documentation</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是一个同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不得等待没有保证时间上限的事件（因操作系统调度导致饥饿的情况除外）。
++ *
++ * \par 线程安全
++ *   节点是线程安全对象，除终结（finalization）外，对节点的所有操作都是线程安全的。
++ *   因此，使用同一节点并发查询 ROS 图是安全的。
++ *   但是，在查询订阅端信息时：
++ *   - 对主题端点信息数组的访问不是同步的。
++ *     在 rmw_get_subscriptions_info_by_topic() 使用 `subscriptions_info` 期间，读取或写入它是不安全的。
++ *   - 默认分配器是线程安全对象，但任何自定义 `allocator` 可能不是。
++ *     请查阅 allocator 文档以获取更多参考。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，由 rmw_create_node() 返回。
++ * \pre 给定的 `subscriptions_info` 必须是零初始化的端点信息数组，
++ *   由 rmw_get_zero_initialized_topic_endpoint_info_array() 返回。
++ *
++ * \param[in] node 用于查询 ROS 图的节点。
++ * \param[in] allocator 用于填充 `subscriptions_info` 数组的分配器。
++ * \param[in] topic_name 用于查找订阅端的主题名称，通常是完整限定主题名称，但也不一定（参见 rmw_create_subscription()）。
++ * \param[in] no_mangle 在查找订阅端之前是否不对主题名称进行改写（mangle）。
++ * \param[out] subscriptions_info 订阅端信息数组，成功时填充，失败时保持不变。
++ *   如果已填充，调用者稍后需要负责终结此数组，
++ *   使用 rmw_topic_endpoint_info_array_fini()。
++ *   信息数组中的 QoS 配置文件将对无限持续时间使用 RMW_DURATION_INFINITE，
++ *   以避免暴露任何实现相关的值。
++ * \return 查询成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `allocator` 无效时返回 `RMW_RET_INVALID_ARGUMENT`，
++ *   以 rcutils_allocator_is_valid() 的定义为准，或
++ * \return `topic_name` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscriptions_info` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscriptions_info` 不是零初始化数组时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return 发生未指定错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_get_subscriptions_info_by_topic(
++  const rmw_node_t * node,
++  rcutils_allocator_t * allocator,
++  const char * topic_name,
++  bool no_mangle,
++  rmw_topic_endpoint_info_array_t * subscriptions_info);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__GET_TOPIC_ENDPOINT_INFO_H_
+diff --git a/rmw/include/rmw/get_topic_names_and_types_zh.h b/rmw/include/rmw/get_topic_names_and_types_zh.h
+new file mode 100644
+index 0000000..9ff4605
+--- /dev/null
++++ b/rmw/include/rmw/get_topic_names_and_types_zh.h
+@@ -0,0 +1,92 @@
++// Copyright 2017 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__GET_TOPIC_NAMES_AND_TYPES_H_
++#define RMW__GET_TOPIC_NAMES_AND_TYPES_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/macros.h"
++#include "rmw/names_and_types.h"
++#include "rmw/types.h"
++#include "rmw/visibility_control.h"
++
++/// 返回 ROS 图中的所有主题名称和类型。
++/**
++ * 该函数返回 ROS 图中所有主题名称和类型的数组，即由给定本地节点截至目前发现的、
++ * 存在发布器和/或订阅器的主题。
++ *
++ * 除非 `no_demangle` 为 true，否则在按照中间件实现列出主题时可能会进行一些还原（demangle）和过滤。
++ * 是否进行还原以及如何还原，取决于底层实现。
++ * 有关如何在基于 DDS 和 RTPS 的实现中使用，请参见 http://design.ros2.org/articles/topic_and_service_names.html。
++ *
++ * <hr>
++ * 属性          | 遵循情况
++ * ------------------ | -------------
++ * 分配内存   | 是
++ * 线程安全        | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁          | 可能 [1]
++ * <i>[1] 由 rmw 实现定义，请参阅实现文档</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是一个同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间边界的事件
++ *   （因操作系统调度导致饥饿的情况除外）。
++ *
++ * \par 线程安全性
++ *   节点是线程安全的对象，除终结操作外，对节点的所有操作也都是线程安全的。
++ *   因此，使用同一节点并发查询 ROS 图是安全的。
++ *   但是，在查询主题名称和类型时：
++ *   - 对名称和类型数组的访问未同步。
++ *     在 rmw_get_topic_names_and_types() 使用 `topic_names_and_types` 期间读取或写入它是不安全的。
++ *   - 默认分配器是线程安全的对象，但任何自定义 `allocator` 可能并非如此。
++ *     请查阅分配器文档以获取更多参考。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，即由 rmw_create_node() 返回的句柄。
++ * \pre 给定的 `topic_names_and_types` 必须是零初始化的名称和类型数组，
++ *   即由 rmw_get_zero_initialized_names_and_types() 返回的数组。
++ *
++ * \param[in] node 用于查询 ROS 图的节点。
++ * \param[in] allocator 填充 `topic_names_and_types` 数组时使用的分配器。
++ * \param[in] no_demangle 是否按照 ROS 约定对所有主题名称进行还原。
++ * \param[out] topic_names_and_types 主题名称及其类型的数组，成功时填充，失败时保持不变。
++ *   如果已填充，调用者需稍后使用 rmw_names_and_types_fini() 终结该数组。
++ * \return 如果查询成功，返回 `RMW_RET_OK`，否则
++ * \return 如果 `node` 为 NULL，返回 `RMW_RET_INVALID_ARGUMENT`，否则
++ * \return 如果 `allocator` 按照 rcutils_allocator_is_valid() 的定义无效，返回 `RMW_RET_INVALID_ARGUMENT`，否则
++ * \return 如果 `topic_names_and_types` 为 NULL，返回 `RMW_RET_INVALID_ARGUMENT`，否则
++ * \return 如果 `topic_names_and_types` 不是零初始化的数组，返回 `RMW_RET_INVALID_ARGUMENT`，否则
++ * \return 如果 `node` 的实现标识符与此实现不匹配，返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，否则
++ * \return 如果内存分配失败，返回 `RMW_RET_BAD_ALLOC`，否则
++ * \return 如果发生未指明的错误，返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_get_topic_names_and_types(
++  const rmw_node_t * node,
++  rcutils_allocator_t * allocator,
++  bool no_demangle,
++  rmw_names_and_types_t * topic_names_and_types);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__GET_TOPIC_NAMES_AND_TYPES_H_
+diff --git a/rmw/include/rmw/impl/cpp/demangle_zh.hpp b/rmw/include/rmw/impl/cpp/demangle_zh.hpp
+new file mode 100644
+index 0000000..d7d0807
+--- /dev/null
++++ b/rmw/include/rmw/impl/cpp/demangle_zh.hpp
+@@ -0,0 +1,62 @@
++// Copyright 2015 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__IMPL__CPP__DEMANGLE_HPP_
++#define RMW__IMPL__CPP__DEMANGLE_HPP_
++
++#ifndef _WIN32
++// 用于 abi::__cxa_demangle 的头文件包含。
++#include <cxxabi.h>
++#include <cstdlib>
++#include <memory>
++#endif
++#include <iostream>
++#include <string>
++
++#include "rmw/impl/config.h"
++
++namespace rmw
++{
++namespace impl
++{
++namespace cpp
++{
++
++/// 返回类型为 T 的实例的 demangle 名称。
++template<typename T>
++std::string
++demangle(const T & instance)
++{
++  (void)instance;
++// 如果在 Windows 上或希望避免内存分配，则无法进行 demangle。
++#if !defined(_WIN32) || RMW_AVOID_MEMORY_ALLOCATION
++  int status = 0;
++  std::string mangled_typeid_name = typeid(T).name();
++
++  std::unique_ptr<char, void (*)(void *)> res {
++    abi::__cxa_demangle(mangled_typeid_name.c_str(), NULL, NULL, &status),
++    std::free
++  };
++
++  return (status == 0) ? res.get() : mangled_typeid_name;
++#else
++  return typeid(T).name();
++#endif
++}
++
++}  // cpp 命名空间
++}  // impl 命名空间
++}  // rmw 命名空间
++
++#endif  // RMW__IMPL__CPP__DEMANGLE_HPP_
+diff --git a/rmw/include/rmw/init_zh.h b/rmw/include/rmw/init_zh.h
+new file mode 100644
+index 0000000..9320962
+--- /dev/null
++++ b/rmw/include/rmw/init_zh.h
+@@ -0,0 +1,166 @@
++// Copyright 2014-2018 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__INIT_H_
++#define RMW__INIT_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include <stdint.h>
++
++#include "rmw/init_options.h"
++#include "rmw/macros.h"
++#include "rmw/ret_types.h"
++#include "rmw/visibility_control.h"
++
++/// 由 rmw_init() 返回的实现定义上下文结构。
++/**
++ * 应由 rmw 实现定义。
++ */
++typedef struct rmw_context_impl_s rmw_context_impl_t;
++
++/// 用于存储初始化相关信息的初始化上下文结构。
++typedef struct RMW_PUBLIC_TYPE rmw_context_s
++{
++  /// 表示本次初始化/关闭周期的本地（进程本地）唯一 ID。
++  uint64_t instance_id;
++  /// 实现标识符，用于确保不会混用两个不同的实现。
++  const char * implementation_identifier;
++  /// 用于初始化上下文的选项。
++  rmw_init_options_t options;
++  /// 正在使用的域 ID。
++  size_t actual_domain_id;
++  /// 实现定义的上下文信息。
++  /** 如果没有实现定义的上下文信息，可能为 NULL。 */
++  rmw_context_impl_t * impl;
++} rmw_context_t;
++
++/// 返回一个零初始化的上下文结构。
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_context_t
++rmw_get_zero_initialized_context(void);
++
++/// 使用给定选项初始化中间件，并生成一个上下文。
++/**
++ * 此函数成功执行后，上下文将填充中间件特定的数据。
++ * 该上下文在初始化节点和守护条件等实体时使用，也是正确调用 `rmw_shutdown()` 所必需的。
++ *
++ * \pre 给定的选项必须已经初始化，
++ *   即已对其调用 `rmw_init_options_init()` 并设置了 enclave。
++ * \pre 给定的上下文必须为零初始化。
++ *
++ * \post 如果初始化失败，上下文将保持零初始化状态。
++ * \post `context->actual_domain_id` 将被设置为 rmw 实现正在使用的域 ID。
++ *  如果 `options->domain_id` 不是 `RMW_DEFAULT_DOMAIN_ID`，则与之相同。
++ *  否则，该值取决于 rmw 实现。
++ *
++ * \remarks 如果选项是零初始化的，则返回 `RMW_RET_INVALID_ARGUMENT`。
++ *   如果选项已初始化但未提供 enclave，则返回 `RMW_RET_INVALID_ARGUMENT`。
++ *   如果上下文已经初始化（已对其调用 `rmw_init()`），则返回
++ *   `RMW_RET_INVALID_ARGUMENT`。
++ *
++ * <hr>
++ * Attribute          | Adherence
++ * ------------------ | -------------
++ * Allocates Memory   | Yes
++ * Thread-Safe        | No
++ * Uses Atomics       | No
++ * Lock-Free          | Yes
++ *
++ * 应由 rmw 实现定义。
++ *
++ * \param[in] options 初始化期间使用的初始化选项
++ * \param[out] context 生成的上下文结构体
++ * \return 如果成功则返回 `RMW_RET_OK`，或者
++ * \return 如果任何参数无效则返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \return 如果实现标识符不匹配则返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或者
++ * \return 如果发生意外错误则返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_init(const rmw_init_options_t * options, rmw_context_t * context);
++
++/// 关闭给定上下文的中间件。
++/**
++ * \pre 给定的上下文必须是通过 `rmw_init()` 初始化的有效上下文。
++ *
++ * \remarks 如果上下文是零初始化的，则返回 `RMW_RET_INVALID_ARGUMENT`。
++ *   如果上下文已经失效（已对其调用 `rmw_shutdown()`），则此函数不执行任何
++ *   操作并返回 `RMW_RET_OK`。
++ *
++ * <hr>
++ * Attribute          | Adherence
++ * ------------------ | -------------
++ * Allocates Memory   | Yes
++ * Thread-Safe        | No
++ * Uses Atomics       | No
++ * Lock-Free          | Yes
++ *
++ * 应由 rmw 实现定义。
++ *
++ * \param[in] context 生成的上下文结构体
++ * \return 如果成功则返回 `RMW_RET_OK`，或者
++ * \return 如果任何参数无效则返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \return 如果实现标识符不匹配则返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或者
++ * \return 如果发生意外错误则返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_shutdown(rmw_context_t * context);
++
++/// 完成一个上下文。
++/**
++ * 如果出现逻辑错误，例如 `RMW_RET_INVALID_ARGUMENT`
++ * 或 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，此函数将提前返回，并保持给定上下文不变。
++ * 否则，即使有错误也会继续执行，尽可能释放资源并将给定上下文零初始化。
++ *
++ * \pre 要完成的上下文必须先前已通过 `rmw_init()` 初始化，
++ *   随后通过 `rmw_shutdown()` 失效。
++ *
++ * \remarks 如果上下文是零初始化的，则返回 `RMW_RET_INVALID_ARGUMENT`。
++ *   如果上下文已初始化且有效（未对其调用 `rmw_shutdown()`），则返回
++ *   `RMW_RET_INVALID_ARGUMENT`。
++ *
++ * <hr>
++ * Attribute          | Adherence
++ * ------------------ | -------------
++ * Allocates Memory   | Yes
++ * Thread-Safe        | No
++ * Uses Atomics       | Yes
++ * Lock-Free          | Yes [1]
++ * <i>[1] 如果 `atomic_is_lock_free()` 对 `atomic_uint_least64_t` 返回 true</i>
++ *
++ * 应由 rmw 实现定义。
++ *
++ * \return 如果成功则返回 `RMW_RET_OK`，或者
++ * \return 如果任何参数无效则返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \return 如果实现标识符不匹配则返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或者
++ * \return 如果发生未指明的错误则返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_context_fini(rmw_context_t * context);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__INIT_H_
+diff --git a/rmw/include/rmw/macros_zh.h b/rmw/include/rmw/macros_zh.h
+new file mode 100644
+index 0000000..2c9b68c
+--- /dev/null
++++ b/rmw/include/rmw/macros_zh.h
+@@ -0,0 +1,27 @@
++// Copyright 2015 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__MACROS_H_
++#define RMW__MACROS_H_
++
++#include "rcutils/macros.h"
++
++/// 将参数展开为其字面文本
++#define RMW_STRINGIFY(x) RCUTILS_STRINGIFY(x)
++
++/// 指示方法的调用者必须检查返回值，
++/// 否则编译器将发出警告。
++#define RMW_WARN_UNUSED RCUTILS_WARN_UNUSED
++
++#endif  // RMW__MACROS_H_
+diff --git a/rmw/include/rmw/message_sequence_zh.h b/rmw/include/rmw/message_sequence_zh.h
+new file mode 100644
+index 0000000..26ae7cb
+--- /dev/null
++++ b/rmw/include/rmw/message_sequence_zh.h
+@@ -0,0 +1,119 @@
++// Copyright 2020 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__MESSAGE_SEQUENCE_H_
++#define RMW__MESSAGE_SEQUENCE_H_
++
++#include <stddef.h>
++
++#include "rmw/macros.h"
++#include "rmw/visibility_control.h"
++#include "rmw/types.h"
++
++#if __cplusplus
++extern "C"
++{
++#endif
++
++/// 用于保存 ROS 消息序列的结构体。
++typedef struct RMW_PUBLIC_TYPE rmw_message_sequence_s
++{
++  /// 指向 ROS 消息的指针数组。
++  void ** data;
++  /// `data` 中有效条目的数量。
++  size_t size;
++  /// 数据数组的总分配容量。
++  size_t capacity;
++  /// 用于分配数据数组的分配器。
++  rcutils_allocator_t * allocator;
++} rmw_message_sequence_t;
++
++/// 用于保存消息信息序列的结构体。
++typedef struct RMW_PUBLIC_TYPE rmw_message_info_sequence_s
++{
++  /// 消息信息数组。
++  rmw_message_info_t * data;
++  /// data 中有效条目的数量。
++  size_t size;
++  /// 数据数组的总分配容量。
++  size_t capacity;
++  /// 用于分配数据数组的分配器。
++  rcutils_allocator_t * allocator;
++} rmw_message_info_sequence_t;
++
++/// 返回一个成员初始化为 `NULL` 的 rmw_message_sequence_t 结构体
++RMW_PUBLIC
++rmw_message_sequence_t
++rmw_get_zero_initialized_message_sequence(void);
++
++/// 初始化一个 rmw_message_sequence_t 对象。
++/**
++ * \param[inout] sequence 要初始化的序列对象。
++ * \param[in] size 要分配的序列容量。
++ * \param[in] allocator 用于分配内存的分配器。
++ */
++RMW_PUBLIC
++rmw_ret_t
++rmw_message_sequence_init(
++  rmw_message_sequence_t * sequence,
++  size_t size,
++  rcutils_allocator_t * allocator);
++
++/// 结束一个 rmw_message_sequence_t 对象。
++/**
++ * rmw_message_sequence_t 结构体具有一些成员，在设置值之前需要为它们分配内存。
++ * 此函数回收对象内所有已分配的资源，并将所有其他成员清零。
++ *
++ * 注意：这不会调用 `fini`，也不会释放底层消息结构。
++ *
++ * \param[inout] sequence 要结束的序列对象。
++ */
++RMW_PUBLIC
++rmw_ret_t
++rmw_message_sequence_fini(rmw_message_sequence_t * sequence);
++
++/// 返回一个成员初始化为 `NULL` 的 rmw_message_info_sequence_t 结构体
++RMW_PUBLIC
++rmw_message_info_sequence_t
++rmw_get_zero_initialized_message_info_sequence(void);
++
++/// 初始化一个 rmw_message_info_sequence_t 对象。
++/**
++ * \param[inout] sequence 要初始化的序列对象。
++ * \param[in] size 要分配的序列容量。
++ * \param[in] allocator 用于分配内存的分配器。
++ */
++RMW_PUBLIC
++rmw_ret_t
++rmw_message_info_sequence_init(
++  rmw_message_info_sequence_t * sequence,
++  size_t size,
++  rcutils_allocator_t * allocator);
++
++/// 结束一个 rmw_message_sequence_t 对象。
++/**
++ * rmw_message_sequence_t 结构体具有一些成员，在设置值之前需要为它们分配内存。
++ * 此函数回收对象内所有已分配的资源，并将所有其他成员清零。
++ *
++ * \param[inout] sequence 要结束的序列对象。
++ */
++RMW_PUBLIC
++rmw_ret_t
++rmw_message_info_sequence_fini(rmw_message_info_sequence_t * sequence);
++
++#if __cplusplus
++}
++#endif
++
++#endif  // RMW__MESSAGE_SEQUENCE_H_
+diff --git a/rmw/include/rmw/names_and_types_zh.h b/rmw/include/rmw/names_and_types_zh.h
+new file mode 100644
+index 0000000..ca0a115
+--- /dev/null
++++ b/rmw/include/rmw/names_and_types_zh.h
+@@ -0,0 +1,148 @@
++// Copyright 2017 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__NAMES_AND_TYPES_H_
++#define RMW__NAMES_AND_TYPES_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include <stddef.h>
++
++#include "rcutils/allocator.h"
++#include "rcutils/types.h"
++#include "rmw/macros.h"
++#include "rmw/types.h"
++#include "rmw/visibility_control.h"
++
++/// 主题或服务名称与类型的关联数组。
++typedef struct RMW_PUBLIC_TYPE rmw_names_and_types_s
++{
++  /// 名称数组
++  rcutils_string_array_t names;
++
++  /// 类型名称数组的动态数组，长度与 `names` 相同
++  rcutils_string_array_t * types;
++} rmw_names_and_types_t;
++
++/// 返回一个零初始化的名称与类型数组。
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_names_and_types_t
++rmw_get_zero_initialized_names_and_types(void);
++
++/// 检查给定的 `names_and_types` 数组是否为零初始化。
++/**
++ * <hr>
++ * 属性               | 符合情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 否
++ * 无锁               | 是
++ *
++ * \par 线程安全
++ *   对名称与类型数组的访问是只读的，但不同步。
++ *   并发读取 `names_and_types` 是安全的，但并发读写不安全。
++ *
++ * \param[in] names_and_types 要检查的数组。
++ * \return 如果数组为零初始化则返回 RMW_RET_OK，否则返回 RMW_RET_INVALID_ARGUMENT。
++ * \remark 此函数在失败时会设置 RMW 错误状态。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_names_and_types_check_zero(rmw_names_and_types_t * names_and_types);
++
++/// 初始化一个名称与类型数组。
++/**
++ * 此函数初始化名称的字符串数组，并根据给定大小为所有类型的字符串数组分配空间，
++ * 但不会初始化每组类型的字符串数组。
++ * 不过，每组类型的字符串数组会被零初始化。
++ *
++ * <hr>
++ * 属性               | 符合情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 否
++ * 使用原子操作       | 否
++ * 无锁               | 是
++ *
++ * \par 线程安全
++ *   初始化是可重入过程，但：
++ *   - 对名称与类型数组的访问不同步。
++ *     在初始化期间读取或写入 `names_and_types` 不安全。
++ *   - 默认分配器是线程安全对象，但任何自定义 `allocator` 可能不是。
++ *     请查阅分配器文档以获取更多参考。
++ *
++ * \param[inout] names_and_types 成功时要初始化的数组，
++ *   失败时保持不变。
++ * \param[in] size 数组大小。
++ * \param[in] allocator 用于填充 `names_and_types` 的分配器。
++ * \returns 成功时返回 `RMW_RET_OK`，或者
++ * \returns 如果 `names_and_types` 为 NULL 则返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \returns 如果 `names_and_types` 不是
++ *   零初始化数组则返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \returns 如果 `allocator` 无效（按 rcutils_allocator_is_valid() 定义）
++ *   则返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \returns 如果内存分配失败则返回 `RMW_BAD_ALLOC`，或者
++ * \returns 发生未指定错误时返回 `RMW_RET_ERROR`。
++ * \remark 此函数在失败时会设置 RMW 错误状态。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_names_and_types_init(
++  rmw_names_and_types_t * names_and_types,
++  size_t size,
++  rcutils_allocator_t * allocator);
++
++/// 终结一个名称与类型数组。
++/**
++ * 此函数释放名称的字符串数组以及类型的字符串数组，
++ * 并将给定数组零初始化。
++ * 如果发生逻辑错误（例如 `RMW_RET_INVALID_ARGUMENT`），此函数将提前返回，
++ * 使给定数组保持不变。
++ * 否则，即使有错误也会继续执行。
++ *
++ * <hr>
++ * 属性               | 符合情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 否
++ * 使用原子操作       | 否
++ * 无锁               | 是
++ *
++ * \par 线程安全
++ *   终结是可重入过程，但对名称与类型数组的访问不同步。
++ *   在初始化期间读取或写入 `names_and_types` 不安全。
++ *
++ * \param[inout] names_and_types 要终结的数组。
++ * \returns 成功时返回 `RMW_RET_OK`，或者
++ * \returns 如果 `names_and_types` 为 NULL 则返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \returns 发生未指定错误时返回 `RMW_RET_ERROR`。
++ * \remark 此函数在失败时会设置 RMW 错误状态。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_names_and_types_fini(rmw_names_and_types_t * names_and_types);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__NAMES_AND_TYPES_H_
+diff --git a/rmw/include/rmw/publisher_options_zh.h b/rmw/include/rmw/publisher_options_zh.h
+new file mode 100644
+index 0000000..d521eea
+--- /dev/null
++++ b/rmw/include/rmw/publisher_options_zh.h
+@@ -0,0 +1,37 @@
++// Copyright 2019 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__PUBLISHER_OPTIONS_H_
++#define RMW__PUBLISHER_OPTIONS_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/types.h"
++
++// 目前，rmw_publisher_options_t 类型仍然在 "rmw/types.h" 中定义。
++
++/// 返回使用默认值初始化的 rmw_publisher_options_t。
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_publisher_options_t
++rmw_get_default_publisher_options(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__PUBLISHER_OPTIONS_H_
+diff --git a/rmw/include/rmw/qos_profiles_zh.h b/rmw/include/rmw/qos_profiles_zh.h
+new file mode 100644
+index 0000000..40eda5e
+--- /dev/null
++++ b/rmw/include/rmw/qos_profiles_zh.h
+@@ -0,0 +1,203 @@
++// Copyright 2015 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__QOS_PROFILES_H_
++#define RMW__QOS_PROFILES_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/types.h"
++
++static const rmw_qos_profile_t rmw_qos_profile_sensor_data =
++{
++  RMW_QOS_POLICY_HISTORY_KEEP_LAST,
++  5,
++  RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
++  RMW_QOS_POLICY_DURABILITY_VOLATILE,
++  RMW_QOS_DEADLINE_DEFAULT,
++  RMW_QOS_LIFESPAN_DEFAULT,
++  RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT,
++  RMW_QOS_LIVELINESS_LEASE_DURATION_DEFAULT,
++  false
++};
++
++static const rmw_qos_profile_t rmw_qos_profile_parameters =
++{
++  RMW_QOS_POLICY_HISTORY_KEEP_LAST,
++  1000,
++  RMW_QOS_POLICY_RELIABILITY_RELIABLE,
++  RMW_QOS_POLICY_DURABILITY_VOLATILE,
++  RMW_QOS_DEADLINE_DEFAULT,
++  RMW_QOS_LIFESPAN_DEFAULT,
++  RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT,
++  RMW_QOS_LIVELINESS_LEASE_DURATION_DEFAULT,
++  false
++};
++
++static const rmw_qos_profile_t rmw_qos_profile_default =
++{
++  RMW_QOS_POLICY_HISTORY_KEEP_LAST,
++  10,
++  RMW_QOS_POLICY_RELIABILITY_RELIABLE,
++  RMW_QOS_POLICY_DURABILITY_VOLATILE,
++  RMW_QOS_DEADLINE_DEFAULT,
++  RMW_QOS_LIFESPAN_DEFAULT,
++  RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT,
++  RMW_QOS_LIVELINESS_LEASE_DURATION_DEFAULT,
++  false
++};
++
++static const rmw_qos_profile_t rmw_qos_profile_services_default =
++{
++  RMW_QOS_POLICY_HISTORY_KEEP_LAST,
++  10,
++  RMW_QOS_POLICY_RELIABILITY_RELIABLE,
++  RMW_QOS_POLICY_DURABILITY_VOLATILE,
++  RMW_QOS_DEADLINE_DEFAULT,
++  RMW_QOS_LIFESPAN_DEFAULT,
++  RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT,
++  RMW_QOS_LIVELINESS_LEASE_DURATION_DEFAULT,
++  false
++};
++
++static const rmw_qos_profile_t rmw_qos_profile_parameter_events =
++{
++  RMW_QOS_POLICY_HISTORY_KEEP_LAST,
++  1000,
++  RMW_QOS_POLICY_RELIABILITY_RELIABLE,
++  RMW_QOS_POLICY_DURABILITY_VOLATILE,
++  RMW_QOS_DEADLINE_DEFAULT,
++  RMW_QOS_LIFESPAN_DEFAULT,
++  RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT,
++  RMW_QOS_LIVELINESS_LEASE_DURATION_DEFAULT,
++  false
++};
++
++static const rmw_qos_profile_t rmw_qos_profile_system_default =
++{
++  RMW_QOS_POLICY_HISTORY_SYSTEM_DEFAULT,
++  RMW_QOS_POLICY_DEPTH_SYSTEM_DEFAULT,
++  RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT,
++  RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT,
++  RMW_QOS_DEADLINE_DEFAULT,
++  RMW_QOS_LIFESPAN_DEFAULT,
++  RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT,
++  RMW_QOS_LIVELINESS_LEASE_DURATION_DEFAULT,
++  false
++};
++
++/// 在保持最高服务水平的同时，匹配当前可用的大多数端点
++/**
++ * 可靠性、耐久性、截止期限、活跃性以及活跃性租约期限策略将在创建订阅者或发布者时确定。
++ *
++ * 端点创建后，可以使用 `rmw_get_subscriptions_info_by_topic` 或 `rmw_get_publishers_info_by_topic`
++ * 获取实际的 QoS 策略。
++ *
++ * 中间件不希望在创建订阅者或发布者之后更新策略，即使一个或多个策略与新发现的端点不兼容。
++ * 因此，应谨慎使用此配置文件，因为与发现过程存在竞争可能导致非确定性行为。
++ */
++static const rmw_qos_profile_t rmw_qos_profile_best_available =
++{
++  RMW_QOS_POLICY_HISTORY_KEEP_LAST,
++  10,
++  RMW_QOS_POLICY_RELIABILITY_BEST_AVAILABLE,
++  RMW_QOS_POLICY_DURABILITY_BEST_AVAILABLE,
++  RMW_QOS_DEADLINE_BEST_AVAILABLE,
++  RMW_QOS_LIFESPAN_DEFAULT,
++  RMW_QOS_POLICY_LIVELINESS_BEST_AVAILABLE,
++  RMW_QOS_LIVELINESS_LEASE_DURATION_BEST_AVAILABLE,
++  false
++};
++
++static const rmw_qos_profile_t rmw_qos_profile_unknown =
++{
++  RMW_QOS_POLICY_HISTORY_UNKNOWN,
++  RMW_QOS_POLICY_DEPTH_SYSTEM_DEFAULT,
++  RMW_QOS_POLICY_RELIABILITY_UNKNOWN,
++  RMW_QOS_POLICY_DURABILITY_UNKNOWN,
++  RMW_QOS_DEADLINE_DEFAULT,
++  RMW_QOS_LIFESPAN_DEFAULT,
++  RMW_QOS_POLICY_LIVELINESS_UNKNOWN,
++  RMW_QOS_LIVELINESS_LEASE_DURATION_DEFAULT,
++  false
++};
++
++typedef enum RMW_PUBLIC_TYPE rmw_qos_compatibility_type_e
++{
++  /// QoS 策略兼容
++  RMW_QOS_COMPATIBILITY_OK = 0,
++
++  /// QoS 策略可能不兼容
++  RMW_QOS_COMPATIBILITY_WARNING,
++
++  /// QoS 策略不兼容
++  RMW_QOS_COMPATIBILITY_ERROR
++} rmw_qos_compatibility_type_t;
++
++
++/// 检查两个 QoS 配置文件是否兼容。
++/**
++ * 如果发布者和订阅者使用这些 QoS 策略可以相互通信，则两个 QoS 配置文件兼容。
++ *
++ * 如果任一配置文件策略的值为“system default”或“unknown”，则可能无法确定兼容性。
++ * 在这种情况下，输出参数 `compatibility` 被设置为 `RMW_QOS_COMPATIBILITY_WARNING`，并填充 `reason`。
++ *
++ * 如果存在兼容性警告或错误，并且为 `reason` 提供了缓冲区，则会将所有警告和错误的解释填充到缓冲区中，
++ * 以分号（`;`）分隔。
++ * 错误将出现在字符串缓冲区中警告之前。
++ * 如果提供的缓冲区不够大，此函数仍会向缓冲区写入，最多写入 `reason_size` 个字符。
++ * 因此，如果达到缓冲区大小限制，可能无法传达所有错误和警告。
++ * 缓冲区大小为 2048 应该足以捕获所有可能的错误和警告。
++ *
++ * <hr>
++ * 属性               | 遵循情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 否
++ * 无锁               | 是
++ *
++ * \param[in] publisher_profile: 发布者使用的 QoS 配置文件。
++ * \param[in] subscription_profile: 订阅者使用的 QoS 配置文件。
++ * \param[out] compatibility: 如果 QoS 配置文件兼容，则为 `RMW_QOS_COMPATIBILITY_OK`，或者
++ *   如果 QoS 配置文件可能兼容，则为 `RMW_QOS_COMPATIBILITY_WARNING`，或者
++ *   如果 QoS 配置文件不兼容，则为 `RMW_QOS_COMPATIBILITY_ERROR`。
++ * \param[out] reason: QoS 不兼容或潜在不兼容的详细原因。
++ *   必须由调用者预先分配。
++ *   此参数是可选的，如果不需要原因信息，可以设置为 `NULL`。
++ * \param[in] reason_size: 如果提供了字符串缓冲区 `reason`，则为其大小。
++ *   如果 `reason` 为 `nullptr`，则此参数必须为零。
++ * \return 如果检查成功，则返回 `RMW_RET_OK`，或者
++ * \return 如果 `compatibility` 为 `nullptr`，则返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \return 如果 `reason` 为 `NULL` 且 `reason_size` 不为零，则返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \return 如果发生意外错误，则返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_qos_profile_check_compatible(
++  const rmw_qos_profile_t publisher_profile,
++  const rmw_qos_profile_t subscription_profile,
++  rmw_qos_compatibility_type_t * compatibility,
++  char * reason,
++  size_t reason_size);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__QOS_PROFILES_H_
+diff --git a/rmw/include/rmw/rmw_zh.h b/rmw/include/rmw/rmw_zh.h
+new file mode 100644
+index 0000000..74e653f
+--- /dev/null
++++ b/rmw/include/rmw/rmw_zh.h
+@@ -0,0 +1,3025 @@
++// Copyright 2014-2017 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++/** \mainpage rmw: ROS 中间件抽象接口
++ *
++ * `rmw` 定义了一组中间件原语接口，供更高层级的 ROS API 使用。
++ * 它由以下主要部分组成：
++ *
++ * - 初始化与关闭：
++ *   - rmw/init.h
++ * - 节点
++ *   - rmw/rmw.h
++ * - 发布者
++ *   - rmw/rmw.h
++ * - 订阅者
++ *   - rmw/rmw.h
++ * - 服务客户端
++ *   - rmw/rmw.h
++ * - 服务服务端
++ *   - rmw/rmw.h
++ *
++ * 还有一些与“主题”或“服务”配合使用的通用工具函数：
++ * - 用于验证完全限定主题或服务名称的函数
++ *   - rmw_validate_full_topic_name()
++ *   - rmw/validate_full_topic_name.h
++ * - 用于验证节点命名空间的函数
++ *   - rmw_validate_namespace()
++ *   - rmw/validate_namespace.h
++ * - 用于验证节点名称的函数
++ *   - rmw_validate_node_name()
++ *   - rmw/validate_node_name.h
++ * - 用于验证两个 QoS 配置文件兼容性的函数
++ *   - rmw_qos_profile_check_compatible()
++ *   - rmw/qos_profiles.h
++ *
++ * 它还包含一些用于等待和操作这些概念所必需的机制：
++ *
++ * - 初始化与关闭管理（目前为全局）
++ *   - rmw/rmw.h
++ * - 等待集，用于等待消息和服务请求 / 响应就绪
++ *   - rmw/rmw.h
++ * - 守护条件，用于异步唤醒等待集
++ *   - rmw/rmw.h
++ * - ROS 图的内省
++ *   - rmw_names_and_types_t
++ *   - rmw_get_topic_names_and_types()
++ *   - rmw_get_service_names_and_types()
++ *   - rmw/names_and_types.h
++ *   - rmw/get_topic_names_and_types.h
++ *   - rmw/get_topic_endpoint_info.h
++ *   - rmw/get_service_names_and_types.h
++ *
++ * 此外，还有一些有用的抽象和工具：
++ *
++ * - 各种类型的分配器函数
++ *   - rmw/allocators.h
++ * - 错误处理功能（C 风格）
++ *   - rmw/error_handling.h
++ * - 宏
++ *   - rmw/macros.h
++ * - 返回码类型和其他工具类型
++ *   - rmw/types.h
++ * - 某些类型的完整性检查
++ *   - rmw/sanity_checks.h
++ * - 控制库符号可见性的宏
++ *   - rmw/visibility_control.h
++ * - 将类型还原为人类可读字符串的工具函数（C++ 专用）：
++ *   - rmw/impl/cpp/demangle.hpp
++ */
++
++#ifndef RMW__RMW_H_
++#define RMW__RMW_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#include "rcutils/allocator.h"
++#include "rcutils/macros.h"
++#include "rcutils/types.h"
++
++#include "rosidl_runtime_c/message_type_support_struct.h"
++#include "rosidl_runtime_c/service_type_support_struct.h"
++#include "rosidl_runtime_c/sequence_bound.h"
++
++#include "rmw/event.h"
++#include "rmw/init.h"
++#include "rmw/event_callback_type.h"
++#include "rmw/macros.h"
++#include "rmw/message_sequence.h"
++#include "rmw/publisher_options.h"
++#include "rmw/qos_profiles.h"
++#include "rmw/dynamic_message_type_support.h"
++#include "rmw/subscription_options.h"
++#include "rmw/types.h"
++#include "rmw/visibility_control.h"
++
++/// 获取正在使用的 rmw 实现名称
++/**
++ * \return rmw 实现名称
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++const char *
++rmw_get_implementation_identifier(void);
++
++/// 获取此中间件的唯一序列化格式。
++/**
++ * 返回二进制数据序列化时使用的格式。
++ * 每个中间件只能有一种编码。
++ * 与实现标识符不同，序列化格式可以在多个 RMW 实现之间相同。
++ * 这意味着，采用相同格式的 RMW 实现可以反序列化相同的二进制消息。
++ * \sa rmw_serialize
++ * \sa rmw_deserialize
++ * \return 序列化格式
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++const char *
++rmw_get_serialization_format(void);
++
++// TODO(wjwwood): 在更新为使用分配器时，重构此 API 以返回返回码
++/// 创建一个节点并返回该节点的句柄。
++/**
++ * 在以下情况下，此函数可能会失败并返回 `NULL`：
++ *   - name 不是有效的非空节点名称
++ *   - namespace_ 不是有效的非空命名空间
++ *   - context 无效，即未初始化（全零），或
++ *     其实现标识符与此 API 实现不匹配，或
++ *     已被 `rmw_shutdown()` 失效
++ *   - 节点创建期间内存分配失败
++ *   - 发生未指明的错误
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 否
++ * 使用原子操作       | 否 [1]
++ * 无锁               | 否 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * 此函数应由 rmw 实现定义。
++ *
++ * \param[in] context 该节点应关联的初始化上下文
++ * \param[in] name 节点名称
++ * \param[in] namespace_ 节点命名空间
++ * \return rmw 节点句柄，如果出错则返回 `NULL`
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_node_t *
++rmw_create_node(
++  rmw_context_t * context,
++  const char * name,
++  const char * namespace_);
++
++/// 完成给定的节点句柄，回收其资源并释放该节点句柄。
++/**
++ * 如果出现诸如 `RMW_RET_INVALID_ARGUMENT` 或
++ * `RMW_RET_INCORRECT_RMW_IMPLEMENTATION` 之类的逻辑错误，此函数将提前返回，
++ * 并保持给定的节点句柄不变。否则，即使发生错误，它也会继续执行，尽可能释放资源，
++ * 包括节点句柄。使用已释放的节点句柄属于未定义行为。
++ *
++ * \pre 必须在此调用之前销毁从此节点创建的所有发布者、订阅者、服务和客户端。
++ *   某些 rmw 实现可能会验证这一点，如果从此节点创建的任意实体尚未销毁，
++ *   则返回 `RMW_RET_ERROR` 并设置人类可读的错误消息。但这并不能保证，
++ *   因此调用者应确保在调用此函数前满足该条件。
++ *
++ * \param[in] node 要销毁的节点句柄
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 节点无效时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_destroy_node(rmw_node_t * node);
++
++/**
++ * \deprecated `rmw_node_assert_liveliness` 实现已被移除。
++ *   如果需要手动断言活跃度，请使用 MANUAL_BY_TOPIC。
++ */
++RMW_PUBLIC
++RCUTILS_DEPRECATED_WITH_MSG(
++  "rmw_node_assert_liveliness implementation was removed."
++  " If manual liveliness assertion is needed, use MANUAL_BY_TOPIC.")
++rmw_ret_t
++rmw_node_assert_liveliness(const rmw_node_t * node);
++
++/// 返回一个在 ROS 图发生变化时触发的守护条件。
++/**
++ * 只要 ROS 图发生变化，守护条件就会被触发。
++ * 以下情况会导致 ROS 图发生变化：
++ * - 节点加入或离开 ROS 图。
++ *   此变化将反映在 rmw_get_node_names() 和
++ *   rmw_get_node_names_with_enclaves() 的结果中。
++ * - 主题订阅加入或离开 ROS 图。
++ *   此变化将反映在 rmw_get_topic_names_and_types()、
++ *   rmw_get_subscriber_names_and_types_by_node() 和
++ *   rmw_get_subscriptions_info_by_topic() 的结果中。
++ * - 主题发布者加入或离开 ROS 图。
++ *   此变化将反映在 rmw_get_topic_names_and_types()、
++ *   rmw_get_publisher_names_and_types_by_node() 和
++ *   rmw_get_publishers_info_by_topic() 的结果中。
++ * - 主题订阅与具有兼容 QoS 策略的主题发布者匹配。
++ *   此变化将反映在 rmw_subscription_count_matched_publishers() 的结果中。
++ * - 主题发布者与具有兼容 QoS 策略的主题订阅匹配。
++ *   此变化将反映在 rmw_publisher_count_matched_subscriptions() 的结果中。
++ * - 服务服务端加入或离开 ROS 图。
++ *   此变化将反映在 rmw_get_service_names_and_types() 和
++ *   rmw_get_service_names_and_types_by_node() 的结果中。
++ * - 服务客户端加入或离开 ROS 图。
++ *   此变化将反映在 rmw_get_service_names_and_types() 和
++ *   rmw_get_client_names_and_types_by_node() 的结果中。
++ * - 服务客户端与具有兼容 QoS 策略的服务服务端匹配。
++ *   此变化将反映在 rmw_service_server_is_available() 的结果中。
++ *
++ * \note ROS 图的状态以及可能发生的任何变化，都是根据关联的 `node`
++ *   所看到的情况进行报告的。
++ *
++ * 守护条件由 `node` 拥有并在内部持有。
++ * 如果使用 rmw_destroy_node() 完成 `node`，则该守护条件将失效。
++ * 使用已失效的守护条件属于未定义行为。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 否
++ * 无锁               | 是
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，即由 rmw_create_node() 返回的句柄。
++ *
++ * \param[in] node 要从中获取守护条件的节点。
++ * \return 成功时返回守护条件，如果 `node` 为 `NULL` 或发生未指明错误，则返回 `NULL`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++const rmw_guard_condition_t *
++rmw_node_get_graph_guard_condition(const rmw_node_t * node);
++
++/// 初始化发布者分配对象，供后续发布使用。
++/**
++ * 创建一个分配对象，可与 rmw_publish 方法一起使用，以更精细地控制内存分配。
++ *
++ * 这将允许中间件为给定的消息类型和消息边界预分配正确数量的内存。
++ * 由于分配在此方法中完成，因此在 `rmw_publish` 方法中无需再进行分配。
++ *
++ * \param[in] type_support 要预分配的消息的类型支持。
++ * \param[in] message_bounds 要预分配的消息的边界结构。
++ * \param[out] allocation 要传递给 `rmw_publish` 的分配结构。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 未实现时返回 `RMW_RET_UNSUPPORTED`
++ * \return 参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_init_publisher_allocation(
++  const rosidl_message_type_support_t * type_support,
++  const rosidl_runtime_c__Sequence__bound * message_bounds,
++  rmw_publisher_allocation_t * allocation);
++
++/// 销毁发布者分配对象。
++/**
++ * 释放由 `rmw_init_publisher_allocation` 分配的所有内存。
++ *
++ * \param[in] allocation 要销毁的分配对象。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 未实现时返回 `RMW_RET_UNSUPPORTED`
++ * \return 参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_fini_publisher_allocation(
++  rmw_publisher_allocation_t * allocation);
++
++/// 创建一个发布者并返回该发布者的句柄。
++/**
++ * 在以下情况下，此函数可能会失败并返回 `NULL`：
++ *   - node 不是此 rmw 实现返回的有效非空句柄（由 `rmw_create_node()` 返回）
++ *   - type_support 不是有效的非空消息类型支持（由
++ *     `ROSIDL_GET_MSG_TYPE_SUPPORT()` 返回）
++ *   - topic_name 不是有效的非空主题名称（根据
++ *     `rmw_validate_full_topic_name()`）
++ *   - qos_profile 不是完全指定的非空配置文件（即不存在 UNKNOWN 策略）
++ *   - publisher_options 不是有效的非空选项集（由
++ *     `rmw_get_default_publisher_options()` 返回）
++ *   - 发布者创建期间内存分配失败
++ *   - 发生未指明的错误
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] node 用于注册此发布者的节点句柄
++ * \param[in] type_support 要发布的消息的类型支持
++ * \param[in] topic_name 要发布到的主题名称，通常是完全限定主题名称，除非
++ *   `qos_profile` 配置为不使用 ROS 命名空间约定（即创建原生主题发布者）
++ * \param[in] qos_profile 此发布者的 QoS 策略
++ * \param[in] publisher_options 配置此发布者的选项
++ * \return rmw 发布者句柄，如果出错则返回 `NULL`
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_publisher_t *
++rmw_create_publisher(
++  const rmw_node_t * node,
++  const rosidl_message_type_support_t * type_support,
++  const char * topic_name,
++  const rmw_qos_profile_t * qos_profile,
++  const rmw_publisher_options_t * publisher_options);
++
++/// 完成给定的发布者句柄，回收其资源并释放该发布者句柄。
++/**
++ * 如果出现诸如 `RMW_RET_INVALID_ARGUMENT` 或
++ * `RMW_RET_INCORRECT_RMW_IMPLEMENTATION` 之类的逻辑错误，此函数将提前返回，
++ * 并保持给定的发布者句柄不变。否则，即使发生错误，它也会继续执行，尽可能释放资源，
++ * 包括发布者句柄。使用已释放的发布者句柄属于未定义行为。
++ *
++ * \pre 给定的节点必须是注册该发布者时使用的节点。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] node 给定发布者注册时使用的节点句柄
++ * \param[in] publisher 要完成的发布者句柄
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return node 或 publisher 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return node 或 publisher 实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_destroy_publisher(rmw_node_t * node, rmw_publisher_t * publisher);
++
++/// 借用一份外借的 ROS 消息。
++/**
++ * 此 ROS 消息由中间件所有，中间件将保持其处于有效内存空间，直到调用者使用
++ * rmw_publish_loaned_message() 发布它，或使用
++ * rmw_return_loaned_message_from_publisher() 归还它。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   借用 ROS 消息是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在借用时分配内存由实现定义。
++ *   请参阅实现文档，了解使用 ROS 消息外借支持时的内存分配保证。
++ *
++ * \par 线程安全
++ *   发布者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一发布者并发借用 ROS 消息。
++ *
++ * \pre 给定的 `publisher` 必须是有效的发布者，即由 rmw_create_publisher() 返回的发布者。
++ * \pre 给定的 `type_support` 必须是有效的 `rosidl` 消息类型支持，并与创建时向
++ *   `publisher` 注册的类型一致。
++ *
++ * \param[in] publisher 外借的 ROS 消息将关联到的发布者。
++ * \param[in] type_support 外借的 ROS 消息的消息类型支持。
++ * \param[out] ros_message 指向中间件外借的类型擦除 ROS 消息的指针。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `publisher` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `type_support` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `ros_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `*ros_message` 不为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`（以防止泄漏），或
++ * \return `publisher` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 实现不支持 ROS 消息外借时返回 `RMW_RET_UNSUPPORTED`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_borrow_loaned_message(
++  const rmw_publisher_t * publisher,
++  const rosidl_message_type_support_t * type_support,
++  void ** ros_message);
++
++/// 归还先前从发布者借用的外借消息。
++/**
++ * 告诉中间件调用者不再需要借用的 ROS 消息。
++ * ROS 消息的所有权交还给中间件。
++ * 如果此函数因逻辑错误（例如参数无效）而提前失败，外借的 ROS 消息将保持不变。
++ * 否则，ROS 消息的所有权将交还给中间件。
++ * 如何处理归还的 ROS 消息由中间件决定。
++ * 归还后使用外借的 ROS 消息属于未定义行为。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   归还 ROS 消息是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 线程安全
++ *   发布者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地向同一发布者并发归还借用的 ROS 消息。
++ *   但是，由于外借的 ROS 消息的所有权交还给中间件，且该转移未同步，
++ *   因此并发归还同一条外借的 ROS 消息是不安全的。
++ *
++ * \pre 给定的 `publisher` 必须是有效的发布者，即由 rmw_create_publisher() 返回的发布者。
++ * \pre 给定的 `loaned_message` 必须先前已使用 rmw_borrow_loaned_message() 从同一发布者借出。
++ *
++ * \param[in] publisher 外借的 ROS 消息所关联的发布者。
++ * \param[in] loaned_message 要归还的类型擦除外借 ROS 消息。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `publisher` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `loaned_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `publisher` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 实现不支持 ROS 消息外借时返回 `RMW_RET_UNSUPPORTED`，或
++ * \return 发生意外错误且无法初始化消息时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_return_loaned_message_from_publisher(
++  const rmw_publisher_t * publisher,
++  void * loaned_message);
++
++/// 发布一条 ROS 消息。
++/**
++ * 使用给定发布者将 ROS 消息发送给所有具有匹配 QoS 策略的订阅。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   发布 ROS 消息是同步还是异步、阻塞还是非阻塞操作由实现定义。
++ *   但是，异步实现不允许在此函数返回后访问给定的 ROS 消息。
++ *   请参阅实现文档以了解发布行为。
++ *
++ * \par 内存分配
++ *   是否在发布时分配内存由实现定义。
++ *   例如，将 ROS 消息序列化后通过网络发送的实现，在处理无界（动态大小）字段时
++ *   可能需要进行额外的内存分配。
++ *   如果提供了发布者分配对象，实现可能会使用，也可能不会使用。
++ *   请参阅实现文档，了解在使用和不使用发布者分配对象时发布 ROS 消息的内存分配保证。
++ *
++ * \par 线程安全
++ *   发布者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一发布者并发发布。
++ *   但是，在发布普通 ROS 消息时：
++ *   - 对 ROS 消息的访问是只读的，但未同步。
++ *     并发读取 `ros_message` 是安全的，但并发读写不安全。
++ *   - 对发布者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_publish() 使用 `allocation` 期间，通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解发布者分配对象的线程安全性。
++ *
++ * \pre 给定的 `publisher` 必须是有效的发布者，即由 rmw_create_publisher() 返回的发布者。
++ * \pre 给定的 `ros_message` 必须是有效的消息，其类型与创建时向 `publisher` 注册的消息类型支持一致。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的发布者分配对象，使用与创建时向
++ *   `publisher` 注册的消息类型支持相匹配的消息类型支持初始化。
++ *
++ * \param[in] publisher 用于发送消息的发布者。
++ * \param[in] ros_message 要发送的类型擦除 ROS 消息。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `publisher` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `ros_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `publisher` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_publish(
++  const rmw_publisher_t * publisher,
++  const void * ros_message,
++  rmw_publisher_allocation_t * allocation);
++
++/// 发布一条外借的 ROS 消息。
++/**
++ * 使用给定发布者将先前借用的 ROS 消息发送给所有具有匹配 QoS 策略的订阅，
++ * 然后将 ROS 消息的所有权交还给中间件。
++ *
++ * 如果此函数因逻辑错误（例如参数无效）而提前失败，外借的 ROS 消息将保持不变。
++ * 否则，ROS 消息的所有权将交还给中间件。
++ * 如何处理返回的 ROS 消息由中间件决定。
++ * 发布后使用外借的 ROS 消息属于未定义行为。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   发布外借的 ROS 消息是同步还是异步、阻塞还是非阻塞操作由实现定义。
++ *   请参阅实现文档以了解发布行为。
++ *
++ * \par 内存分配
++ *   是否在发布时分配内存由实现定义。
++ *   例如，将 ROS 消息序列化后通过网络发送的实现，在处理无界（动态大小）字段时
++ *   可能需要进行额外的内存分配。
++ *   如果提供了发布者分配对象，实现可能会使用，也可能不会使用。
++ *   请参阅实现文档，了解在使用和不使用发布者分配对象时发布外借 ROS 消息的内存分配保证。
++ *
++ * \par 线程安全
++ *   发布者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一发布者并发发布。
++ *   但是，在发布外借的 ROS 消息时：
++ *   - 外借的 ROS 消息的所有权交还给中间件。
++ *     该转移未同步，因此并发发布同一条外借的 ROS 消息是不安全的。
++ *   - 对发布者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_publish() 使用 `allocation` 期间，通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解发布者分配对象的线程安全性。
++ *
++ * \pre 给定的 `publisher` 必须是有效的发布者，即由 rmw_create_publisher() 返回的发布者。
++ * \pre 给定的 `ros_message` 必须是有效的消息，已使用 rmw_borrow_loaned_message() 从同一发布者借出。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的发布者分配对象，使用与创建时向
++ *   `publisher` 注册的消息类型支持相匹配的消息类型支持初始化。
++ *
++ * \param[in] publisher 用于发送消息的发布者。
++ * \param[in] ros_message 要发送的外借类型擦除 ROS 消息。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `publisher` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `ros_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `publisher` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 实现不支持 ROS 消息外借时返回 `RMW_RET_UNSUPPORTED`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_publish_loaned_message(
++  const rmw_publisher_t * publisher,
++  void * ros_message,
++  rmw_publisher_allocation_t * allocation);
++
++/// 检索与发布者匹配的订阅数量。
++/**
++ * 查询底层中间件以确定有多少订阅与给定发布者匹配。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] publisher 要检查的发布者对象
++ * \param[out] subscription_count 匹配的订阅数量
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 任一参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 发布者实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_publisher_count_matched_subscriptions(
++  const rmw_publisher_t * publisher,
++  size_t * subscription_count);
++
++/// 检索发布者的实际 qos 设置。
++/**
++ * 查询底层中间件以确定发布者的 qos 设置。
++ * 使用 RMW_*_SYSTEM_DEFAULT 时应用的实际配置只能在创建发布者之后确定，
++ * 并且取决于底层 rmw 实现。
++ * 如果正在使用的底层设置无法用 ROS 术语表示，则将其设置为 RMW_*_UNKNOWN。
++ *
++ * \note avoid_ros_namespace_conventions 字段的值不会通过此函数解析。
++ *   rcl 函数 `rcl_publisher_get_actual_qos()` 会解析它。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] publisher 要检查的发布者对象
++ * \param[out] qos 实际的 qos 设置
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 任一参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 发布者实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_publisher_get_actual_qos(
++  const rmw_publisher_t * publisher,
++  rmw_qos_profile_t * qos);
++
++/// 以字节流形式发布 ROS 消息。
++/**
++ * 使用给定发布者将序列化为字节流的 ROS 消息发送给所有具有匹配 QoS 策略的订阅。
++ * ROS 消息可以使用 rmw_serialize() 手动序列化。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   发布序列化的 ROS 消息是同步还是异步、阻塞还是非阻塞操作由实现定义。
++ *   但是，异步实现不允许在此函数返回后访问给定的字节流。
++ *   请参阅实现文档以了解发布行为。
++ *
++ * \par 内存分配
++ *   是否在发布时分配内存由实现定义。
++ *   即使提供了发布者分配对象，实现也可能会忽略它。
++ *   请参阅实现文档，了解在使用和不使用发布者分配对象时发布序列化消息的内存分配保证。
++ *
++ * \par 线程安全
++ *   发布者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一发布者并发发布。
++ *   但是，在发布序列化的 ROS 消息时：
++ *   - 对字节流的访问是只读的，但未同步。
++ *     并发读取 `serialized_message` 是安全的，但并发读写不安全。
++ *   - 对发布者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_publish() 使用 `allocation` 期间，通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解发布者分配对象的线程安全性。
++ *
++ * \pre 给定的 `publisher` 必须是有效的发布者，即由 rmw_create_publisher() 返回的发布者。
++ * \pre 给定的 `serialized_message` 必须是有效的序列化消息，已由 rmw_serialized_message_init() 初始化，
++ *   并包含一个 ROS 消息的序列化结果，其类型与创建时向 `publisher` 注册的消息类型支持一致。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的发布者分配对象，使用与创建时向
++ *   `publisher` 注册的消息类型支持相匹配的消息类型支持初始化。
++ *
++ * \param[in] publisher 用于发送消息的发布者。
++ * \param[in] serialized_message 要发送的序列化 ROS 消息。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `publisher` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `serialized_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `publisher` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_publish_serialized_message(
++  const rmw_publisher_t * publisher,
++  const rmw_serialized_message_t * serialized_message,
++  rmw_publisher_allocation_t * allocation);
++
++/// 计算序列化消息的大小。
++/**
++ * 给定消息定义和边界，计算序列化后的大小。
++ *
++ * \param[in] type_support 要计算的消息的类型支持。
++ * \param[in] message_bounds 用于无界字段的人工边界。
++ * \param[out] size 序列化消息的计算大小。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 任一参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 未实现时返回 `RMW_RET_UNSUPPORTED`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_get_serialized_message_size(
++  const rosidl_message_type_support_t * type_support,
++  const rosidl_runtime_c__Sequence__bound * message_bounds,
++  size_t * size);
++
++/// 手动断言此发布者处于活动状态（适用于 RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC）
++/**
++ * 如果 rmw 活跃度策略设置为 RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC，
++ * 此发布者的创建者可以在某个时间点手动调用 `assert_liveliness`，
++ * 以向系统其余部分表明该节点仍处于活动状态。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 否
++ * 无锁               | 是
++ *
++ * \param[in] publisher 需要断言活跃度的发布者句柄
++ * \return 活跃度断言成功完成时返回 `RMW_RET_OK`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`，或
++ * \return rmw 实现不支持断言活跃度时返回 `RMW_RET_UNSUPPORTED`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_publisher_assert_liveliness(const rmw_publisher_t * publisher);
++
++/// 等待所有已发布消息数据被确认，或直到指定的超时时间结束。
++/**
++ * 此函数等待所有已发布消息数据被对端节点确认，或等待超时。
++ *
++ * 仅当发布者的 QoS 配置文件设置为 RELIABLE 时，此函数才能有效工作。
++ * 否则，此函数将立即返回 RMW_RET_OK。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \par 运行时行为
++ *   等待所有确认是同步操作。
++ *   因此，调用线程将被阻塞，直到所有已发布消息数据被确认或指定时长结束。
++ *
++ * \par 线程安全
++ *   发布者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一发布者并发调用此函数。
++ *
++ * \pre 给定的 `publisher` 必须是有效的发布者，即由 rmw_create_publisher() 返回的发布者。
++ *
++ * \param[in] publisher 需要等待所有确认的发​​布者句柄。
++ * \param[in] wait_timeout 等待所有已发布消息数据被确认的最大时间。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 等待超时时返回 `RMW_RET_TIMEOUT`，或
++ * \return `publisher` 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `publisher` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`，或
++ * \return rmw 实现未实现时返回 `RMW_RET_UNSUPPORTED`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_publisher_wait_for_all_acked(
++  const rmw_publisher_t * publisher,
++  rmw_time_t wait_timeout);
++
++/// 将 ROS 消息序列化为 rmw_serialized_message_t。
++/**
++ * ROS 消息被序列化为包含在 rmw_serialized_message_t 结构中的字节流。
++ * 序列化格式取决于底层实现。
++ *
++ * \pre 给定的 ROS 消息必须是有效的非空实例，已由调用者初始化并与提供的 typesupport 匹配。
++ * \pre 给定的 typesupport 必须是有效的非空实例，由 `rosidl` API 提供。
++ * \pre 给定的序列化消息必须是有效的非空实例，已由调用者初始化。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [2]
++ * 无锁               | 可能 [2]
++ * <i>[1] 如果给定的序列化消息没有足够的容量容纳 ROS 消息序列化结果</i>
++ * <i>[2] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] ros_message 类型化的 ROS 消息
++ * \param[in] type_support ROS 消息的 typesupport
++ * \param[out] serialized_message 序列化 ROS 消息的目标位置
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_serialize(
++  const void * ros_message,
++  const rosidl_message_type_support_t * type_support,
++  rmw_serialized_message_t * serialized_message);
++
++/// 反序列化 ROS 消息。
++/**
++ * 将给定 rmw_serialized_message_t 的内部字节流缓冲区反序列化为给定 ROS 消息。
++ * rmw_serialized_message_t 中预期的序列化格式取决于底层实现。
++ *
++ * \pre 给定的序列化消息必须是有效的非空实例，例如由 `rmw_serialize()` 返回的实例，
++ *   并与提供的 typesupport 和 ROS 消息匹配。
++ * \pre 给定的 typesupport 必须是有效的非空实例，由 `rosidl` API 提供。
++ * \pre 给定的 ROS 消息必须是有效的非空实例，已由调用者初始化。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [2]
++ * 无锁               | 可能 [2]
++ * <i>[1] 如果给定的 ROS 消息包含无界字段</i>
++ * <i>[2] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] serialized_message 保存字节流的序列化消息
++ * \param[in] type_support 类型化 ros 消息的 typesupport
++ * \param[out] ros_message 反序列化 ROS 消息的目标位置
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_deserialize(
++  const rmw_serialized_message_t * serialized_message,
++  const rosidl_message_type_support_t * type_support,
++  void * ros_message);
++
++/// 初始化订阅者分配对象，供后续 `take` 使用。
++/**
++ * 创建一个分配对象，可与 rmw_take 方法一起使用，以更精细地控制内存分配。
++ *
++ * 这将允许中间件为给定的消息类型和消息边界预分配正确数量的内存。
++ * 由于分配在此方法中完成，因此在 `rmw_take` 方法中无需再进行分配。
++ *
++ * \param[in] type_support 要预分配的消息的类型支持。
++ * \param[in] message_bounds 要预分配的消息的边界结构。
++ * \param[out] allocation 要传递给 `rmw_take` 的分配结构。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 未实现时返回 `RMW_RET_UNSUPPORTED`
++ * \return 参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_init_subscription_allocation(
++  const rosidl_message_type_support_t * type_support,
++  const rosidl_runtime_c__Sequence__bound * message_bounds,
++  rmw_subscription_allocation_t * allocation);
++
++/// 销毁订阅者分配对象。
++/**
++ * 释放由 `rmw_init_subscription_allocation` 分配的内存。
++ *
++ * \param[in] allocation 要销毁的分配对象。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 未实现时返回 `RMW_RET_UNSUPPORTED`
++ * \return 参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_fini_subscription_allocation(
++  rmw_subscription_allocation_t * allocation);
++
++/// 创建一个订阅者并返回该订阅者的句柄。
++/**
++ * 在以下情况下，此函数可能会失败并返回 `NULL`：
++ *   - node 不是此 rmw 实现返回的有效非空句柄（由 `rmw_create_node()` 返回）
++ *   - type_support 不是有效的非空消息类型支持（由
++ *     `ROSIDL_GET_MSG_TYPE_SUPPORT()` 返回）
++ *   - topic_name 不是有效的非空主题名称（如果适用 ROS 命名空间约定，根据
++ *     `rmw_validate_full_topic_name()`）
++ *   - qos_profile 不是完全指定的非空配置文件（即不存在 UNKNOWN 策略）
++ *   - subscription_options 不是有效的非空选项集，例如由
++ *     `rmw_get_default_subscription_options()` 返回的选项集
++ *   - 订阅者创建期间内存分配失败
++ *   - 发生未指明的错误
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] node 用于注册此订阅者的节点句柄
++ * \param[in] type_support 要订阅的消息的类型支持
++ * \param[in] topic_name 要订阅的主题名称，通常是完全限定主题名称，除非
++ *   `qos_profile` 配置为不使用 ROS 命名空间约定（即创建原生主题订阅者）
++ * \param[in] qos_policies 此订阅者的 QoS 策略
++ * \param[in] subscription_options 配置此订阅者的选项
++ * \return rmw 订阅者句柄，如果出错则返回 `NULL`
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_subscription_t *
++rmw_create_subscription(
++  const rmw_node_t * node,
++  const rosidl_message_type_support_t * type_support,
++  const char * topic_name,
++  const rmw_qos_profile_t * qos_policies,
++  const rmw_subscription_options_t * subscription_options);
++
++/// 完成给定的订阅者句柄，回收其资源并释放该订阅者句柄。
++/**
++ * 如果出现诸如 `RMW_RET_INVALID_ARGUMENT` 或
++ * `RMW_RET_INCORRECT_RMW_IMPLEMENTATION` 之类的逻辑错误，此函数将提前返回，
++ * 并保持给定的订阅者句柄不变。
++ * 否则，即使发生错误，它也会继续执行，尽可能释放资源，包括订阅者句柄，并返回
++ * `RMW_RET_ERROR`。使用已释放的订阅者句柄属于未定义行为。
++ *
++ * \pre 给定的节点必须是注册该订阅者时使用的节点。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] node 给定订阅者注册时使用的节点句柄
++ * \param[in] subscription 要完成的订阅者句柄
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return node 或 subscription 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return node 或 subscription 实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_destroy_subscription(rmw_node_t * node, rmw_subscription_t * subscription);
++
++/// 检索与订阅者匹配的发布者数量。
++/**
++ * 查询底层中间件以确定有多少发布者与给定订阅者匹配。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] subscription 要检查的订阅者对象
++ * \param[out] publisher_count 匹配的发布者数量
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 任一参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 订阅者实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_subscription_count_matched_publishers(
++  const rmw_subscription_t * subscription,
++  size_t * publisher_count);
++
++/// 检索订阅者的实际 qos 设置。
++/**
++ * 查询底层中间件以确定订阅者的 qos 设置。
++ * 使用 RMW_*_SYSTEM_DEFAULT 时应用的实际配置只能在创建订阅者之后确定，
++ * 并且取决于底层 rmw 实现。
++ * 如果正在使用的底层设置无法用 ROS 术语表示，则将其设置为 RMW_*_UNKNOWN。
++ *
++ * \note avoid_ros_namespace_conventions 字段的值不会通过此函数解析。
++ *   rcl 函数 `rcl_subscription_get_actual_qos()` 会解析它。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] subscription 要检查的订阅者对象
++ * \param[out] qos 实际的 qos 设置
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 任一参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 订阅者实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_subscription_get_actual_qos(
++  const rmw_subscription_t * subscription,
++  rmw_qos_profile_t * qos);
++
++/// 设置订阅者的内容过滤选项。
++/**
++ * 此函数将为给定订阅者设置过滤表达式和表达式参数数组。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] implementation defined, check implementation documentation</i>
++ *
++ * \param[in] subscription 要设置内容过滤选项的订阅者。
++ * \param[in] options 内容过滤选项。
++ *   使用空字符串（""）的 `options.filter_expression` 可重置/清除订阅者的内容过滤主题。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 实现不支持内容过滤主题时返回 `RMW_RET_UNSUPPORTED`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_subscription_set_content_filter(
++  rmw_subscription_t * subscription,
++  const rmw_subscription_content_filter_options_t * options);
++
++/// 检索订阅者的内容过滤选项。
++/**
++ * 此函数将返回给定订阅者的内容过滤选项。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] implementation defined, check implementation documentation</i>
++ *
++ * \param[in] subscription 要检查的订阅者对象。
++ * \param[in] allocator 填充内容过滤选项时要使用的分配器。
++ * \param[out] options 内容过滤选项。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return 实现不支持内容过滤主题时返回 `RMW_RET_UNSUPPORTED`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_subscription_get_content_filter(
++  const rmw_subscription_t * subscription,
++  rcutils_allocator_t * allocator,
++  rmw_subscription_content_filter_options_t * options);
++
++/// 接收一条传入的 ROS 消息。
++/**
++ * 接收给定订阅者已收到的 ROS 消息，并将其从内部队列中移除。
++ * 即使没有收到 ROS 消息，此函数也会成功，但 `taken` 将为 false。
++ *
++ * \remarks 同一条 ROS 消息不能被接收两次。
++ *   调用者无需处理重复项。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   接收 ROS 消息是同步操作。
++ *   它也是非阻塞的，在某种程度上它不会等待新的 ROS 消息到达，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在接收时分配内存由实现定义。
++ *   例如，将通过网络接收的 ROS 消息反序列化的实现，在处理无界（动态大小）字段时
++ *   可能需要进行额外的内存分配。
++ *   如果提供了订阅者分配对象，实现可能会使用，也可能不会使用。
++ *   请参阅实现文档，了解在使用和不使用订阅者分配对象时接收 ROS 消息的内存分配保证。
++ *
++ * \par 线程安全
++ *   订阅者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一订阅者并发接收。
++ *   但是，在接收普通 ROS 消息时：
++ *   - 对给定 ROS 消息的访问未同步。
++ *     在 rmw_take() 使用 `ros_message` 期间，读取或写入 `ros_message` 是不安全的。
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_take() 使用 `taken` 期间，读取或写入 `taken` 是不安全的。
++ *   - 对给定订阅者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_take() 使用 `allocation` 期间，通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解订阅者分配对象的线程安全性。
++ *
++ * \pre 给定的 `subscription` 必须是有效的订阅者，即由 rmw_create_subscription() 返回的订阅者。
++ * \pre 给定的 `ros_message` 必须是有效的消息，其类型与创建时向 `subscription` 注册的消息类型支持一致。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的订阅者分配对象，使用与创建时向
++ *   `subscription` 注册的消息类型支持相匹配的消息类型支持初始化。
++ * \post 给定的 `ros_message` 将保持为有效消息。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，它将保持不变；
++ *   如果因运行时错误而失败，它将处于未知但有效的状态。
++ *   如果此函数成功但 `taken` 为 false，它也将保持不变。
++ *
++ * \param[in] subscription 要从中接收消息的订阅者。
++ * \param[out] ros_message 要写入的类型擦除 ROS 消息。
++ * \param[out] taken 布尔标志，指示是否已接收 ROS 消息。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `subscription` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `ros_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `taken` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take(
++  const rmw_subscription_t * subscription,
++  void * ros_message,
++  bool * taken,
++  rmw_subscription_allocation_t * allocation);
++
++/// 接收传入的 ROS 消息及其元数据。
++/**
++ * 与 rmw_take() 相同，但还会接收 ROS 消息的元数据。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   接收带有元数据的 ROS 消息是同步操作。
++ *   它也是非阻塞的，在某种程度上它不会等待新的 ROS 消息到达，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在接收时分配内存由实现定义。
++ *   例如，将通过网络接收的 ROS 消息反序列化的实现，在处理无界（动态大小）字段时
++ *   可能需要进行额外的内存分配。
++ *   如果提供了订阅者分配对象，实现可能会使用，也可能不会使用。
++ *   请参阅实现文档，了解在使用和不使用订阅者分配对象时接收 ROS 消息的内存分配保证。
++ *
++ * \par 线程安全
++ *   订阅者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一订阅者并发接收。
++ *   但是，在接收带有元数据的普通 ROS 消息时：
++ *   - 对给定 ROS 消息的访问未同步。
++ *     在 rmw_take_with_info() 使用 `ros_message` 期间，读取或写入 `ros_message` 是不安全的。
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_take_with_info() 使用 `taken` 期间，读取或写入 `taken` 是不安全的。
++ *   - 对给定 ROS 消息元数据的访问未同步。
++ *     在 rmw_take_with_info() 使用 `message_info` 期间，读取或写入 `message_info` 是不安全的。
++ *   - 对给定订阅者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_take_with_info() 使用 `allocation` 期间，通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解订阅者分配对象的线程安全性。
++ *
++ * \pre 给定的 `subscription` 必须是有效的订阅者，即由 rmw_create_subscription() 返回的订阅者。
++ * \pre 给定的 `ros_message` 必须是有效的消息，其类型与创建时向 `subscription` 注册的消息类型支持一致。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的订阅者分配对象，使用与创建时向
++ *   `subscription` 注册的消息类型支持相匹配的消息类型支持初始化。
++ * \post 给定的 `ros_message` 将保持为有效消息，`message_info` 将保持为有效消息元数据。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，两者都将保持不变；
++ *   如果因运行时错误而失败，两者都将处于未知但有效的状态。
++ *   如果此函数成功但 `taken` 为 false，两者也都将保持不变。
++ *
++ * \param[in] subscription 要从中接收 ROS 消息的订阅者。
++ * \param[out] ros_message 要写入的类型擦除 ROS 消息。
++ * \param[out] taken 布尔标志，指示是否已接收 ROS 消息。
++ * \param[out] message_info 已接收 ROS 消息的元数据。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `subscription` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `ros_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `taken` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `message_info` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_with_info(
++  const rmw_subscription_t * subscription,
++  void * ros_message,
++  bool * taken,
++  rmw_message_info_t * message_info,
++  rmw_subscription_allocation_t * allocation);
++
++/// 接收多条传入的 ROS 消息及其元数据。
++/**
++ * 接收给定订阅者已收到的一系列连续 ROS 消息，并将其从内部队列中移除。
++ * 虽然可以请求 `count` 条 ROS 消息，但订阅者实际收到的消息可能更少。
++ * 此函数只会接收已经收到的消息，即使接收到的消息更少（或为零），它也会成功。
++ * 在这种情况下，仅返回当前可用的消息。
++ * `taken` 输出变量表示实际接收的 ROS 消息数量。
++ *
++ * \remarks 一旦接收，序列中的 ROS 消息就不能再次被接收。
++ *   调用者无需处理重复项。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   接收一系列 ROS 消息是同步操作。
++ *   它也是非阻塞的，在某种程度上它不会等待新的 ROS 消息到达，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在接收时分配内存由实现定义。
++ *   例如，将通过网络接收的 ROS 消息反序列化的实现，在处理无界（动态大小）字段时
++ *   可能需要进行额外的内存分配。
++ *   如果提供了订阅者分配对象，实现可能会使用，也可能不会使用。
++ *   请参阅实现文档，了解在使用和不使用订阅者分配对象时接收 ROS 消息的内存分配保证。
++ *
++ * \par 线程安全
++ *   订阅者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一订阅者并发接收。
++ *   此外，接收到的 ROS 消息序列保证是连续的，并保留订阅者队列中的顺序，即使有并发接收。
++ *   但是，在接收带有元数据的一系列 ROS 消息时：
++ *   - 对给定 ROS 消息序列的访问未同步。
++ *     在 rmw_take_sequence() 使用 `message_sequence` 期间，读取或写入 `message_sequence` 是不安全的。
++ *   - 对给定 ROS 消息元数据序列的访问未同步。
++ *     在 rmw_take_sequence() 使用 `message_info_sequence` 期间，读取或写入 `message_info_sequence` 是不安全的。
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_take_sequence() 使用 `taken` 期间，读取或写入 `taken` 是不安全的。
++ *   - 对给定订阅者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_take_sequence() 使用 `allocation` 期间，通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解订阅者分配对象的线程安全性。
++ *
++ * \pre 给定的 `subscription` 必须是有效的订阅者，即由 rmw_create_subscription() 返回的订阅者。
++ * \pre 给定的 `message_sequence` 必须是有效的消息序列，已由 rmw_message_sequence_init() 初始化，
++ *   并填充有类型与创建时向 `subscription` 注册的消息类型支持一致的 ROS 消息。
++ * \pre 给定的 `message_info_sequence` 必须是有效的消息元数据序列，已由 rmw_message_info_sequence_init() 初始化。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的订阅者分配对象，使用与创建时向
++ *   `subscription` 注册的消息类型支持相匹配的消息类型支持初始化。
++ * \post 给定的 `message_sequence` 将保持为有效消息序列，`message_info_sequence` 将保持为有效消息元数据序列。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，两者都将保持不变；
++ *   如果因运行时错误而失败，两者都将处于未知但有效的状态。
++ *   如果此函数成功但 `taken` 为零，两者也都将保持不变。
++ *
++ * \param[in] subscription 要从中接收 ROS 消息的订阅者。
++ * \param[in] count 尝试接收的消息数量。
++ * \param[out] message_sequence 要写入的类型擦除 ROS 消息序列。
++ *   消息序列的容量必须足以容纳所有请求的消息，即容量必须大于或等于 `count`。
++ *   它不必与 `message_info_sequence` 的容量匹配。
++ * \param[out] message_info_sequence 额外的消息元数据序列。
++ *   消息信息序列的容量必须足以容纳所有请求的消息元数据，即容量必须大于或等于 `count`。
++ *   它不必与 `message_sequence` 的容量匹配。
++ * \param[out] taken 实际从订阅者接收的消息数量。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `subscription` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `message_sequence` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `message_info_sequence` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `taken` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `count` 为 0 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `message_sequence` 容量小于 `count` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `message_info_sequence` 容量小于 `count` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_sequence(
++  const rmw_subscription_t * subscription,
++  size_t count,
++  rmw_message_sequence_t * message_sequence,
++  rmw_message_info_sequence_t * message_info_sequence,
++  size_t * taken,
++  rmw_subscription_allocation_t * allocation);
++
++/// 以字节流形式接收传入的 ROS 消息。
++/**
++ * 接收给定订阅者已收到的 ROS 消息，并将其从内部队列中移除。
++ * 即使没有收到 ROS 消息，此函数也会成功，但 `taken` 将为 false。
++ * 与 rmw_take() 不同，ROS 消息以其序列化形式（即字节流）被接收。
++ * 如果需要，随后可以使用 rmw_deserialize() 将该字节流反序列化为 ROS 消息。
++ *
++ * \remarks 同一条 ROS 消息，无论是否序列化，都不能被接收两次。
++ *   调用者无需处理重复项。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   以字节流形式接收 ROS 消息是同步操作。
++ *   它也是非阻塞的，在某种程度上它不会等待新的 ROS 消息到达，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在接收时分配内存由实现定义。
++ *   例如，在处理包含无界（动态大小）字段的 ROS 消息时，实现可能需要进行额外的内存分配，
++ *   即这些实现可能需要调整给定字节流的大小。
++ *   如果提供了订阅者分配对象，实现可能会使用，也可能不会使用。
++ *   请参阅实现文档，了解在使用和不使用订阅者分配对象时接收序列化 ROS 消息的内存分配保证。
++ * \par
++ *   对于仅包含有界（固定大小）字段的 ROS 消息，调用者可以使用 rmw_get_serialized_message_size()
++ *   查询其大小，并相应地使用 rmw_serialized_message_resize() 调整 `serialized_message` 的大小，
++ *   以避免在接收时调整字节流大小。
++ *   尽管如此，字节流大小调整并不能保证是唯一的内存操作。
++ *
++ * \par 线程安全
++ *   订阅者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一订阅者并发接收。
++ *   但是，在接收序列化的 ROS 消息时：
++ *   - 对给定序列化 ROS 消息字节流的访问未同步。
++ *     在 rmw_take_serialized_message() 使用 `serialized_message` 期间，
++ *     读取或写入 `serialized_message` 是不安全的。
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_take_serialized_message() 使用 `taken` 期间，读取或写入 `taken` 是不安全的。
++ *   - 对给定订阅者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_take_serialized_message() 使用 `allocation` 期间，
++ *     通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解订阅者分配对象的线程安全性。
++ *
++ * \pre 给定的 `subscription` 必须是有效的订阅者，即由 rmw_create_subscription() 返回的订阅者。
++ * \pre 给定的 `serialized_message` 必须是有效的序列化消息，已由 rmw_serialized_message_init() 初始化。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的订阅者分配对象，使用与创建时向
++ *   `subscription` 注册的消息类型支持相匹配的消息类型支持初始化。
++ * \post 给定的 `serialized_message` 将保持为有效序列化消息。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，它将保持不变；
++ *   如果因运行时错误而失败，它将处于未知但有效的状态。
++ *   如果此函数成功但 `taken` 为 false，它也将保持不变。
++ *
++ * \param[in] subscription 要从中接收 ROS 消息的订阅者。
++ * \param[out] serialized_message 要写入的字节流。
++ * \param[out] taken 布尔标志，指示是否已接收 ROS 消息。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `subscription` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `serialized_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `taken` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_serialized_message(
++  const rmw_subscription_t * subscription,
++  rmw_serialized_message_t * serialized_message,
++  bool * taken,
++  rmw_subscription_allocation_t * allocation);
++
++/// 以字节流形式接收传入的 ROS 消息及其元数据。
++/**
++ * 与 rmw_take_serialized_message() 相同，但还会接收 ROS 消息的元数据。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   以字节流形式接收带有元数据的 ROS 消息是同步操作。
++ *   它也是非阻塞的，在某种程度上它不会等待新的 ROS 消息到达，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在接收时分配内存由实现定义。
++ *   例如，在处理包含无界（动态大小）字段的 ROS 消息时，实现可能需要进行额外的内存分配，
++ *   即这些实现可能需要调整给定字节流的大小。
++ *   如果提供了订阅者分配对象，实现可能会使用，也可能不会使用。
++ *   请参阅实现文档，了解在使用和不使用订阅者分配对象时接收序列化 ROS 消息的内存分配保证。
++ * \par
++ *   对于仅包含有界（固定大小）字段的 ROS 消息，调用者可以使用 rmw_get_serialized_message_size()
++ *   查询其大小，并相应地使用 rmw_serialized_message_resize() 调整 `serialized_message` 的大小，
++ *   以避免在接收时调整字节流大小。
++ *   尽管如此，字节流大小调整并不能保证是唯一的内存操作。
++ *
++ * \par 线程安全
++ *   订阅者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一订阅者并发接收。
++ *   但是，在接收带有元数据的序列化 ROS 消息时：
++ *   - 对给定序列化 ROS 消息字节流的访问未同步。
++ *     在 rmw_take_serialized_message_with_info() 使用 `serialized_message` 期间，
++ *     读取或写入 `serialized_message` 是不安全的。
++ *   - 对给定 ROS 消息元数据的访问未同步。
++ *     在 rmw_take_serialized_message_with_info() 使用 `message_info` 期间，
++ *     读取或写入 `message_info` 是不安全的。
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_take_serialized_message_with_info() 使用 `taken` 期间，读取或写入 `taken` 是不安全的。
++ *   - 对给定订阅者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_take_serialized_message_with_info() 使用 `allocation` 期间，
++ *     通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解订阅者分配对象的线程安全性。
++ *
++ * \pre 给定的 `serialized_message` 必须是有效的序列化消息，已由 rmw_serialized_message_init() 初始化。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的订阅者分配对象，使用与创建时向
++ *   `subscription` 注册的消息类型支持相匹配的消息类型支持初始化。
++ * \post 给定的 `serialized_message` 将保持为有效序列化消息，`message_info` 将保持为有效消息元数据。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，两者都将保持不变；
++ *   如果因运行时错误而失败，两者都将处于未知但有效的状态。
++ *   如果此函数成功但 `taken` 为 false，它也将保持不变。
++ *
++ * \param[in] subscription 要从中接收 ROS 消息的订阅者。
++ * \param[out] serialized_message 要写入的字节流。
++ * \param[out] taken 布尔标志，指示是否已接收 ROS 消息。
++ * \param[out] message_info 已接收 ROS 消息的元数据。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `subscription` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `serialized_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `taken` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `message_info` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_serialized_message_with_info(
++  const rmw_subscription_t * subscription,
++  rmw_serialized_message_t * serialized_message,
++  bool * taken,
++  rmw_message_info_t * message_info,
++  rmw_subscription_allocation_t * allocation);
++
++/// 接收由中间件外借的传入 ROS 消息。
++/**
++ * 接收给定订阅者已收到的 ROS 消息，并将其从内部队列中移除。
++ * 即使没有收到 ROS 消息，此函数也会成功，但 `taken` 将为 false。
++ * 外借的 ROS 消息由中间件所有，中间件将保持其处于有效内存空间，
++ * 直到调用者使用 rmw_return_loaned_message_from_subscription() 归还它。
++ *
++ * \remarks 同一条 ROS 消息，无论是否外借，都不能被接收两次。
++ *   调用者无需处理重复项。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   接收外借的 ROS 消息是同步操作。
++ *   它也是非阻塞的，在某种程度上它不会等待新的 ROS 消息到达，也不会等待内部内存外借池（如果有）
++ *   得到补充，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在接收时分配内存由实现定义。
++ *   例如，将通过网络接收的 ROS 消息反序列化的实现，在处理无界（动态大小）字段时
++ *   可能需要进行额外的内存分配。
++ *   如果提供了订阅者分配对象，实现可能会使用，也可能不会使用。
++ *   请参阅实现文档，了解在使用和不使用订阅者分配对象时接收外借 ROS 消息的内存分配保证。
++ *
++ * \par 线程安全
++ *   订阅者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一订阅者并发接收。
++ *   但是，在接收外借的 ROS 消息时：
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_take_loaned_message() 使用 `taken` 和 `loaned_message` 期间，
++ *     读取或写入它们是不安全的。
++ *   - 对给定订阅者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_take_loaned_message() 使用 `allocation` 期间，
++ *     通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解订阅者分配对象的线程安全性。
++ *
++ * \pre 给定的 `subscription` 必须是有效的订阅者，即由 rmw_create_subscription() 返回的订阅者。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的订阅者分配对象，使用与创建时向
++ *   `subscription` 注册的消息类型支持相匹配的消息类型支持初始化。
++ * \post 给定的 `loaned_message` 将保持不变，如果此函数成功且 `taken` 为 true，则指向一条有效消息。
++ *
++ * \param[in] subscription 要从中接收 ROS 消息的订阅者。
++ * \param[inout] loaned_message 指向中间件接收并外借的类型擦除 ROS 消息的指针。
++ * \param[out] taken 布尔标志，指示是否已接收 ROS 消息。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `subscription` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `loaned_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `*loaned_message` 不为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`（以防止泄漏），或
++ * \return `taken` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 实现不支持外借 ROS 消息时返回 `RMW_RET_UNSUPPORTED`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_loaned_message(
++  const rmw_subscription_t * subscription,
++  void ** loaned_message,
++  bool * taken,
++  rmw_subscription_allocation_t * allocation);
++
++/// 接收外借消息及其额外的消息信息。
++/**
++ * 与 rmw_take_loaned_message() 相同，但还会接收 ROS 消息的元数据。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   接收带有元数据的外借 ROS 消息是同步操作。
++ *   它也是非阻塞的，在某种程度上它不会等待新的 ROS 消息到达，也不会等待内部内存外借池（如果有）
++ *   得到补充，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在接收时分配内存由实现定义。
++ *   例如，将通过网络接收的 ROS 消息反序列化的实现，在处理无界（动态大小）字段时
++ *   可能需要进行额外的内存分配。
++ *   如果提供了订阅者分配对象，实现可能会使用，也可能不会使用。
++ *   请参阅实现文档，了解在使用和不使用订阅者分配对象时接收外借 ROS 消息的内存分配保证。
++ *
++ * \par 线程安全
++ *   订阅者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一订阅者并发接收。
++ *   但是，在接收带有元数据的外借 ROS 消息时：
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_take_loaned_message_with_info() 使用 `taken` 和 `loaned_message` 期间，
++ *     读取或写入它们是不安全的。
++ *   - 对给定 ROS 消息元数据的访问未同步。
++ *     在 rmw_take_loaned_message_with_info() 使用 `message_info` 期间，
++ *     读取或写入 `message_info` 是不安全的。
++ *   - 对给定订阅者分配对象的访问未同步，除非实现另有说明。
++ *     因此，在 rmw_take_loaned_message_with_info() 使用 `allocation` 期间，
++ *     通常不安全地读取或写入 `allocation`。
++ *     请参阅实现文档，了解订阅者分配对象的线程安全性。
++ *
++ * \pre 给定的 `subscription` 必须是有效的订阅者，即由 rmw_create_subscription() 返回的订阅者。
++ * \pre 如果不为 NULL，给定的 `allocation` 必须是有效的订阅者分配对象，使用与创建时向
++ *   `subscription` 注册的消息类型支持相匹配的消息类型支持初始化。
++ * \post 给定的 `loaned_message` 将保持不变，如果此函数成功且 `taken` 为 true，则指向一条有效消息。
++ * \post 给定的 `message_info` 将保持为有效消息元数据。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，它将保持不变；
++ *   如果因运行时错误而失败，它将处于未知但有效的状态。
++ *   如果此函数成功但 `taken` 为 false，它也将保持不变。
++ *
++ * \param[in] subscription 要从中接收 ROS 消息的订阅者。
++ * \param[inout] loaned_message 指向中间件接收并外借的类型擦除 ROS 消息的指针。
++ * \param[out] taken 布尔标志，指示是否已接收 ROS 消息。
++ * \param[out] message_info 已接收 ROS 消息的元数据。
++ * \param[in] allocation 要使用的预分配内存。可以为 NULL。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `subscription` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `loaned_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `*loaned_message` 不为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`（以防止泄漏），或
++ * \return `taken` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `message_info` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 实现不支持外借 ROS 消息时返回 `RMW_RET_UNSUPPORTED`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_loaned_message_with_info(
++  const rmw_subscription_t * subscription,
++  void ** loaned_message,
++  bool * taken,
++  rmw_message_info_t * message_info,
++  rmw_subscription_allocation_t * allocation);
++
++/// 归还先前从订阅者接收的外借 ROS 消息。
++/**
++ * 告诉中间件调用者不再需要先前外借的 ROS 消息。
++ * 如果此函数因逻辑错误（例如参数无效）而提前失败，外借的 ROS 消息将保持不变。
++ * 否则，ROS 消息的所有权将交还给中间件。
++ * 如何处理归还的 ROS 消息由中间件决定。
++ * 归还后使用外借的 ROS 消息属于未定义行为。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   归还外借的 ROS 消息是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 线程安全
++ *   订阅者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地向同一订阅者并发归还外借的 ROS 消息。
++ *   但是，由于外借的 ROS 消息的所有权交还给中间件，且该转移未同步，
++ *   因此并发归还同一条外借的 ROS 消息是不安全的。
++ *
++ * \pre 给定的 `subscription` 必须是有效的订阅者，即由 rmw_create_subscription() 返回的订阅者。
++ * \pre 给定的 `loaned_message` 必须是一条外借的 ROS 消息，先前已使用 rmw_take_loaned_message()
++ *   或 rmw_take_loaned_message_with_info() 从 `subscription` 接收。
++ *
++ * \param[in] subscription ROS 消息被接收并外借的订阅者。
++ * \param[in] loaned_message 要归还给中间件的外借类型擦除 ROS 消息。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `subscription` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `loaned_message` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `subscription` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 实现不支持外借 ROS 消息时返回 `RMW_RET_UNSUPPORTED`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_return_loaned_message_from_subscription(
++  const rmw_subscription_t * subscription,
++  void * loaned_message);
++
++/// 创建一个可以向服务服务端发送请求并接收回复的服务客户端。
++/**
++ * 在以下情况下，此函数可能会失败并返回 `NULL`：
++ *   - `node` 为 `NULL`，或
++ *   - `node` 不属于此实现，即其实现标识符不匹配，或
++ *   - `type_support` 为 `NULL`，或
++ *   - `service_name` 为 `NULL`，或
++ *   - `service_name` 为空字符串，或
++ *   - （如果适用 ROS 命名空间约定）`service_name` 根据 rmw_validate_full_topic_name() 定义无效，或
++ *   - `qos_profile` 为 `NULL`，或
++ *   - `qos_profile` 包含无效或未知策略，或
++ *   - 服务客户端创建期间内存分配失败，或
++ *   - 发生未指明的错误。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \pre 给定的 `node` 必须是有效的节点，即由 rmw_create_node() 返回的节点。
++ * \pre 给定的 `type_support` 必须是有效的 `rosidl` 服务类型支持，
++ *   即由 ROSIDL_GET_SRV_TYPE_SUPPORT() 返回的类型支持。
++ *
++ * \param[in] node 用于注册此服务客户端的节点。
++ * \param[in] type_support 要使用的服务的类型支持。
++ * \param[in] service_name 要使用的服务名称，通常是完全限定服务名称，除非
++ *   `qos_profile` 配置为不使用 ROS 命名空间约定（即创建原生服务客户端）。
++ * \param[in] qos_policies 此服务客户端连接的 QoS 策略。
++ * \return rmw 服务客户端句柄，如果出错则返回 `NULL`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_client_t *
++rmw_create_client(
++  const rmw_node_t * node,
++  const rosidl_service_type_support_t * type_support,
++  const char * service_name,
++  const rmw_qos_profile_t * qos_policies);
++
++/// 销毁并注销其节点中的服务客户端。
++/**
++ * 此函数将回收所有关联资源，包括服务客户端本身。
++ * 使用已销毁的服务客户端属于未定义行为。
++ * 如果出现诸如 `RMW_RET_INVALID_ARGUMENT` 或 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`
++ * 之类的逻辑错误，此函数将提前返回，并保持给定的服务客户端不变。
++ * 否则，即使发生错误，它也会继续执行。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \pre 给定的 `node` 必须是注册该服务客户端时使用的节点。
++ * \pre 给定的 `client` 必须是有效的服务客户端，即由 rmw_create_service() 返回的客户端。
++ *
++ * \param[in] node 给定服务客户端注册时使用的节点。
++ * \param[in] client 要销毁的服务客户端。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `client` 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return `client` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_destroy_client(rmw_node_t * node, rmw_client_t * client);
++
++/// 发送 ROS 服务请求。
++/**
++ * 使用给定客户端向一个或多个具有匹配 QoS 策略的服务服务端发送 ROS 服务请求。
++ *
++ * \note 考虑到 ROS 图中同一服务可能有多个服务端，有多少服务服务端会收到并可能响应同一请求，
++ *   由实现定义。
++ *
++ * 成功时，此函数将返回一个序列号。
++ * 调用者应保存返回的序列号，以便将刚发送的 ROS 服务请求与未来使用 rmw_take_response() 接收的
++ * ROS 服务响应配对。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   发送 ROS 服务请求是同步还是异步、阻塞还是非阻塞操作由实现定义。
++ *   但是，异步实现不允许在此函数返回后访问给定的 ROS 服务请求。
++ *   请参阅实现文档以了解请求行为。
++ *
++ * \par 内存分配
++ *   是否在发送时分配内存由实现定义。
++ *   例如，序列化 ROS 服务请求的实现，在处理无界（动态大小）字段时可能需要进行额外的内存分配。
++ *
++ * \par 线程安全
++ *   服务客户端是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一服务客户端并发发送请求。
++ *   但是：
++ *   - 对给定 ROS 服务请求的访问是只读的，但未同步。
++ *     并发读取 `ros_request` 是安全的，但并发读写不安全。
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_send_request() 使用 `sequence_id` 期间，读取或写入 `sequence_id` 是不安全的。
++ *
++ * \pre 给定的 `client` 必须是有效的客户端，即由 rmw_create_client() 返回的客户端。
++ * \pre 给定的 `ros_request` 必须是有效的服务请求，其类型与创建时向 `client` 注册的服务类型支持一致。
++ *
++ * \param[in] client 用于发送请求的服务客户端。
++ * \param[in] ros_request 要发送的 ROS 服务请求。
++ * \param[out] sequence_id 刚发送的 `ros_request` 的序列号，
++ *   即其唯一标识号，成功时填充。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `client` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `ros_request` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `sequence_id` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `client` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_send_request(
++  const rmw_client_t * client,
++  const void * ros_request,
++  int64_t * sequence_id);
++
++/// 接收传入的 ROS 服务响应。
++/**
++ * 接收给定服务客户端已收到的 ROS 服务响应，并将其从内部队列中移除。
++ * 同时会检索响应头（即其元数据），其中至少包含写入者 guid 和序列号。
++ * 写入者 guid 和序列号允许调用者为每个远程服务服务端将 ROS 服务响应与之前使用 rmw_send_request()
++ * 发送的相应 ROS 服务请求配对。
++ *
++ * \note 考虑到 ROS 图中同一服务可能有多个服务端，给定请求可能获得多少响应由实现定义。
++ *
++ * 即使没有收到 ROS 服务请求，此函数也会成功，但 `taken` 将为 false。
++ *
++ * \remarks 同一条 ROS 服务响应不能被接收两次。
++ *   调用者无需处理重复项。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   接收 ROS 服务响应是同步操作。
++ *   它也是非阻塞的，在某种程度上它不会等待新的 ROS 服务响应到达，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在接收时分配内存由实现定义。
++ *   例如，将通过网络接收的 ROS 服务响应反序列化的实现，在处理无界（动态大小）字段时
++ *   可能需要进行额外的内存分配。
++ *
++ * \par 线程安全
++ *   服务客户端是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一服务客户端并发接收响应。
++ *   但是：
++ *   - 对给定 ROS 服务响应的访问未同步。
++ *     在 rmw_take_request() 使用 `ros_response` 期间，读取或写入 `ros_response` 是不安全的。
++ *   - 对给定 ROS 服务响应头的访问未同步。
++ *     在 rmw_take_response() 使用 `response_header` 期间，读取或写入 `response_header` 是不安全的。
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_take_response() 使用 `taken` 期间，读取或写入 `taken` 是不安全的。
++ *
++ * \pre 给定的 `client` 必须是有效的客户端，即由 rmw_create_client() 返回的客户端。
++ * \pre 给定的 `ros_response` 必须是有效的服务响应，其类型与创建时向 `client` 注册的服务类型支持一致。
++ * \post 给定的 `ros_response` 将保持为有效服务响应。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，它将保持不变；
++ *   如果因运行时错误而失败，它将处于未知但有效的状态。
++ *   如果此函数成功但 `taken` 为 false，它也将保持不变。
++ *
++ * \param[in] client 要从中接收响应的服务客户端。
++ * \param[out] request_header 要写入的服务响应头。
++ * \param[out] ros_response 要写入的类型擦除 ROS 服务响应。
++ * \param[out] taken 布尔标志，指示是否已接收 ROS 服务响应。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `client` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `response_header` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `ros_response` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `taken` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `client` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_response(
++  const rmw_client_t * client,
++  rmw_service_info_t * request_header,
++  void * ros_response,
++  bool * taken);
++
++/// 检索客户端请求发布者的实际 qos 设置。
++/**
++ * 查询底层中间件以确定客户端请求发布者的 qos 设置。
++ * 使用 RMW_*_SYSTEM_DEFAULT 时应用的实际配置只能在创建客户端之后确定，
++ * 并且取决于底层 rmw 实现。
++ * 如果正在使用的底层设置无法用 ROS 术语表示，则将其设置为 RMW_*_UNKNOWN。
++ *
++ * \note avoid_ros_namespace_conventions 字段的值不会通过此函数解析。
++ *   rcl 函数 `rcl_client_request_publisher_get_actual_qos()` 会解析它。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] client 要检查的客户端对象
++ * \param[out] qos 实际的 qos 设置
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 任一参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 客户端实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_client_request_publisher_get_actual_qos(
++  const rmw_client_t * client,
++  rmw_qos_profile_t * qos);
++
++/// 检索客户端响应订阅者的实际 qos 设置。
++/**
++ * 查询底层中间件以确定客户端响应订阅者的 qos 设置。
++ * 使用 RMW_*_SYSTEM_DEFAULT 时应用的实际配置只能在创建客户端之后确定，
++ * 并且取决于底层 rmw 实现。
++ * 如果正在使用的底层设置无法用 ROS 术语表示，则将其设置为 RMW_*_UNKNOWN。
++ *
++ * \note avoid_ros_namespace_conventions 字段的值不会通过此函数解析。
++ *   rcl 函数 `rcl_client_request_publisher_get_actual_qos()` 会解析它。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] client 要检查的客户端对象
++ * \param[out] qos 实际的 qos 设置
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 任一参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 客户端实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_client_response_subscription_get_actual_qos(
++  const rmw_client_t * client,
++  rmw_qos_profile_t * qos);
++
++/// 创建一个可以接收服务客户端请求并发送回复的服务服务端。
++/**
++ * 在以下情况下，此函数可能会失败并返回 `NULL`：
++ *   - `node` 为 `NULL`，或
++ *   - `node` 不属于此实现，即其实现标识符不匹配，或
++ *   - `type_support` 为 `NULL`，或
++ *   - `service_name` 为 `NULL`，或
++ *   - `service_name` 为空字符串，或
++ *   - （如果适用 ROS 命名空间约定）`service_name` 根据 rmw_validate_full_topic_name() 定义无效，或
++ *   - `qos_profile` 为 `NULL`，或
++ *   - `qos_profile` 包含无效或未知策略，或
++ *   - 服务服务端创建期间内存分配失败，或
++ *   - 发生未指明的错误。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \pre 给定的 `node` 必须是有效的节点，即由 rmw_create_node() 返回的节点。
++ * \pre 给定的 `type_support` 必须是有效的 `rosidl` 服务类型支持，
++ *   即由 ROSIDL_GET_SRV_TYPE_SUPPORT() 返回的类型支持。
++ *
++ * \param[in] node 用于注册此服务服务端的节点。
++ * \param[in] type_support 要提供服务的类型支持。
++ * \param[in] service_name 要提供的服务名称，通常是完全限定服务名称，除非
++ *   `qos_profile` 配置为不使用 ROS 命名空间约定（即创建原生服务服务端）。
++ * \param[in] qos_profile 此服务服务端连接的 QoS 策略。
++ * \return rmw 服务句柄，如果出错则返回 `NULL`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_service_t *
++rmw_create_service(
++  const rmw_node_t * node,
++  const rosidl_service_type_support_t * type_support,
++  const char * service_name,
++  const rmw_qos_profile_t * qos_profile);
++
++/// 销毁并注销其节点中的服务服务端。
++/**
++ * 此函数将回收所有关联资源，包括服务服务端本身。
++ * 使用已销毁的服务服务端属于未定义行为。
++ * 如果出现诸如 `RMW_RET_INVALID_ARGUMENT` 或 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`
++ * 之类的逻辑错误，此函数将提前返回，并保持给定的服务服务端不变。
++ * 否则，即使发生错误，它也会继续执行。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \pre 给定的 `node` 必须是注册该服务服务端时使用的节点。
++ * \pre 给定的 `service` 必须是有效的服务服务端，即由 rmw_create_service() 返回的服务端。
++ *
++ * \param[in] node 给定服务服务端注册时使用的节点。
++ * \param[in] service 要销毁的服务服务端。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `service` 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return `service` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_destroy_service(rmw_node_t * node, rmw_service_t * service);
++
++/// 接收传入的 ROS 服务请求。
++/**
++ * 接收给定服务服务端已收到的 ROS 服务请求，并将其从内部队列中移除。
++ * 同时会检索请求头（即其元数据），其中至少包含写入者 guid 和序列号。
++ * 写入者 guid 和序列号允许调用者为每个远程服务客户端将 ROS 服务请求与稍后
++ * 使用 rmw_send_response() 发送的相应 ROS 服务响应配对。
++ *
++ * 即使没有收到 ROS 服务请求，此函数也会成功，但 `taken` 将为 false。
++ *
++ * \remarks 同一条 ROS 服务请求不能被接收两次。
++ *   调用者无需处理重复项。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   接收 ROS 服务请求是同步操作。
++ *   它也是非阻塞的，在某种程度上它不会等待新的 ROS 服务请求到达，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 内存分配
++ *   是否在接收时分配内存由实现定义。
++ *   例如，将通过网络接收的 ROS 服务请求反序列化的实现，在处理无界（动态大小）字段时
++ *   可能需要进行额外的内存分配。
++ *
++ * \par 线程安全
++ *   服务服务端是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一服务服务端并发接收请求。
++ *   但是：
++ *   - 对给定 ROS 服务请求的访问未同步。
++ *     在 rmw_take_request() 使用 `ros_request` 期间，读取或写入 `ros_request` 是不安全的。
++ *   - 对给定 ROS 服务请求头的访问未同步。
++ *     在 rmw_take_request() 使用 `request_header` 期间，读取或写入 `request_header` 是不安全的。
++ *   - 对给定原始数据类型参数的访问未同步。
++ *     在 rmw_take_request() 使用 `taken` 期间，读取或写入 `taken` 是不安全的。
++ *
++ * \pre 给定的 `service` 必须是有效的服务，即由 rmw_create_service() 返回的服务。
++ * \pre 给定的 `ros_request` 必须是有效的服务请求，其类型与创建时向 `service` 注册的服务类型支持一致。
++ * \post 给定的 `ros_request` 将保持为有效服务请求。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，它将保持不变；
++ *   如果因运行时错误而失败，它将处于未知但有效的状态。
++ *   如果此函数成功但 `taken` 为 false，它也将保持不变。
++ *
++ * \param[in] service 要从中接收请求的服务服务端。
++ * \param[out] request_header 要写入的服务请求头。
++ * \param[out] ros_request 要写入的类型擦除 ROS 服务请求。
++ * \param[out] taken 布尔标志，指示是否已接收 ROS 服务请求。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `service` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `request_header` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `ros_request` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `taken` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `service` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_take_request(
++  const rmw_service_t * service,
++  rmw_service_info_t * request_header,
++  void * ros_request,
++  bool * taken);
++
++/// 发送 ROS 服务响应。
++/**
++ * 使用匹配 QoS 策略向服务客户端发送 ROS 服务响应，该客户端是先前接收的 ROS 服务请求 originally 发送方。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   发送 ROS 服务响应是同步还是异步、阻塞还是非阻塞操作由实现定义。
++ *   但是，异步实现不允许在此函数返回后访问给定的 ROS 服务请求。
++ *   请参阅实现文档以了解请求行为。
++ *
++ * \par 内存分配
++ *   是否在发送时分配内存由实现定义。
++ *   例如，序列化 ROS 服务响应的实现，在处理无界（动态大小）字段时可能需要进行额外的内存分配。
++ *
++ * \par 线程安全
++ *   服务服务端是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一服务服务端并发发送响应。
++ *   但是：
++ *   - 对给定 ROS 服务请求头的访问是只读的，但未同步。
++ *     并发读取 `request_header` 是安全的，但并发读写不安全。
++ *   - 对给定 ROS 服务响应的访问是只读的，但未同步。
++ *     并发读取 `ros_request` 是安全的，但并发读写不安全。
++ *
++ * \pre 给定的 `service` 必须是有效的服务服务端，即由 rmw_create_service() 返回的服务端。
++ * \pre 给定的 `request_header` 必须是先前与我们要回复的 ROS 服务请求一起接收的请求头。
++ * \pre 给定的 `ros_response` 必须是有效的服务响应，其类型与创建时向 `service` 注册的服务类型支持一致。
++ *
++ * \param[in] service 用于发送响应的服务服务端。
++ * \param[in] request_header 服务响应头，与相应 ROS 服务请求一起接收的那个。
++ * \param[in] ros_response 要发送的 ROS 服务响应。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return `service` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `request_header` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `ros_response` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `service` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 响应读取器尚未就绪时返回 `RMW_RET_TIMEOUT`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_send_response(
++  const rmw_service_t * service,
++  rmw_request_id_t * request_header,
++  void * ros_response);
++
++/// 检索服务请求订阅者的实际 qos 设置。
++/**
++ * 查询底层中间件以确定服务请求订阅者的 qos 设置。
++ * 使用 RMW_*_SYSTEM_DEFAULT 时应用的实际配置只能在创建服务之后确定，
++ * 并且取决于底层 rmw 实现。
++ * 如果正在使用的底层设置无法用 ROS 术语表示，则将其设置为 RMW_*_UNKNOWN。
++ *
++ * \note avoid_ros_namespace_conventions 字段的值不会通过此函数解析。
++ *   rcl 函数 `rcl_service_request_subscription_get_actual_qos()` 会解析它。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] service 要检查的服务对象
++ * \param[out] qos 实际的 qos 设置
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 任一参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 服务实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_service_request_subscription_get_actual_qos(
++  const rmw_service_t * service,
++  rmw_qos_profile_t * qos);
++
++/// 检索服务响应发布者的实际 qos 设置。
++/**
++ * 查询底层中间件以确定服务响应发布者的 qos 设置。
++ * 使用 RMW_*_SYSTEM_DEFAULT 时应用的实际配置只能在创建服务之后确定，
++ * 并且取决于底层 rmw 实现。
++ * 如果正在使用的底层设置无法用 ROS 术语表示，则将其设置为 RMW_*_UNKNOWN。
++ *
++ * \note avoid_ros_namespace_conventions 字段的值不会通过此函数解析。
++ *   rcl 函数 `rcl_service_request_subscription_get_actual_qos()` 会解析它。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \param[in] service 要检查的服务对象
++ * \param[out] qos 实际的 qos 设置
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 任一参数为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 服务实现标识符不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_service_response_publisher_get_actual_qos(
++  const rmw_service_t * service,
++  rmw_qos_profile_t * qos);
++
++// TODO(wjwwood): 在更新为使用分配器时，重构此 API 以返回返回码
++/// 创建一个守护条件并返回该守护条件的句柄。
++/**
++ * 在以下情况下，此函数可能会失败并返回 `NULL`：
++ *   - context 为 `NULL`
++ *   - context 无效
++ *   - 守护条件创建期间内存分配失败
++ *   - 发生未指明的错误
++ *
++ * context 必须为非 NULL 且有效，即已由 `rmw_init()` 初始化且未被 `rmw_shutdown()` 完成。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 否
++ * 使用原子操作       | 否 [1]
++ * 无锁               | 否 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * 此函数应由 rmw 实现定义。
++ *
++ * \param[in] context 该节点应关联的初始化上下文
++ * \return rmw 守护条件句柄，如果出错则返回 `NULL`
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_guard_condition_t *
++rmw_create_guard_condition(rmw_context_t * context);
++
++/// 完成给定的守护条件句柄，回收其资源并释放该句柄。
++/**
++ * \param[in] guard_condition 要销毁的守护条件句柄
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return guard_condition 为空时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 发生意外错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_destroy_guard_condition(rmw_guard_condition_t * guard_condition);
++
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_trigger_guard_condition(const rmw_guard_condition_t * guard_condition);
++
++/// 创建一个等待集，用于存储中间件可以等待的条件。
++/**
++ * 在以下情况下，此函数可能会失败并返回 `NULL`：
++ *   - context 为 `NULL`
++ *   - context 已全零初始化（由 rmw_get_zero_initialized_context() 提供）
++ *   - context 不属于此实现，即其实现标识符不匹配
++ *   - 等待集创建期间内存分配失败
++ *   - 发生未指明的错误
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \par 线程安全
++ *   上下文是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地在同一上下文中并发创建多个等待集。
++ *
++ * \pre 给定的 `context` 必须是有效的上下文，已由 rmw_init() 初始化。
++ *
++ * \param[in] context 要与等待集关联的上下文。
++ * \param[in] max_conditions
++ *   等待集可以附加和存储的最大条件数量。
++ *   可以设置为零 (0)，表示等待集支持无限制数量的条件。
++ * \return 一个 rmw 等待集，如果出错则返回 `NULL`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_wait_set_t *
++rmw_create_wait_set(rmw_context_t * context, size_t max_conditions);
++
++/// 销毁等待集。
++/**
++ * 此函数将回收所有关联资源，包括等待集。
++ * 销毁后使用等待集属于未定义行为。
++ * 如果出现诸如 `RMW_RET_INVALID_ARGUMENT` 或 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`
++ * 之类的逻辑错误，此函数将提前返回，并保持给定的等待集不变。
++ * 否则，即使发生错误，它也会继续执行。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \pre 给定的 `wait_set` 必须是有效的等待集，即由 rmw_create_wait_set() 返回的等待集。
++ *
++ * \param[in] wait_set 要完成的等待集。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `wait_set` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `wait_set` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_destroy_wait_set(rmw_wait_set_t * wait_set);
++
++/// 等待不同实体集合，并在其中一个就绪时返回。
++/**
++ * 此函数将中间件特定的条件添加到等待集中，并等待一个或多个条件就绪，或直到超时。
++ *
++ * \remark 经过的时间应使用单调时钟测量，但 rmw 实现可以使用不同的时钟。
++ *   因此，超时粒度受底层实现使用的时钟以及用于睡眠和/或等待的特定平台 API 的限制。
++ *
++ * \remark
++ *   此函数实际等待的时间可能高于或低于指定的超时时间。
++ *
++ * 数组包含与可等待实体关联的类型擦除、中间件特定的条件，此函数将它们转换并添加到等待集中。
++ * 等待前数组中的 `NULL` 项被视为无效。
++ * 等待结束后，每个数组中对应未触发条件的项将被设置为 `NULL`。
++ *
++ * \remark 数组的内存管理在此函数外部进行。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 可能 [1]
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] rmw 实现定义，请参阅实现文档</i>
++ *
++ * \par 线程安全
++ *   等待是可重入的过程，但：
++ *   - 在两个或多个线程中并发使用同一等待集进行等待是不安全的。
++ *   - 在两个或多个线程中使用不同等待集等待同一实体是不安全的。
++ *   - 对给定超时的访问是只读的，但未同步。
++ *     并发读取 `wait_timeout` 是安全的，但并发读写不安全。
++ *
++ * \pre 给定的 `wait_set` 必须是有效的等待集，即由 rmw_create_wait_set() 返回的等待集。
++ * \pre 所有给定的实体必须关联到节点，而这些节点又必须注册到创建给定 `wait_set` 时使用的同一上下文。
++ *
++ * \param[inout] subscriptions 要等待的订阅者数组。
++ *   如果没有要等待的订阅者，可以为 `NULL`。
++ * \param[inout] guard_conditions 要等待的守护条件数组。
++ *   如果没有要等待的守护条件，可以为 `NULL`。
++ * \param[inout] services 要等待的服务数组。
++ *   如果没有要等待的服务，可以为 `NULL`。
++ * \param[inout] clients 要等待的客户端数组。
++ *   如果没有要等待的客户端，可以为 `NULL`。
++ * \param[inout] events 要等待的事件数组。
++ *   如果没有要等待的事件，可以为 `NULL`。
++ * \param[in] wait_set 用于等待的等待集。
++ * \param[in] wait_timeout 如果为 `NULL`，则无限期阻塞，直到实体就绪。
++ *   如果为零，则不阻塞——仅检查立即可用的实体。
++ *   否则，表示等待实体就绪的最大时间。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return 等待超时时返回 `RMW_RET_TIMEOUT`，或
++ * \return `wait_set` 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return 数组项为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `wait_set` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_wait(
++  rmw_subscriptions_t * subscriptions,
++  rmw_guard_conditions_t * guard_conditions,
++  rmw_services_t * services,
++  rmw_clients_t * clients,
++  rmw_events_t * events,
++  rmw_wait_set_t * wait_set,
++  const rmw_time_t * wait_timeout);
++
++/// 返回 ROS 图中所有节点的名称和命名空间。
++/**
++ * 此函数将返回节点名称数组和节点命名空间数组，根据给定节点迄今发现的节点信息。
++ * 这两个数组表示每个发现节点的名称和命名空间配对。
++ * 两个数组长度相同，相同索引指向同一节点。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 否
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 线程安全
++ *   节点是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一节点并发查询 ROS 图。
++ *   但是，对字符串数组的访问未同步。
++ *   在 rmw_get_node_names() 使用 `node_names` 和 `node_namespaces` 期间，
++ *   读取或写入它们是不安全的。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，即由 rmw_create_node() 返回的句柄。
++ * \pre 给定的 `node_names` 必须是有效的字符串数组，已按 rcutils_get_zero_initialized_string_array() 的方式全零初始化。
++ * \pre 给定的 `node_namespaces` 必须是有效的字符串数组，已按 rcutils_get_zero_initialized_string_array() 的方式全零初始化。
++ * \post 给定的 `node_names` 和 `node_namespaces` 将保持为有效数组。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，它们将保持不变；
++ *   如果因运行时错误而失败，它们将处于未知但有效的状态。
++ *
++ * \param[in] node 要查询 ROS 图的节点。
++ * \param[out] node_names 发现的节点名称数组，成功时填充。
++ *   稍后由调用者使用 rcutils_string_array_fini() 完成该数组。
++ * \param[out] node_namespaces 发现的节点命名空间数组，成功时填充。
++ *   稍后由调用者使用 rcutils_string_array_fini() 完成该数组。
++ * \return 查询成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node_names` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node_names` 不是全零初始化数组时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node_namespaces` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node_namespaces` 不是全零初始化数组时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_get_node_names(
++  const rmw_node_t * node,
++  rcutils_string_array_t * node_names,
++  rcutils_string_array_t * node_namespaces);
++
++/// 返回 ROS 图中所有节点的名称、命名空间和隔离区名称。
++/**
++ * 此函数与 rmw_get_node_names() 类似，但还会提供隔离区名称。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 是
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 线程安全
++ *   节点是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一节点并发查询 ROS 图。
++ *   但是，对字符串数组的访问未同步。
++ *   在 rmw_get_node_names_with_enclaves() 使用 `node_names`、`node_namespaces` 和 `enclaves` 期间，
++ *   读取或写入它们是不安全的。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，即由 rmw_create_node() 返回的句柄。
++ * \pre 给定的 `node_names` 必须是有效的字符串数组，已按 rcutils_get_zero_initialized_string_array() 的方式全零初始化。
++ * \pre 给定的 `node_namespaces` 必须是有效的字符串数组，已按 rcutils_get_zero_initialized_string_array() 的方式全零初始化。
++ * \pre 给定的 `enclaves` 必须是全零初始化的字符串数组，已按 rcutils_get_zero_initialized_string_array() 的方式初始化。
++ * \post 给定的 `node_names`、`node_namespaces` 和 `enclaves` 将保持为有效数组。
++ *   如果此函数因逻辑错误（例如参数无效）而提前失败，它们将保持不变；
++ *   如果因运行时错误而失败，它们将处于未知但有效的状态。
++ *
++ * \param[in] node 要查询 ROS 图的节点。
++ * \param[out] node_names 发现的节点名称数组，成功时填充。
++ *   稍后由调用者使用 rcutils_string_array_fini() 完成该数组。
++ * \param[out] node_namespaces 发现的节点命名空间数组，成功时填充。
++ *   稍后由调用者使用 rcutils_string_array_fini() 完成该数组。
++ * \param[out] enclaves 发现的节点隔离区名称数组，成功时填充。
++ *   稍后由调用者使用 rcutils_string_array_fini() 完成该数组。
++ * \return 查询成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node_names` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node_names` 不是全零初始化数组时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node_namespaces` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node_namespaces` 不是全零初始化数组时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `enclaves` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `enclaves` 不是全零初始化数组时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 内存分配失败时返回 `RMW_RET_BAD_ALLOC`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_get_node_names_with_enclaves(
++  const rmw_node_t * node,
++  rcutils_string_array_t * node_names,
++  rcutils_string_array_t * node_namespaces,
++  rcutils_string_array_t * enclaves);
++
++/// 统计与主题名称匹配的已知发布者数量。
++/**
++ * 此函数返回给定节点迄今在 ROS 图中发现的、与给定主题匹配的发布者数量。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 线程安全
++ *   节点是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一节点并发查询 ROS 图。
++ *   但是，对原始数据类型参数的访问未同步。
++ *   在 rmw_count_publishers() 使用 `topic_name` 和 `count` 期间，
++ *   读取或写入它们是不安全的。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，即由 rmw_create_node() 返回的句柄。
++ *
++ * \param[in] node 用于查询 ROS 图的节点句柄。
++ * \param[in] topic_name 完全限定的 ROS 主题名称。
++ * \param[out] count 与给定主题名称匹配的发布者数量。
++ * \return 查询成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `topic_name` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `topic_name` 根据 rmw_validate_full_topic_name() 定义不是完全限定主题名称时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `count` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_count_publishers(
++  const rmw_node_t * node,
++  const char * topic_name,
++  size_t * count);
++
++/// 统计与主题名称匹配的已知订阅者数量。
++/**
++ * 此函数返回给定节点迄今在 ROS 图中发现的、与给定主题匹配的订阅者数量。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 线程安全
++ *   节点是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一节点并发查询 ROS 图。
++ *   但是，对原始数据类型参数的访问未同步。
++ *   在 rmw_count_subscribers() 使用 `topic_name` 和 `count` 期间，
++ *   读取或写入它们是不安全的。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，即由 rmw_create_node() 返回的句柄。
++ *
++ * \param[in] node 用于查询 ROS 图的节点句柄。
++ * \param[in] topic_name 完全限定的 ROS 主题名称。
++ * \param[out] count 与给定主题名称匹配的订阅者数量。
++ * \return 查询成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `topic_name` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `topic_name` 根据 rmw_validate_full_topic_name() 定义不是完全限定主题名称时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `count` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_count_subscribers(
++  const rmw_node_t * node,
++  const char * topic_name,
++  size_t * count);
++
++/// 统计与给定服务名称匹配的已知客户端数量。
++/**
++ * 此函数返回给定节点迄今在 ROS 图中发现的、与给定服务匹配的客户端数量。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 线程安全
++ *   节点是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一节点并发查询 ROS 图。
++ *   但是，对原始数据类型参数的访问未同步。
++ *   在 rmw_count_clients() 使用 `service_name` 和 `count` 期间，
++ *   读取或写入它们是不安全的。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，即由 rmw_create_node() 返回的句柄。
++ *
++ * \param[in] node 用于查询 ROS 图的节点句柄。
++ * \param[in] service_name 完全限定的 ROS 主题名称。
++ * \param[out] count 与给定主题名称匹配的客户端数量。
++ * \return 查询成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `service_name` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `service_name` 根据 rmw_validate_full_topic_name() 定义不是完全限定主题名称时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `count` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_count_clients(
++  const rmw_node_t * node,
++  const char * service_name,
++  size_t * count);
++
++/// 统计与给定服务名称匹配的已知服务端数量。
++/**
++ * 此函数返回给定节点迄今在 ROS 图中发现的、与给定服务匹配的服务端数量。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \par 线程安全
++ *   节点是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地使用同一节点并发查询 ROS 图。
++ *   但是，对原始数据类型参数的访问未同步。
++ *   在 rmw_count_services() 使用 `service_name` 和 `count` 期间，
++ *   读取或写入它们是不安全的。
++ *
++ * \pre 给定的 `node` 必须是有效的节点句柄，即由 rmw_create_node() 返回的句柄。
++ *
++ * \param[in] node 用于查询 ROS 图的节点句柄。
++ * \param[in] service_name 完全限定的 ROS 主题名称。
++ * \param[out] count 与给定主题名称匹配的服务端数量。
++ * \return 查询成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `service_name` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `service_name` 根据 rmw_validate_full_topic_name() 定义不是完全限定服务名称时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `count` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_count_services(
++  const rmw_node_t * node,
++  const char * service_name,
++  size_t * count);
++
++/// 获取发布者的全局唯一标识符（GID）。
++/**
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 线程安全
++ *   发布者是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一发布者并发获取唯一标识符。
++ *   但是，对 GID 的访问未同步。
++ *   在 rmw_get_gid_for_publisher() 使用 `gid` 期间，读取或写入 `gid` 是不安全的。
++ *
++ * \pre 给定的 `publisher` 必须是有效的发布者，即由 rmw_create_publisher() 返回的发布者。
++ *
++ * 该标识符预计在 ROS 域内全局唯一。
++ * 无论在本地（实体创建位置）还是远程主机或进程上报告，该标识符都应相同。
++ *
++ * \param[in] publisher 要从中获取 GID 的发布者。
++ * \param[out] gid 发布者的唯一标识符，成功时填充，失败时保持不变。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `publisher` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `gid` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `publisher` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_get_gid_for_publisher(const rmw_publisher_t * publisher, rmw_gid_t * gid);
++
++/// 获取服务客户端的全局唯一标识符（GID）。
++/**
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 线程安全
++ *   服务客户端是线程安全对象，除最终化外，对其执行的所有操作都是线程安全的。
++ *   因此，可以安全地从同一客户端并发获取唯一标识符。
++ *   但是，对 GID 的访问未同步。
++ *   在 rmw_get_gid_for_client() 使用 `gid` 期间，读取或写入 `gid` 是不安全的。
++ *
++ * \pre 给定的 `client` 必须是有效的服务客户端，即由 rmw_create_client() 返回的客户端。
++ *
++ * 该标识符预计在 ROS 域内全局唯一。
++ * 无论在本地（实体创建位置）还是远程主机或进程上报告，该标识符都应相同。
++ * \param[in] client 要从中获取 GID 的服务客户端。
++ * \param[out] gid 服务客户端的唯一标识符，成功时填充，失败时保持不变。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `publisher` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `gid` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `client` 实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_get_gid_for_client(const rmw_client_t * client, rmw_gid_t * gid);
++
++/// 检查两个全局唯一标识符（GID）是否相等。
++/**
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 线程安全
++ *   唯一标识符比较是可重入函数，但：
++ *   - 对两个 GID 的访问是只读的，但未同步。
++ *     并发读取 `gid1` 和 `gid2` 是安全的，但并发读写不安全。
++ *   - 对原始数据类型参数的访问未同步。
++ *     在 rmw_compare_gids_equal() 使用 `result` 期间，读取或写入 `result` 是不安全的。
++ *
++ * \param[in] gid1 要比较的第一个唯一标识符。
++ * \param[in] gid2 要比较的第二个唯一标识符。
++ * \param[out] result 如果两个 GID 相等则为 true，否则为 false。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `gid1` 或 `gid2` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `gid1` 或 `gid2` 的实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_compare_gids_equal(const rmw_gid_t * gid1, const rmw_gid_t * gid2, bool * result);
++
++/// 检查给定服务客户端是否有可用的服务服务端。
++/**
++ * 此函数检查 ROS 图中是否存在一个或多个与给定服务客户端匹配的服务服务端，
++ * 根据给定本地节点迄今发现的信息。
++ *
++ * <hr>
++ * 属性               | 遵守情况
++ * ------------------ | -------------
++ * 分配内存           | 否
++ * 线程安全           | 是
++ * 使用原子操作       | 可能 [1]
++ * 无锁               | 可能 [1]
++ *
++ * <i>[1] 实现定义，请参阅实现文档。</i>
++ *
++ * \par 运行时行为
++ *   查询 ROS 图是同步操作。
++ *   它也是非阻塞的，但不保证无锁。
++ *   一般而言，实现可以使用锁来同步对内部资源的访问，但不允许等待没有保证时间上限的事件
++ *   （因操作系统调度导致的饥饿效应除外）。
++ *
++ * \pre 给定的 `node` 必须是有效的节点，即由 rmw_create_node() 返回的节点。
++ * \pre 给定的 `client` 必须是有效的客户端，即由 rmw_create_client() 返回的客户端。
++ * \pre 给定的 `node` 必须是注册 `client` 时使用的节点。
++ *
++ * \param[in] node 用于查询 ROS 图的节点。
++ * \param[in] client 用于查找匹配服务服务端的服务客户端。
++ * \param[out] is_available 如果有可用的服务服务端则为 True，否则为 false。
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `node` 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `client` 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `is_available` 为 `NULL` 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return `node` 或 `client` 的实现标识符与此实现不匹配时返回 `RMW_RET_INCORRECT_RMW_IMPLEMENTATION`，或
++ * \return 发生未指明错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_service_server_is_available(
++  const rmw_node_t * node,
++  const rmw_client_t * client,
++  bool * is_available);
++
++/// 设置当前日志严重级别
++/**
++ * \param[in] severity 要设置的日志严重级别
++ * \return 成功时返回 RMW_RET_OK，否则返回适当的错误代码
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_set_log_severity(rmw_log_severity_t severity);
++
++/// 设置订阅者的新消息回调函数。
++/**
++ * 此 API 设置当订阅者被通知有新消息到达时要调用的回调函数。
++ *
++ * 每次订阅者收到新消息时都会调用此回调。
++ * 如果在注册回调之前有消息到达，传递给回调的 number_of_events 参数可能大于 1。
++ *
++ * 回调可能由 rmw 实现创建的线程调用，而不是用户拥有的线程，
++ * 即不同于调用 rmw_wait() 或 rmw_publish() 等 rmw 函数的用户线程。
++ *
++ * 此函数是线程安全的。
++ * rmw 实现必须满足这一要求，因为回调可能由任何中间件线程调用，
++ * 而此函数可能由用户在任意时间调用。
++ *
++ * \param[in] subscription 要设置回调的订阅者
++ * \param[in] callback 有新消息到达时要调用的回调，可以为 NULL 以清除已注册的回调
++ * \param[in] user_data 稍后调用回调时传入的数据，可以为 NULL
++ * \return 成功时返回 `RMW_RET_OK`，或
++ * \return `subscription` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return DDS 实现未实现该 API 时返回 `RMW_RET_UNSUPPORTED`
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_subscription_set_on_new_message_callback(
++  rmw_subscription_t * subscription,
++  rmw_event_callback_t callback,
++  const void * user_data);
++
++/// 设置服务端的新请求回调函数。
++/**
++ * 此 API 设置当服务被通知有新请求到达时要调用的回调函数。
++ *
++ * 每次服务收到新请求时都会调用此回调。
++ * 如果在注册回调之前有请求到达，传递给回调的 number_of_events 参数可能大于 1。
++ *
++ * 回调可能由 rmw 实现创建的线程调用，而不是用户拥有的线程，
++ * 即不同于调用 rmw_wait() 或 rmw_send_request() 等 rmw 函数的用户线程。
++ *
++ * 此函数是线程安全的。
++ * rmw 实现必须满足这一要求，因为回调可能由任何中间件线程调用，
++ * 而此函数可能由用户在任意时间调用。
++ *
++ * \param[in] service 要设置回调的服务
++ * \param[in] callback 有新请求到达时要调用的回调，可以为 NULL 以清除已注册的回调
++ * \param[in] user_data 稍后调用回调时传入的数据，可以为 NULL
++ * \return 成功将回调设置到监听器时返回 `RMW_RET_OK`，或
++ * \return `service` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return DDS 实现未实现该 API 时返回 `RMW_RET_UNSUPPORTED`
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_service_set_on_new_request_callback(
++  rmw_service_t * service,
++  rmw_event_callback_t callback,
++  const void * user_data);
++
++/// 设置客户端的新响应回调函数。
++/**
++ * 此 API 设置当客户端被通知有新响应到达时要调用的回调函数。
++ *
++ * 每次客户端收到新响应时都会调用此回调。
++ * 如果在注册回调之前有响应到达，传递给回调的 number_of_events 参数可能大于 1。
++ *
++ * 回调可能由 rmw 实现创建的线程调用，而不是用户拥有的线程，
++ * 即不同于调用 rmw_wait() 或 rmw_take_response() 等 rmw 函数的用户线程。
++ *
++ * 此函数是线程安全的。
++ * rmw 实现必须满足这一要求，因为回调可能由任何中间件线程调用，
++ * 而此函数可能由用户在任意时间调用。
++ *
++ * \param[in] client 要设置回调的客户端
++ * \param[in] callback 有新响应到达时要调用的回调，可以为 NULL 以清除已注册的回调
++ * \param[in] user_data 稍后调用回调时传入的数据，可以为 NULL
++ * \return 成功将回调设置到监听器时返回 `RMW_RET_OK`，或
++ * \return `client` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return DDS 实现未实现该 API 时返回 `RMW_RET_UNSUPPORTED`
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_client_set_on_new_response_callback(
++  rmw_client_t * client,
++  rmw_event_callback_t callback,
++  const void * user_data);
++
++/// 设置事件的回调函数。
++/**
++ * 此 API 设置当事件被通知有新实例发生时要调用的回调函数。
++ *
++ * 例如，当检测到不兼容的 QoS、错过截止时间或任何其他 QoS 事件时，可能会调用此回调。
++ *
++ * 每次此 rmw_event_t 实例发生新事件时都会调用此回调。
++ * 如果在注册回调之前有事件发生，传递给回调的 number_of_events 参数可能大于 1。
++ *
++ * 回调可能由 rmw 实现创建的线程调用，而不是用户拥有的线程，
++ * 即不同于调用 rmw_wait() 或 rmw_publish() 等 rmw 函数的用户线程。
++ *
++ * 此函数是线程安全的。
++ * rmw 实现必须满足这一要求，因为回调可能由任何中间件线程调用，
++ * 而此函数可能由用户在任意时间调用。
++ *
++ * \param[in] event 要设置回调的事件
++ * \param[in] callback 有新事件发生时调用的回调，可以为 NULL 以清除已注册的回调
++ * \param[in] user_data 稍后调用回调时传入的数据，可以为 NULL
++ * \return 成功将回调设置到监听器时返回 `RMW_RET_OK`，或
++ * \return `event` 为 NULL 时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \return DDS 实现未实现该 API 时返回 `RMW_RET_UNSUPPORTED`
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_event_set_callback(
++  rmw_event_t * event,
++  rmw_event_callback_t callback,
++  const void * user_data);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__RMW_H_
+diff --git a/rmw/include/rmw/sanity_checks_zh.h b/rmw/include/rmw/sanity_checks_zh.h
+new file mode 100644
+index 0000000..fda2bb4
+--- /dev/null
++++ b/rmw/include/rmw/sanity_checks_zh.h
+@@ -0,0 +1,45 @@
++// Copyright 2016-2017 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__SANITY_CHECKS_H_
++#define RMW__SANITY_CHECKS_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rcutils/types.h"
++
++#include "rmw/macros.h"
++#include "rmw/types.h"
++#include "rmw/visibility_control.h"
++
++/// 检查 string_array 结构体是否已零初始化
++/**
++ * 如果数组未零初始化，则设置错误消息并返回错误代码
++ *
++ * \param[in] array 要检查的字符串数组
++ * \return 如果数组已零初始化则返回 RMW_RET_OK，否则返回 RMW_RET_ERROR
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_check_zero_rmw_string_array(rcutils_string_array_t * array);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__SANITY_CHECKS_H_
+diff --git a/rmw/include/rmw/subscription_options_zh.h b/rmw/include/rmw/subscription_options_zh.h
+new file mode 100644
+index 0000000..cf146d0
+--- /dev/null
++++ b/rmw/include/rmw/subscription_options_zh.h
+@@ -0,0 +1,37 @@
++// Copyright 2019 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__SUBSCRIPTION_OPTIONS_H_
++#define RMW__SUBSCRIPTION_OPTIONS_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/types.h"
++
++// 目前，rmw_subscription_options_t 类型仍然在 "rmw/types.h" 中定义。
++
++/// 返回用默认值初始化的 rmw_subscription_options_t。
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_subscription_options_t
++rmw_get_default_subscription_options(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__SUBSCRIPTION_OPTIONS_H_
+diff --git a/rmw/include/rmw/types_zh.h b/rmw/include/rmw/types_zh.h
+new file mode 100644
+index 0000000..e22292a
+--- /dev/null
++++ b/rmw/include/rmw/types_zh.h
+@@ -0,0 +1,683 @@
++// Copyright 2014-2017 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__TYPES_H_
++#define RMW__TYPES_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++// 将 rcutils 特定的日志级别映射为 rmw 特定类型
++#include <rcutils/logging.h>
++
++#include "rmw/events_statuses/events_statuses.h"
++#include "rmw/init.h"
++#include "rmw/init_options.h"
++#include "rmw/ret_types.h"
++#include "rmw/security_options.h"
++#include "rmw/serialized_message.h"
++#include "rmw/subscription_content_filter_options.h"
++#include "rmw/time.h"
++#include "rmw/visibility_control.h"
++
++// 我们将 GID 定义为 16 字节（128 位）。这应足以保证系统中所有实体的唯一性。
++// 具体由各个 RMW 实现来填充，可以来自底层中间件，也可以来自 RMW 层本身。
++#define RMW_GID_STORAGE_SIZE 16u
++
++/// 封装 rmw 节点的结构体
++typedef struct RMW_PUBLIC_TYPE rmw_node_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// 指向该节点数据的类型擦除指针
++  void * data;
++
++  /// 用于标识的该 rmw 节点的简洁名称
++  const char * name;
++
++  /// 该 rmw 节点的命名空间
++  const char * namespace_;
++
++  /// 关于节点初始化相关信息的上下文信息
++  rmw_context_t * context;
++} rmw_node_t;
++
++/// 端点枚举类型
++typedef enum RMW_PUBLIC_TYPE rmw_endpoint_type_e
++{
++  /// 端点类型尚未设置
++  RMW_ENDPOINT_INVALID = 0,
++
++  /// 创建并向 ROS 话题发布消息
++  RMW_ENDPOINT_PUBLISHER,
++
++  /// 监听并接收来自话题的消息
++  RMW_ENDPOINT_SUBSCRIPTION
++} rmw_endpoint_type_t;
++
++/// 唯一网络流端点需求枚举
++typedef enum RMW_PUBLIC_TYPE rmw_unique_network_flow_endpoints_requirement_e
++{
++  /// 不需要唯一网络流端点
++  RMW_UNIQUE_NETWORK_FLOW_ENDPOINTS_NOT_REQUIRED = 0,
++
++  /// 严格要求唯一网络流端点。
++  /// 如果 RMW 实现未提供，则报错。
++  RMW_UNIQUE_NETWORK_FLOW_ENDPOINTS_STRICTLY_REQUIRED,
++
++  /// 可选地要求唯一网络流端点。
++  /// 如果 RMW 实现未提供，也不会报错。
++  RMW_UNIQUE_NETWORK_FLOW_ENDPOINTS_OPTIONALLY_REQUIRED,
++
++  /// 唯一网络流端点需求由系统决定。
++  RMW_UNIQUE_NETWORK_FLOW_ENDPOINTS_SYSTEM_DEFAULT
++} rmw_unique_network_flow_endpoints_requirement_t;
++
++/// 可用于配置 rmw 中发布器创建的选项。
++typedef struct RMW_PUBLIC_TYPE rmw_publisher_options_s
++{
++  /// 用于在发布器创建期间传递 rmw 实现特定资源。
++  /**
++   * 该字段是类型擦除的（而不是前向声明），因为它通常是对语言特定对象的非拥有引用，例如
++   * 在 C++ 中，它可能是一个只有 rmw 实现才能使用的多态类。
++   *
++   * 此处指向的资源需要比该选项结构体以及使用它创建的所有 rmw_publisher 对象更长寿，
++   * 因为它们会复制该结构体并可能在其整个生命周期内使用此负载。
++   */
++  void * rmw_specific_publisher_payload;
++
++  /// 要求中间件生成唯一网络流端点。
++  /**
++   * 需要唯一网络流端点来区分网络为通信节点之间的发布器和订阅器流所提供的 QoS。
++   * 默认值为 RMW_UNIQUE_NETWORK_FLOW_ENDPOINTS_NOT_REQUIRED。
++   */
++  rmw_unique_network_flow_endpoints_requirement_t require_unique_network_flow_endpoints;
++} rmw_publisher_options_t;
++
++/// 封装 rmw 发布器的结构体
++typedef struct RMW_PUBLIC_TYPE rmw_publisher_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// 指向该发布器数据的类型擦除指针
++  void * data;
++
++  /// 该发布器发布到的 ROS 话题名称
++  const char * topic_name;
++
++  /// 发布器选项。
++  /**
++   * 传递给 rmw_create_publisher() 的选项结构体应由 rmw 实现赋值给该字段。
++   * 创建后不应修改这些字段，但选项结构体的内容可能是 const 也可能不是 const，
++   * 即浅层 const。
++   * 该字段未标记为 const，以避免在设置期间进行任何 const 转换。
++   */
++  rmw_publisher_options_t options;
++
++  /// 指示该发布器是否支持借用消息
++  bool can_loan_messages;
++} rmw_publisher_t;
++
++/// 可用于配置 rmw 中订阅器创建的选项。
++typedef struct RMW_PUBLIC_TYPE rmw_subscription_options_s
++{
++  /// 用于在订阅器创建期间传递 rmw 实现特定资源。
++  /**
++   * 该字段在 rmw_publisher_options_t 中的所有细节和限制同样适用于该结构体。
++   *
++   * \sa rmw_publisher_options_t.rmw_specific_publisher_payload
++   */
++  void * rmw_specific_subscription_payload;
++
++  /// 如果为 true，则中间件不应传递来自本地发布器的数据。
++  /**
++   * 此设置最常用于只希望从远程节点接收数据的情况，特别是为了避免在同时进行
++   * 进程内和进程间通信时发生“双重传递”。
++   *
++   * 这里的“本地”定义为处于同一上下文中。
++   */
++  bool ignore_local_publications;
++
++  /// 要求中间件生成唯一网络流端点。
++  /**
++   * 需要唯一网络流端点来区分网络为通信节点之间的发布器和订阅器流所提供的 QoS。
++   * 默认值为 RMW_UNIQUE_NETWORK_FLOW_ENDPOINTS_NOT_REQUIRED。
++   */
++  rmw_unique_network_flow_endpoints_requirement_t require_unique_network_flow_endpoints;
++
++  /// 用于在订阅器创建期间创建内容过滤选项。
++  rmw_subscription_content_filter_options_t * content_filter_options;
++} rmw_subscription_options_t;
++
++typedef struct RMW_PUBLIC_TYPE rmw_subscription_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// 指向该订阅器的类型擦除指针
++  void * data;
++
++  /// 该订阅器监听 ros 话题的名称
++  const char * topic_name;
++
++  /// 订阅器选项。
++  /**
++   * 传递给 rmw_create_subscription() 的选项结构体应由 rmw 实现赋值给该字段。
++   * 创建后不应修改这些字段，但选项结构体的内容可能是 const 也可能不是 const，
++   * 即浅层 const。
++   * 该字段未标记为 const，以避免在设置期间进行任何 const 转换。
++   */
++  rmw_subscription_options_t options;
++
++  /// 指示该订阅器是否可以借用消息
++  bool can_loan_messages;
++
++  /// 指示该订阅器的内容过滤话题是否已启用
++  bool is_cft_enabled;
++} rmw_subscription_t;
++
++/// rmw 服务的句柄
++typedef struct RMW_PUBLIC_TYPE rmw_service_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// 指向该服务的类型擦除指针
++  void * data;
++
++  /// 该服务在 ros 图中暴露的名称
++  const char * service_name;
++} rmw_service_t;
++
++/// rmw 服务客户端的句柄
++typedef struct RMW_PUBLIC_TYPE rmw_client_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// 指向该服务客户端的类型擦除指针
++  void * data;
++
++  /// 该服务在 ros 图中暴露的名称
++  const char * service_name;
++} rmw_client_t;
++
++/// rmw 守护条件的句柄
++typedef struct RMW_PUBLIC_TYPE rmw_guard_condition_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// 指向该守护条件的类型擦除指针
++  void * data;
++
++  /// 与该守护条件关联的 rmw 上下文
++  rmw_context_t * context;
++} rmw_guard_condition_t;
++
++/// 为 rmw 发布器分配内存
++typedef struct RMW_PUBLIC_TYPE rmw_publisher_allocation_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// 指向该分配的类型擦除指针
++  void * data;
++} rmw_publisher_allocation_t;
++
++/// 为 rmw 订阅器分配内存
++typedef struct RMW_PUBLIC_TYPE rmw_subscription_allocation_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// 指向该分配的类型擦除指针
++  void * data;
++} rmw_subscription_allocation_t;
++
++/// 订阅器句柄数组。
++/**
++ * 一个 void * 指针数组，表示类型擦除的特定中间件订阅器。
++ * 非空条目数可能小于数组的分配大小。
++ * 表示的订阅器数量可能小于数组的分配大小。
++ * 该结构体的创建者负责分配和释放该数组。
++ */
++typedef struct RMW_PUBLIC_TYPE rmw_subscriptions_s
++{
++  /// 数组所表示的订阅器数量。
++  size_t subscriber_count;
++  /// 指向订阅器 void * 指针数组的指针。
++  void ** subscribers;
++} rmw_subscriptions_t;
++
++/// 服务句柄数组。
++/**
++ * 一个 void * 指针数组，表示类型擦除的特定中间件服务。
++ * 非空条目数可能小于数组的分配大小。
++ * 表示的服务数量可能小于数组的分配大小。
++ * 该结构体的创建者负责分配和释放该数组。
++ */
++typedef struct RMW_PUBLIC_TYPE rmw_services_s
++{
++  /// 数组所表示的服务数量。
++  size_t service_count;
++  /// 指向服务 void * 指针数组的指针。
++  void ** services;
++} rmw_services_t;
++
++/// 客户端句柄数组。
++/**
++ * 一个 void * 指针数组，表示类型擦除的特定中间件客户端。
++ * 非空条目数可能小于数组的分配大小。
++ * 表示的客户端数量可能小于数组的分配大小。
++ * 该结构体的创建者负责分配和释放该数组。
++ */
++typedef struct RMW_PUBLIC_TYPE rmw_clients_s
++{
++  /// 数组所表示的客户端数量。
++  size_t client_count;
++  /// 指向客户端 void * 指针数组的指针。
++  void ** clients;
++} rmw_clients_t;
++
++typedef struct RMW_PUBLIC_TYPE rmw_events_s
++{
++  /// 数组所表示的事件数量。
++  size_t event_count;
++  /// 指向事件 void * 指针数组的指针。
++  void ** events;
++} rmw_events_t;
++
++/// 守护条件句柄数组。
++/**
++ * 一个 void * 指针数组，表示类型擦除的特定中间件守护条件。
++ * 非空条目数可能小于数组的分配大小。
++ * 表示的守护条件数量可能小于数组的分配大小。
++ * 该结构体的创建者负责分配和释放该数组。
++ */
++typedef struct RMW_PUBLIC_TYPE rmw_guard_conditions_s
++{
++  /// 数组所表示的守护条件数量。
++  size_t guard_condition_count;
++  /// 指向守护条件 void * 指针数组的指针。
++  void ** guard_conditions;
++} rmw_guard_conditions_t;
++
++/// 用于等待的守护条件容器
++typedef struct RMW_PUBLIC_TYPE rmw_wait_set_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// 要等待的守护条件
++  rmw_guard_conditions_t * guard_conditions;
++
++  /// 指向该等待集数据的类型擦除指针
++  void * data;
++} rmw_wait_set_t;
++
++/// rmw 服务请求标识符
++typedef struct RMW_PUBLIC_TYPE rmw_request_id_s
++{
++  /// 与此请求关联的写入者的 guid
++  uint8_t writer_guid[RMW_GID_STORAGE_SIZE];
++
++  /// 该服务的序列号
++  int64_t sequence_number;
++} rmw_request_id_t;
++
++/// 与服务相关 take 操作的元数据。
++typedef struct RMW_PUBLIC_TYPE rmw_service_info_s
++{
++  rmw_time_point_value_t source_timestamp;
++  rmw_time_point_value_t received_timestamp;
++  rmw_request_id_t request_id;
++} rmw_service_info_t;
++
++typedef enum RMW_PUBLIC_TYPE rmw_qos_reliability_policy_e
++{
++  /// 实现特定的默认值
++  RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT,
++
++  /// 保证样本被送达，可能会多次重试。
++  RMW_QOS_POLICY_RELIABILITY_RELIABLE,
++
++  /// 尝试送达样本，但如果网络不够健壮，部分样本可能会丢失
++  RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
++
++  /// 可靠性策略尚未设置
++  RMW_QOS_POLICY_RELIABILITY_UNKNOWN,
++
++  /// 将匹配大多数端点，并在可能的情况下使用可靠策略
++  /**
++   * 策略将在创建订阅器或发布器时选择。
++   * 如果与所有已发现的端点匹配，则选择可靠策略，否则选择尽力而为策略。
++   *
++   * `rmw_subscription_get_actual_qos` 或 `rmw_publisher_get_actual_qos` 等函数报告的
++   * QoS 策略可能是 best available、reliable 或 best effort。
++   *
++   * 服务和客户端不受支持，默认使用 `rmw_qos_profile_services_default` 中的可靠性值。
++   *
++   * 中间件不期望在创建订阅器或发布器后更新策略，即使所选策略与新发现的端点不兼容。
++   * 因此，应谨慎使用此策略，因为与发现过程竞争可能导致非确定性行为。
++   */
++  RMW_QOS_POLICY_RELIABILITY_BEST_AVAILABLE
++} rmw_qos_reliability_policy_t;
++
++/// 描述样本如何保存的 QoS 历史枚举
++typedef enum RMW_PUBLIC_TYPE rmw_qos_history_policy_e
++{
++  /// 历史策略的实现默认值
++  RMW_QOS_POLICY_HISTORY_SYSTEM_DEFAULT,
++
++  /// 最多只保存一定数量的样本，超过最大值后丢弃最旧的样本
++  RMW_QOS_POLICY_HISTORY_KEEP_LAST,
++
++  /// 保存所有样本，受资源限制约束
++  RMW_QOS_POLICY_HISTORY_KEEP_ALL,
++
++  /// 历史策略尚未设置
++  RMW_QOS_POLICY_HISTORY_UNKNOWN
++} rmw_qos_history_policy_t;
++
++/// 描述样本如何持久化的 QoS 持久性枚举
++typedef enum RMW_PUBLIC_TYPE rmw_qos_durability_policy_e
++{
++  /// 实现特定的默认值
++  RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT,
++
++  /// rmw 发布器负责为“后加入”的订阅者持久化样本
++  RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL,
++
++  /// 样本不持久化
++  RMW_QOS_POLICY_DURABILITY_VOLATILE,
++
++  /// 持久性策略尚未设置
++  RMW_QOS_POLICY_DURABILITY_UNKNOWN,
++
++  /// 将匹配大多数端点，并在可能的情况下使用本地暂存（transient local）策略
++  /**
++   * 策略将在创建订阅器或发布器时选择。
++   * 如果与所有已发现的端点匹配，则选择本地暂存策略，否则选择易失策略。
++   *
++   * 如果为订阅器选择了易失策略，将不会收到由本地暂存发布器在创建订阅器之前发送的消息。
++   *
++   * `rmw_subscription_get_actual_qos` 或 `rmw_publisher_get_actual_qos` 等函数报告的
++   * QoS 策略可能是 best available、transient local 或 volatile。
++   *
++   * 服务和客户端不受支持，默认使用 `rmw_qos_profile_services_default` 中的持久性值。
++   *
++   * 中间件不期望在创建订阅器或发布器后更新策略，即使所选策略与新发现的端点不兼容。
++   * 因此，应谨慎使用此策略，因为与发现过程竞争可能导致非确定性行为。
++   */
++  RMW_QOS_POLICY_DURABILITY_BEST_AVAILABLE
++} rmw_qos_durability_policy_t;
++
++#define RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_NODE_DEPRECATED_MSG \
++  "RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_NODE is deprecated. " \
++  "Use RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC if manually asserted liveliness is needed."
++
++#ifndef _WIN32
++# define RMW_DECLARE_DEPRECATED(name, msg) name __attribute__((deprecated(msg)))
++#else
++# define RMW_DECLARE_DEPRECATED(name, msg) name __pragma(deprecated(name))
++#endif
++
++/// 描述发布器报告其活跃状态的 QoS 活跃度枚举。
++/// 对于订阅器而言，这些是其对话题发布器的要求。
++// 抑制语法错误，因为 cppcheck 似乎无法处理枚举器属性。
++// cppcheck-suppress syntaxError
++typedef enum RMW_PUBLIC_TYPE rmw_qos_liveliness_policy_e
++{
++  /// 实现特定的默认值
++  RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT = 0,
++
++  /// 确立话题处于活跃状态的信号来自 ROS rmw 层。
++  RMW_QOS_POLICY_LIVELINESS_AUTOMATIC = 1,
++
++  /// 此情况下需要显式断言节点活跃度。
++  /// 此选项已弃用，如果您的应用需要手动断言活跃度，请使用 RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC。
++  RMW_DECLARE_DEPRECATED(
++    RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_NODE,
++    RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_NODE_DEPRECATED_MSG) = 2,
++
++  /// 确立话题处于活跃状态的信号位于话题级别。只有在该话题上发布消息
++  /// 或来自应用显式断言该话题活跃度的信号才会将该话题标记为活跃。
++  // 为保持向后兼容而使用 `3`。
++  RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC = 3,
++
++  /// 活跃度策略尚未设置
++  RMW_QOS_POLICY_LIVELINESS_UNKNOWN = 4,
++
++  /// 将匹配大多数端点，并在可能的情况下使用按话题手动的策略
++  /**
++   * 策略将在创建订阅器或发布器时选择。
++   * 如果与所有已发现的端点匹配，则选择按话题手动的策略，否则选择自动策略。
++   *
++   * `rmw_subscription_get_actual_qos` 或 `rmw_publisher_get_actual_qos` 等函数报告的
++   * QoS 策略可能是 best available、automatic 或 manual by topic。
++   *
++   * 服务和客户端不受支持，默认使用 `rmw_qos_profile_services_default` 中的活跃度值。
++   *
++   * 中间件不期望在创建订阅器或发布器后更新策略，即使所选策略与新发现的端点不兼容。
++   * 因此，应谨慎使用此策略，因为与发现过程竞争可能导致非确定性行为。
++   */
++  RMW_QOS_POLICY_LIVELINESS_BEST_AVAILABLE = 5
++} rmw_qos_liveliness_policy_t;
++
++/// QoS 截止时间默认值。
++#define RMW_QOS_DEADLINE_DEFAULT RMW_DURATION_UNSPECIFIED
++/// 在保持尽可能严格策略的同时匹配大多数端点
++/**
++ * 值为 RMW_DURATION_INFINITE - 1。
++ *
++ * 策略将在创建订阅器或发布器时选择。
++ * 对于订阅器，截止时间将是所有已发现发布器截止时间的最大值。
++ * 对于发布器，截止时间将是所有已发现订阅器截止时间的最小值。
++ *
++ * `rmw_subscription_get_actual_qos` 或 `rmw_publisher_get_actual_qos` 等函数报告的
++ * QoS 策略可能是 best available 或实际截止时间值。
++ *
++ * 服务和客户端不受支持，默认使用 `rmw_qos_profile_services_default` 中的截止时间的值。
++ *
++ * 中间件不期望在创建订阅器或发布器后更新策略，即使所选策略与新发现的端点不兼容。
++ * 因此，应谨慎使用此策略，因为与发现过程竞争可能导致非确定性行为。
++ */
++#define RMW_QOS_DEADLINE_BEST_AVAILABLE {9223372036LL, 854775806LL}
++
++/// QoS 生命周期默认值。
++#define RMW_QOS_LIFESPAN_DEFAULT RMW_DURATION_UNSPECIFIED
++
++/// QoS 活跃度租约时长默认值。
++#define RMW_QOS_LIVELINESS_LEASE_DURATION_DEFAULT RMW_DURATION_UNSPECIFIED
++/// 在保持尽可能严格策略的同时匹配大多数端点
++/**
++ * 值为 RMW_DURATION_INFINITE - 1。
++ *
++ * 策略将在创建订阅器或发布器时选择。
++ * 对于订阅器，租约时长将是所有已发现发布器租约时长的最大值。
++ * 对于发布器，租约时长将是所有已发现订阅器租约时长的最小值。
++ *
++ * `rmw_subscription_get_actual_qos` 或 `rmw_publisher_get_actual_qos` 等函数报告的
++ * QoS 策略可能是 best available 或实际租约时长值。
++ *
++ * 服务和客户端不受支持，默认使用 `rmw_qos_profile_services_default` 中的租约时长的值。
++ *
++ * 中间件不期望在创建订阅器或发布器后更新策略，即使所选策略与新发现的端点不兼容。
++ * 因此，应谨慎使用此策略，因为与发现过程竞争可能导致非确定性行为。
++ */
++#define RMW_QOS_LIVELINESS_LEASE_DURATION_BEST_AVAILABLE {9223372036LL, 854775806LL}
++
++/// ROS 中间件服务质量配置文件。
++typedef struct RMW_PUBLIC_TYPE rmw_qos_profile_s
++{
++  enum rmw_qos_history_policy_e history;
++  /// 消息队列的大小。
++  size_t depth;
++  /// 可靠性 QoS 策略设置
++  enum rmw_qos_reliability_policy_e reliability;
++  /// 持久性 QoS 策略设置
++  enum rmw_qos_durability_policy_e durability;
++  /// 消息预计发送/接收的周期
++  /**
++    * RMW_DURATION_UNSPECIFIED 将使用 RMW 实现的默认值，可能是有限的也可能是无限的。
++    * RMW_DURATION_INFINITE 明确表示消息永远不会错过截止时间预期。
++    */
++  struct rmw_time_s deadline;
++  /// 消息被视为过期且不再有效的年龄
++  /**
++    * RMW_DURATION_UNSPEFICIED 将使用 RMW 实现的默认值，可能是有限的也可能是无限的。
++    * RMW_DURATION_INFINITE 明确表示消息不会过期。
++    */
++  struct rmw_time_s lifespan;
++  /// 活跃度 QoS 策略设置
++  enum rmw_qos_liveliness_policy_e liveliness;
++  /// RMW 节点或发布器必须在此时间内表明其处于活跃状态
++  /**
++    * RMW_DURATION_UNSPEFICIED 将使用 RMW 实现的默认值，可能是有限的也可能是无限的。
++    * RMW_DURATION_INFINITE 明确表示不强制活跃度。
++    */
++  struct rmw_time_s liveliness_lease_duration;
++
++  /// 如果为 true，将绕过所有 ROS 特定的命名空间约定。
++  /**
++   * 例如，在 DDS 和话题的情况下，这意味着典型的 ROS 特定前缀 `rt` 不会按此处所述应用：
++   *
++   *   http://design.ros2.org/articles/topic_and_service_names.html#ros-specific-namespace-prefix
++   *
++   * 当试图将原生 DDS 话题与 ROS 2 话题直接连接时，这可能会很有用。
++   */
++  bool avoid_ros_namespace_conventions;
++} rmw_qos_profile_t;
++
++/// ROS 图实体的全局唯一标识符
++typedef struct RMW_PUBLIC_TYPE rmw_gid_s
++{
++  /// rmw 实现名称
++  const char * implementation_identifier;
++
++  /// GID 字节数据值
++  uint8_t data[RMW_GID_STORAGE_SIZE];
++} rmw_gid_t;
++
++#define RMW_MESSAGE_INFO_SEQUENCE_NUMBER_UNSUPPORTED UINT64_MAX
++
++/// 描述 rmw 消息的信息
++typedef struct RMW_PUBLIC_TYPE rmw_message_info_s
++{
++  /// 发布器发布消息的时间。
++  /**
++   * 获取时间戳的具体点未指定，但应在每次发布过程中一致地取自同一点。
++   */
++  rmw_time_point_value_t source_timestamp;
++  /// 订阅器接收到消息的时间。
++  /**
++   * 获取时间戳的具体点未指定，但应在每次接收消息过程中一致地取自同一点。
++   */
++  rmw_time_point_value_t received_timestamp;
++  /// 由发布器设置的接收消息的序列号。
++  /**
++   * 该序列号由发布器设置，因此与发布器 GID 结合使用时可以唯一标识一条消息。
++   * 对于长时间运行的应用，序列号可能在某个时刻回绕。
++   *
++   * 如果 rmw 实现不支持序列号，其值将为 RMW_MESSAGE_INFO_SEQUENCE_NUMBER_UNSUPPORTED。
++   *
++   * 要求：
++   *
++   * 如果 `psn1` 和 `psn2` 是通过调用 `rmw_take*()` 获得的发布序列号，其中 `psn1` 是在早于 `psn2` 的调用中获得的，
++   * 且两个序列号来自同一发布器（即相同的发布器 gid），则：
++   *
++   * - psn2 > psn1（除非发生回绕）
++   * - `psn2 - psn1 - 1` 是发布器在两次接收消息之间发送的消息数量。
++   *   这些消息可能已被中间发生的其他 `rmw_take*()` 调用取走或丢失。
++   *   当且仅当消息是由发布器连续发送时，`psn2 - psn1 - 1 = 0`。
++   */
++  uint64_t publication_sequence_number;
++  /// 由订阅器设置的接收消息的序列号。
++  /**
++   * 该序列号由订阅器设置，不论消息来自哪个发布器。
++   * 对于长时间运行的应用，序列号可能在某个时刻回绕。
++   *
++   * 如果 rmw 实现不支持序列号，其值将为 RMW_MESSAGE_INFO_SEQUENCE_NUMBER_UNSUPPORTED。
++   *
++   * 要求：
++   *
++   * 如果 `rsn1` 和 `rsn2` 是通过调用 `rmw_take*()` 获得的接收序列号，其中 `rsn1` 是在早于 `rsn2` 的调用中获得的，则：
++   *
++   * - rsn2 > rsn1（除非发生回绕）
++   * - 当且仅当两次 `rmw_take*()` 调用连续发生时，`rsn2 = rsn1 + 1`。
++   */
++  uint64_t reception_sequence_number;
++  /// 发送该消息的发布器的全局唯一标识符。
++  /**
++   * 该标识符在本地上下文中唯一标识发布器，但在其他上下文或进程中不一定相同。
++   * 因此，该标识符将在您的应用中唯一标识发布器，但与另一个应用相比可能不一致。
++   * 即使有此限制，与发布器序列号结合使用时，也可以在本地上下文中唯一标识一条消息。
++   * rmw 实现生成的发布器 GID 可能在某个时刻发生冲突，在这种情况下无法区分哪个发布器发送了消息。
++   * GID 的生成细节取决于 rmw 实现。
++   *
++   * rmw 实现可能需要重用发布器 GID，例如由于唯一标识符耗尽或其他约束，
++   * 在这种情况下，rmw 实现可能会记录发生的情况，但此处未定义该行为。
++   * 但是，如果可能的话，rmw 实现应避免这种情况，并且在实际中应不太可能发生。
++   *
++   * \todo 未来我们希望它能在全局范围内跨上下文、进程和机器唯一标识发布器。
++   */
++  rmw_gid_t publisher_gid;
++
++  /// 该消息是否来自进程内通信
++  bool from_intra_process;
++} rmw_message_info_t;
++
++/// 获取零初始化的消息信息。
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_message_info_t
++rmw_get_zero_initialized_message_info(void);
++
++/// 当历史策略设置为 RMW_QOS_POLICY_HISTORY_KEEP_LAST 时 rmw 队列的默认大小，
++/// 0 表示当前未设置
++enum {RMW_QOS_POLICY_DEPTH_SYSTEM_DEFAULT = 0};
++
++/// 将 rcutils 日志严重级别类型映射为 rmw 特定类型。
++typedef enum RMW_PUBLIC_TYPE
++{
++  /// 调试日志严重级别，用于苛刻的消息
++  RMW_LOG_SEVERITY_DEBUG = RCUTILS_LOG_SEVERITY_DEBUG,
++
++  /// 信息日志严重级别，用于报告预期但不会过多的信息
++  RMW_LOG_SEVERITY_INFO = RCUTILS_LOG_SEVERITY_INFO,
++
++  /// 警告日志严重级别，用于报告可恢复的问题
++  RMW_LOG_SEVERITY_WARN = RCUTILS_LOG_SEVERITY_WARN,
++
++  /// 错误日志严重级别，用于报告不可恢复的问题
++  RMW_LOG_SEVERITY_ERROR = RCUTILS_LOG_SEVERITY_ERROR,
++
++  /// 致命日志严重级别，用于报告导致即将关闭的问题
++  RMW_LOG_SEVERITY_FATAL = RCUTILS_LOG_SEVERITY_FATAL
++} rmw_log_severity_t;
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__TYPES_H_
+diff --git a/rmw/include/rmw/validate_full_topic_name_zh.h b/rmw/include/rmw/validate_full_topic_name_zh.h
+new file mode 100644
+index 0000000..bb096c8
+--- /dev/null
++++ b/rmw/include/rmw/validate_full_topic_name_zh.h
+@@ -0,0 +1,130 @@
++// Copyright 2017 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__VALIDATE_FULL_TOPIC_NAME_H_
++#define RMW__VALIDATE_FULL_TOPIC_NAME_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/macros.h"
++#include "rmw/types.h"
++
++#define RMW_TOPIC_VALID 0
++#define RMW_TOPIC_INVALID_IS_EMPTY_STRING 1
++#define RMW_TOPIC_INVALID_NOT_ABSOLUTE 2
++#define RMW_TOPIC_INVALID_ENDS_WITH_FORWARD_SLASH 3
++#define RMW_TOPIC_INVALID_CONTAINS_UNALLOWED_CHARACTERS 4
++#define RMW_TOPIC_INVALID_CONTAINS_REPEATED_FORWARD_SLASH 5
++#define RMW_TOPIC_INVALID_NAME_TOKEN_STARTS_WITH_NUMBER 6
++#define RMW_TOPIC_INVALID_TOO_LONG 7
++
++#define RMW_TOPIC_MAX_NAME_LENGTH 255U /* 实现约束 */ - 8U /* 为前缀保留 */
++
++/// 判断给定的完全限定主题名称是否有效。
++/** 主题完全限定名称（FQN）的有效性根据此处定义的规则进行判断：
++ *
++ *   http://design.ros2.org/articles/topic_and_service_names.html
++ *
++ * 请注意，此函数期望上述文档中描述的所有 URL 后缀
++ * 已被移除。
++ *
++ * 如果 C 字符串或 validation_result 指针为 null，则将返回
++ * `RMW_RET_INVALID_ARGUMENT`。
++ * topic_name 应为一个有效的、以空字符结尾的 C 字符串。
++ * validation_result 整型指针应指向有效内存，以便将结果
++ * 作为输出变量存入其中。
++ * invalid_index size_t 指针应指向 NULL 或有效内存，
++ * 以便在验证出错时，将输入字符串中的位置
++ * 存入其中。
++ * 如果为 invalid_index 传入 NULL，则将不会被设置。
++ *
++ * 如果主题有效，则不会为 invalid_index 赋值。
++ *
++ * validation_result 所指向的整型将存入以下可能结果值之一
++ *（由宏定义）：
++ *
++ * - RMW_TOPIC_VALID
++ * - RMW_TOPIC_INVALID_IS_EMPTY_STRING
++ * - RMW_TOPIC_INVALID_NOT_ABSOLUTE
++ * - RMW_TOPIC_INVALID_ENDS_WITH_FORWARD_SLASH
++ * - RMW_TOPIC_INVALID_CONTAINS_UNALLOWED_CHARACTERS
++ * - RMW_TOPIC_INVALID_CONTAINS_REPEATED_FORWARD_SLASH
++ * - RMW_TOPIC_INVALID_NAME_TOKEN_STARTS_WITH_NUMBER
++ * - RMW_TOPIC_INVALID_TOO_LONG
++ *
++ * 可使用 rmw_full_topic_name_validation_result_string() 函数
++ * 将结果值转换为描述。
++ *
++ * `RMW_TOPIC_INVALID_TOO_LONG` 保证最后检查，因此
++ * 如果得到该结果，则可以假定所有其他检查均已通过。
++ * 这样做是为了在需要时可将长度限制视为警告
++ * 而非错误。
++ *
++ * \param[in] topic_name 要验证的主题名称
++ * \param[out] validation_result 用于存储检查结果的整型
++ * \param[out] invalid_index 输入字符串中发生错误位置的 size_t 索引
++ * \returns 成功运行检查时返回 `RMW_RET_OK`，否则
++ * \returns 参数无效时返回 `RMW_RET_INVALID_ARGUMENT`，否则
++ * \returns 发生未指定错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_validate_full_topic_name(
++  const char * topic_name,
++  int * validation_result,
++  size_t * invalid_index);
++
++/// 判断给定的主题名称是否有效。
++/**
++ * 这是 rmw_validate_full_topic_name 的一个重载，增加了用于指定 topic_name 长度的参数。
++ *
++ * \sa rmw_validate_full_topic_name(const char *, int *, size_t *)
++ *
++ * \param[in] topic_name 要验证的主题名称
++ * \param[in] topic_name_length topic_name 中的字符数
++ * \param[out] validation_result 用于存储检查结果的整型
++ * \param[out] invalid_index 输入字符串中发生错误位置的 size_t 索引
++ * \returns 成功运行检查时返回 `RMW_RET_OK`，否则
++ * \returns 参数无效时返回 `RMW_RET_INVALID_ARGUMENT`，否则
++ * \returns 发生未指定错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_validate_full_topic_name_with_size(
++  const char * topic_name,
++  size_t topic_name_length,
++  int * validation_result,
++  size_t * invalid_index);
++
++/// 返回验证结果描述；如果结果为 RMW_TOPIC_VALID，则返回 NULL。
++/**
++ * \param[in] validation_result 验证结果
++ * \returns 如果验证结果为 `RMW_TOPIC_VALID`，则返回 `NULL`，否则
++ * \returns 表示验证结果的字符串。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++const char *
++rmw_full_topic_name_validation_result_string(int validation_result);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__VALIDATE_FULL_TOPIC_NAME_H_
+diff --git a/rmw/include/rmw/validate_namespace_zh.h b/rmw/include/rmw/validate_namespace_zh.h
+new file mode 100644
+index 0000000..5ae11c9
+--- /dev/null
++++ b/rmw/include/rmw/validate_namespace_zh.h
+@@ -0,0 +1,131 @@
++// Copyright 2017 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__VALIDATE_NAMESPACE_H_
++#define RMW__VALIDATE_NAMESPACE_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/macros.h"
++#include "rmw/types.h"
++#include "rmw/validate_full_topic_name.h"
++
++#define RMW_NAMESPACE_VALID 0
++#define RMW_NAMESPACE_INVALID_IS_EMPTY_STRING 1
++#define RMW_NAMESPACE_INVALID_NOT_ABSOLUTE 2
++#define RMW_NAMESPACE_INVALID_ENDS_WITH_FORWARD_SLASH 3
++#define RMW_NAMESPACE_INVALID_CONTAINS_UNALLOWED_CHARACTERS 4
++#define RMW_NAMESPACE_INVALID_CONTAINS_REPEATED_FORWARD_SLASH 5
++#define RMW_NAMESPACE_INVALID_NAME_TOKEN_STARTS_WITH_NUMBER 6
++#define RMW_NAMESPACE_INVALID_TOO_LONG 7
++
++// 额外保留 2 个字符给最短可能的主题，例如 '/X'。
++#define RMW_NAMESPACE_MAX_LENGTH (RMW_TOPIC_MAX_NAME_LENGTH - 2U)
++
++/// 判断给定的命名空间是否有效。
++/** 命名空间的有效性基于此处定义的主题规则：
++ *
++ *   http://design.ros2.org/articles/topic_and_service_names.html
++ *
++ * 注意，此函数期望不存在上述文档中描述的可用于主题和服务的 URL 后缀。
++ *
++ * 如果 C 字符串或 validation_result 指针为 null，则将返回 `RMW_RET_INVALID_ARGUMENT`。
++ * namespace_ 应为一个有效的、以空字符结尾的 C 字符串。
++ * validation_result 整型指针应指向有效内存，以便将结果作为输出变量存储其中。
++ * invalid_index size_t 指针应指向 NULL 或有效内存，以便在发生验证错误时，
++ * 将输入字符串中的位置存储其中。
++ * 如果为 invalid_index 传入 NULL，则不会对其进行设置。
++ *
++ * 如果命名空间有效，则不会为 invalid_index 赋值。
++ *
++ * validation_result 指向的整型将存储以下可能的几种结果值之一（以宏定义）：
++ *
++ * - RMW_NAMESPACE_VALID
++ * - RMW_NAMESPACE_INVALID_IS_EMPTY_STRING
++ * - RMW_NAMESPACE_INVALID_NOT_ABSOLUTE
++ * - RMW_NAMESPACE_INVALID_ENDS_WITH_FORWARD_SLASH
++ * - RMW_NAMESPACE_INVALID_CONTAINS_UNALLOWED_CHARACTERS
++ * - RMW_NAMESPACE_INVALID_CONTAINS_REPEATED_FORWARD_SLASH
++ * - RMW_NAMESPACE_INVALID_NAME_TOKEN_STARTS_WITH_NUMBER
++ * - RMW_NAMESPACE_INVALID_TOO_LONG
++ *
++ * 可以使用 rmw_namespace_validation_result_string() 函数将结果值转换为描述。
++ *
++ * ``RMW_NAMESPACE_INVALID_ENDS_WITH_FORWARD_SLASH`` 验证结果不适用于 ``"/"``，
++ * 因为 ``"/"`` 是一个有效的命名空间。
++ *
++ * ``RMW_NAMESPACE_INVALID_TOO_LONG`` 保证最后检查，
++ * 因此如果你得到该结果，则可以假设所有其他检查均已通过。
++ * 这样做是为了在需要时可以将长度限制视为警告而非错误。
++ *
++ * 如果返回非 RMW_RET_OK 的返回值，则将设置 RMW 错误消息。
++ *
++ * \param[in] namespace_ 要验证的命名空间
++ * \param[out] validation_result 用于存储检查结果的 int
++ * \param[out] invalid_index 输入字符串中发生错误的位置索引
++ * \returns 成功运行检查时返回 `RMW_RET_OK`，或
++ * \returns 参数无效时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \returns 发生未指定错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_validate_namespace(
++  const char * namespace_,
++  int * validation_result,
++  size_t * invalid_index);
++
++/// 判断给定的命名空间是否有效。
++/**
++ * 这是带有 namespace_ 长度额外参数的重载。
++ * 如果返回非 RMW_RET_OK 的返回值，则将设置 RMW 错误消息。
++ *
++ * \sa rmw_validate_namespace(const char *, int *, size_t *)
++ *
++ * \param[in] namespace_ 要验证的命名空间
++ * \param[in] namespace_length namespace_ 中的字符数。
++ * \param[out] validation_result 用于存储检查结果的 int
++ * \param[out] invalid_index 输入字符串中发生错误的位置索引
++ * \returns 成功运行检查时返回 `RMW_RET_OK`，或
++ * \returns 参数无效时返回 `RMW_RET_INVALID_ARGUMENT`，或
++ * \returns 发生未指定错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_validate_namespace_with_size(
++  const char * namespace_,
++  size_t namespace_length,
++  int * validation_result,
++  size_t * invalid_index);
++
++/// 返回验证结果描述，如果为 RMW_NAMESPACE_VALID 则返回 NULL。
++/**
++ * \param[in] validation_result 验证结果
++ * \returns 如果验证结果为 `RMW_NAMESPACE_VALID`，则返回 `NULL`，或
++ * \returns 表示验证结果的字符串。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++const char *
++rmw_namespace_validation_result_string(int validation_result);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__VALIDATE_NAMESPACE_H_
+diff --git a/rmw/include/rmw/validate_node_name_zh.h b/rmw/include/rmw/validate_node_name_zh.h
+new file mode 100644
+index 0000000..eb4588d
+--- /dev/null
++++ b/rmw/include/rmw/validate_node_name_zh.h
+@@ -0,0 +1,119 @@
++// Copyright 2017 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__VALIDATE_NODE_NAME_H_
++#define RMW__VALIDATE_NODE_NAME_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include "rmw/macros.h"
++#include "rmw/types.h"
++
++#define RMW_NODE_NAME_VALID 0
++#define RMW_NODE_NAME_INVALID_IS_EMPTY_STRING 1
++#define RMW_NODE_NAME_INVALID_CONTAINS_UNALLOWED_CHARACTERS 2
++#define RMW_NODE_NAME_INVALID_STARTS_WITH_NUMBER 3
++#define RMW_NODE_NAME_INVALID_TOO_LONG 4
++
++#define RMW_NODE_NAME_MAX_NAME_LENGTH 255 /* 任意约束 */
++
++/// 判断节点名称是否有效。
++/**
++ * 节点名称必须遵循以下规则：
++ *
++ * - 不能为空字符串
++ * - 只能包含字母数字字符和下划线（a-z|A-Z|0-9|_）
++ * - 不能以数字开头
++ *
++ * 如果节点名称 C 字符串或 validation_result 指针任一为空，则返回
++ * `RMW_RET_INVALID_ARGUMENT`。
++ * node_name 应为有效的、以空字符结尾的 C 字符串。
++ * validation_result 整型指针应指向有效内存，以便作为输出变量存储结果。
++ * invalid_index size_t 指针应指向 NULL 或有效内存，以便在发生验证错误时，
++ * 将输入字符串中的位置存储其中。
++ * 如果为 invalid_index 传入 NULL，则不会设置该值。
++ *
++ * 如果节点名称有效，则不会为 invalid_index 赋值。
++ *
++ * validation_result 所指向的整型将存储以下可能的宏定义结果值之一：
++ *
++ * - RMW_NODE_NAME_VALID
++ * - RMW_NODE_NAME_INVALID_IS_EMPTY_STRING
++ * - RMW_NODE_NAME_INVALID_CONTAINS_UNALLOWED_CHARACTERS
++ * - RMW_NODE_NAME_INVALID_STARTS_WITH_NUMBER
++ * - RMW_NODE_NAME_INVALID_TOO_LONG
++ *
++ * 可以使用 rmw_node_name_validation_result_string() 函数将结果值转换为描述。
++ *
++ * `RMW_NODE_NAME_INVALID_TOO_LONG` 保证最后被检查，因此如果得到该结果，
++ * 则可以假定所有其他检查均已通过。
++ * 这样做是为了在需要时可以将长度限制视为警告而非错误。
++ *
++ * \param[in] node_name 待验证的节点名称
++ * \param[out] validation_result 存储检查结果的整型
++ * \param[out] invalid_index 输入字符串中发生错误的位置 size_t 索引
++ * \returns 成功运行检查时返回 `RMW_RET_OK`，或者
++ * \returns 参数无效时返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \returns 发生未指定错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_validate_node_name(
++  const char * node_name,
++  int * validation_result,
++  size_t * invalid_index);
++
++/// Deterimine if a given node name is valid.
++/**
++ * 这是一个重载版本，增加了一个用于指定 node_name 长度的参数。
++ *
++ * \sa rmw_validate_node_name(const char *, int *, size_t *)
++ *
++ * \param[in] node_name 待验证的节点名称
++ * \param[in] node_name_length node_name 中的字符数
++ * \param[out] validation_result 存储检查结果的整型
++ * \param[out] invalid_index 输入字符串中发生错误的位置 size_t 索引
++ * \returns 成功运行检查时返回 `RMW_RET_OK`，或者
++ * \returns 参数无效时返回 `RMW_RET_INVALID_ARGUMENT`，或者
++ * \returns 发生未指定错误时返回 `RMW_RET_ERROR`。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++rmw_ret_t
++rmw_validate_node_name_with_size(
++  const char * node_name,
++  size_t node_name_length,
++  int * validation_result,
++  size_t * invalid_index);
++
++/// 返回验证结果描述，如果为 RMW_NODE_NAME_VALID 则返回 NULL。
++/**
++ * \param[in] validation_result 验证结果
++ * \returns 如果验证结果为 `RMW_NODE_NAME_VALID` 则返回 `NULL`，或者
++ * \returns 表示验证结果的字符串。
++ */
++RMW_PUBLIC
++RMW_WARN_UNUSED
++const char *
++rmw_node_name_validation_result_string(int validation_result);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__VALIDATE_NODE_NAME_H_
+diff --git a/rmw/include/rmw/visibility_control_zh.h b/rmw/include/rmw/visibility_control_zh.h
+new file mode 100644
+index 0000000..de0c96e
+--- /dev/null
++++ b/rmw/include/rmw/visibility_control_zh.h
+@@ -0,0 +1,58 @@
++// Copyright 2014 Open Source Robotics Foundation, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef RMW__VISIBILITY_CONTROL_H_
++#define RMW__VISIBILITY_CONTROL_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++// 此逻辑借鉴（随后进行了命名空间处理）自 gcc wiki 上的示例：
++//     https://gcc.gnu.org/wiki/Visibility
++
++#if defined _WIN32 || defined __CYGWIN__
++  #ifdef __GNUC__
++    #define RMW_EXPORT __attribute__ ((dllexport))
++    #define RMW_IMPORT __attribute__ ((dllimport))
++  #else
++    #define RMW_EXPORT __declspec(dllexport)
++    #define RMW_IMPORT __declspec(dllimport)
++  #endif
++  #ifdef RMW_BUILDING_DLL
++    #define RMW_PUBLIC RMW_EXPORT
++  #else
++    #define RMW_PUBLIC RMW_IMPORT
++  #endif
++  #define RMW_PUBLIC_TYPE RMW_PUBLIC
++  #define RMW_LOCAL
++#else
++  #define RMW_EXPORT __attribute__ ((visibility("default")))
++  #define RMW_IMPORT
++  #if __GNUC__ >= 4
++    #define RMW_PUBLIC __attribute__ ((visibility("default")))
++    #define RMW_LOCAL  __attribute__ ((visibility("hidden")))
++  #else
++    #define RMW_PUBLIC
++    #define RMW_LOCAL
++  #endif
++  #define RMW_PUBLIC_TYPE
++#endif
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // RMW__VISIBILITY_CONTROL_H_
+-- 
+2.55.0.windows.5
+

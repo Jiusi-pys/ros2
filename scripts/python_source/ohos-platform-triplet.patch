@@ -1,0 +1,24 @@
+diff --git a/configure.ac b/configure.ac
+--- a/configure.ac
++++ b/configure.ac
+@@ -947,6 +947,8 @@ cat > conftest.c <<EOF
+         x86_64-linux-gnux32
+ # elif defined(__i386__)
+         i386-linux-gnu
++# elif defined(__aarch64__) && defined(__OHOS__)
++        aarch64-linux-ohos
+ # elif defined(__aarch64__) && defined(__AARCH64EL__)
+ #  if defined(__ILP32__)
+         aarch64_ilp32-linux-gnu
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -6774,6 +6774,8 @@ cat > conftest.c <<EOF
+         x86_64-linux-gnux32
+ # elif defined(__i386__)
+         i386-linux-gnu
++# elif defined(__aarch64__) && defined(__OHOS__)
++        aarch64-linux-ohos
+ # elif defined(__aarch64__) && defined(__AARCH64EL__)
+ #  if defined(__ILP32__)
+         aarch64_ilp32-linux-gnu

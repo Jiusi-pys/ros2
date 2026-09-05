@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {"type": "git", "url": "https://github.com/jbeder/yaml-cpp.git", "requested_version": "0.8.0", "commit": "f7320141120f720aecc4c32be25586e7da9eb978"},
+    {"type": "git", "url": "https://github.com/pybind/pybind11.git", "requested_version": "v2.11.1", "commit": "8a099e44b3d5f85b20f05828d919d2332a8de841"},
+    {"type": "git", "url": "https://github.com/yaml/libyaml.git", "requested_version": "0.2.5", "commit": "2c891fc7a770e8ba2fec34fc6b545c672beb37e6"},
+    {"type": "git", "url": "https://github.com/gabime/spdlog.git", "requested_version": "v1.12.0", "commit": "7e635fca68d014934b4af8a1cf874f63989352b7"},
+    {"type": "git", "url": "https://github.com/facebook/zstd.git", "requested_version": "v1.5.5", "commit": "63779c798237346c2b245c546c40b72a5a5913fe"},
+    {"type": "git", "url": "https://github.com/lz4/lz4.git", "requested_version": "v1.9.4", "commit": "5ff839680134437dbf4678f3d0c7b371d84f4964"},
+    {"type": "git", "url": "https://github.com/uncrustify/uncrustify.git", "requested_version": "uncrustify-0.78.1", "commit": "b8c95286f70ef8e0e83bd055a3a7aabb614a0781"},
+    {"type": "git", "url": "https://github.com/curl/curl.git", "requested_version": "curl-7_81_0", "commit": "801bd5138ce31aa0d906fa4e2eabfc599d74e793"},
+    {"type": "git", "url": "https://github.com/gazebosim/gz-cmake.git", "requested_version": "gz-cmake3_3.6.0", "commit": "2cb7f74f914a01c733ff88ccaec0f5e4a0c431a3"},
+    {"type": "git", "url": "https://github.com/gazebosim/gz-math.git", "requested_version": "gz-math7_7.6.0", "commit": "dd288136cd4f740feed0f28bfd904fae2b3fe0d6"},
+    {"type": "git", "url": "https://github.com/gazebosim/gz-utils.git", "requested_version": "gz-utils2_2.2.1", "commit": "513b36e6323b4ceb4b49d832dc7d163331e1cd11"},
+    {"type": "zip", "url": "https://www.sqlite.org/2022/sqlite-amalgamation-3370200.zip", "requested_version": "sqlite-amalgamation-3370200", "sha256": "cb25df0fb90b77be6660f6ace641bbea88f3d0441110d394ce418f35f7561bb0"}
+  ]
+}

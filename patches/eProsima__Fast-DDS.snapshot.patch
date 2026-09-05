@@ -1,0 +1,205 @@
+diff --git a/cmake/modules/FindTinyXML2.cmake b/cmake/modules/FindTinyXML2.cmake
+index 44b8e645758a468e75c2f2fb9daf40bb86ca7a99..20d1c9753f7de67e416b1d5d8f3b2805c30bf190 100644
+--- a/cmake/modules/FindTinyXML2.cmake
++++ b/cmake/modules/FindTinyXML2.cmake
+@@ -29,16 +29,24 @@ if(TinyXML2_FOUND AND NOT TINYXML2_FROM_THIRDPARTY)
+         endif()
+     endif()
+ else()
+-    if(TINYXML2_FROM_THIRDPARTY OR ANDROID)
++    if(TINYXML2_FROM_THIRDPARTY)
++        # The bundled implementation and header must always come from the same
++        # submodule.  A generic host-side find_path() can otherwise select a
++        # different TinyXML2 header while tinyxml2.cpp is taken from the
++        # submodule.  Besides being non-reproducible, mixing those versions in
++        # one Fast DDS library is an ABI violation because TinyXML2 classes are
++        # passed across that boundary.
++        set(TINYXML2_FROM_SOURCE ON)
++        set(TINYXML2_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/thirdparty/tinyxml2"
++            CACHE PATH "Bundled TinyXML2 include directory" FORCE)
++        set(TINYXML2_SOURCE_DIR "${PROJECT_SOURCE_DIR}/thirdparty/tinyxml2"
++            CACHE PATH "Bundled TinyXML2 source directory" FORCE)
++    elseif(ANDROID)
+         set(TINYXML2_FROM_SOURCE ON)
+         find_path(TINYXML2_INCLUDE_DIR NAMES tinyxml2.h NO_CMAKE_FIND_ROOT_PATH)
+-    else()
+-        find_path(TINYXML2_INCLUDE_DIR NAMES tinyxml2.h)
+-    endif()
+-
+-    if(TINYXML2_FROM_SOURCE)
+         find_path(TINYXML2_SOURCE_DIR NAMES tinyxml2.cpp NO_CMAKE_FIND_ROOT_PATH)
+     else()
++        find_path(TINYXML2_INCLUDE_DIR NAMES tinyxml2.h)
+         find_library(TINYXML2_LIBRARY tinyxml2)
+     endif()
+ 
+diff --git a/include/fastdds/dds/topic/TopicDescription.hpp b/include/fastdds/dds/topic/TopicDescription.hpp
+index 656e70b66752f4a6fa79c3c652f37a1bce1f83c5..7b1aac4889362f60cff40698adae69b98c164523 100644
+--- a/include/fastdds/dds/topic/TopicDescription.hpp
++++ b/include/fastdds/dds/topic/TopicDescription.hpp
+@@ -77,9 +77,17 @@ protected:
+     {
+     }
+ 
++#if defined(__OHOS__)
++    // Keep a single RTTI definition in libfastrtps on OpenHarmony.  Its
++    // libc++abi does not merge the weak TopicDescription typeinfo emitted by
++    // different DSOs, so cross-DSO dynamic_casts otherwise fail even for a
++    // valid Topic instance.
++    virtual ~TopicDescription();
++#else
+     virtual ~TopicDescription()
+     {
+     }
++#endif
+ 
+ protected:
+ 
+diff --git a/src/cpp/CMakeLists.txt b/src/cpp/CMakeLists.txt
+index 50017a6bc65e265239f29ac4e2171d1928dde593..24791c438445b9b67393396588f4bacc24d1a9f8 100644
+--- a/src/cpp/CMakeLists.txt
++++ b/src/cpp/CMakeLists.txt
+@@ -507,8 +507,8 @@ target_include_directories(${PROJECT_NAME} PUBLIC
+     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/cpp>
+     $<INSTALL_INTERFACE:${INCLUDE_INSTALL_DIR}>
+     PRIVATE
+-    ${Asio_INCLUDE_DIR}
+     $<$<BOOL:${TINYXML2_INCLUDE_DIR}>:${TINYXML2_INCLUDE_DIR}>
++    ${Asio_INCLUDE_DIR}
+     $<$<BOOL:${ANDROID}>:${ANDROID_IFADDRS_INCLUDE_DIR}>
+     ${THIRDPARTY_BOOST_INCLUDE_DIR}
+     ${PROJECT_SOURCE_DIR}/thirdparty/taocpp-pegtl
+diff --git a/src/cpp/fastdds/topic/Topic.cpp b/src/cpp/fastdds/topic/Topic.cpp
+index ed8975170b517b4260a4cde15d8e2981a5a0c7a1..a0d80f1565ca609becdea11e744664fe13d105b6 100644
+--- a/src/cpp/fastdds/topic/Topic.cpp
++++ b/src/cpp/fastdds/topic/Topic.cpp
+@@ -27,6 +27,10 @@ namespace eprosima {
+ namespace fastdds {
+ namespace dds {
+ 
++#if defined(__OHOS__)
++TopicDescription::~TopicDescription() = default;
++#endif
++
+ Topic::Topic(
+         const std::string& topic_name,
+         const std::string& type_name,
+diff --git a/test/ohos/check_topic_description_rtti.py b/test/ohos/check_topic_description_rtti.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..3ca6a17edcf05c0d5fbf32e34466b0dc340ab819
+--- /dev/null
++++ b/test/ohos/check_topic_description_rtti.py
+@@ -0,0 +1,82 @@
++#!/usr/bin/env python3
++
++"""Verify the OpenHarmony cross-DSO TopicDescription RTTI ownership contract."""
++
++import argparse
++import hashlib
++import pathlib
++import subprocess
++import sys
++
++
++TYPEINFO_SYMBOLS = (
++    "_ZTIN8eprosima7fastdds3dds16TopicDescriptionE",
++    "_ZTIN8eprosima7fastdds3dds5TopicE",
++)
++KEY_FUNCTION_SYMBOL = "_ZN8eprosima7fastdds3dds16TopicDescriptionD1Ev"
++
++
++def read_symbols(readelf: pathlib.Path, library: pathlib.Path) -> list[str]:
++    result = subprocess.run(
++        [str(readelf), "--syms", "--wide", str(library)],
++        check=True,
++        capture_output=True,
++        text=True,
++    )
++    return result.stdout.splitlines()
++
++
++def symbol_lines(lines: list[str], symbol: str) -> list[str]:
++    return [line for line in lines if symbol in line]
++
++
++def is_undefined(line: str) -> bool:
++    return " UND " in f" {line} "
++
++
++def sha256(path: pathlib.Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as stream:
++        for block in iter(lambda: stream.read(1024 * 1024), b""):
++            digest.update(block)
++    return digest.hexdigest()
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--readelf", required=True, type=pathlib.Path)
++    parser.add_argument("--provider", required=True, type=pathlib.Path)
++    parser.add_argument("--consumer", required=True, type=pathlib.Path)
++    args = parser.parse_args()
++
++    provider_lines = read_symbols(args.readelf, args.provider)
++    consumer_lines = read_symbols(args.readelf, args.consumer)
++    failures: list[str] = []
++
++    for symbol in TYPEINFO_SYMBOLS:
++        provider_matches = symbol_lines(provider_lines, symbol)
++        consumer_matches = symbol_lines(consumer_lines, symbol)
++        if not provider_matches or all(is_undefined(line) for line in provider_matches):
++            failures.append(f"provider does not define {symbol}")
++        if not consumer_matches:
++            failures.append(f"consumer does not reference {symbol}")
++        elif any(not is_undefined(line) for line in consumer_matches):
++            failures.append(f"consumer unexpectedly defines {symbol}")
++
++    key_function_matches = symbol_lines(provider_lines, KEY_FUNCTION_SYMBOL)
++    if not key_function_matches or all(is_undefined(line) for line in key_function_matches):
++        failures.append(f"provider does not define key function {KEY_FUNCTION_SYMBOL}")
++
++    if failures:
++        for failure in failures:
++            print(f"FAIL: {failure}", file=sys.stderr)
++        return 1
++
++    print("TOPIC_DESCRIPTION_RTTI_CONTRACT=PASS")
++    print(f"PROVIDER_SHA256={sha256(args.provider)}")
++    print(f"CONSUMER_SHA256={sha256(args.consumer)}")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/test/unittest/dds/topic/TopicTests.cpp b/test/unittest/dds/topic/TopicTests.cpp
+index bd102150bfe6bdf04c050befc1cc8f19cfb30669..b4beb4a8632b69554b169a5658cf97421a9c47b6 100644
+--- a/test/unittest/dds/topic/TopicTests.cpp
++++ b/test/unittest/dds/topic/TopicTests.cpp
+@@ -179,6 +179,26 @@ TEST(TopicTests, GetTopicParticipant)
+     ASSERT_TRUE(DomainParticipantFactory::get_instance()->delete_participant(participant) == ReturnCode_t::RETCODE_OK);
+ }
+ 
++TEST(TopicTests, DowncastLookedUpTopicDescription)
++{
++    DomainParticipant* participant =
++            DomainParticipantFactory::get_instance()->create_participant(0, PARTICIPANT_QOS_DEFAULT);
++    ASSERT_NE(participant, nullptr);
++
++    TypeSupport type(new TopicDataTypeMock());
++    type.register_type(participant);
++
++    Topic* topic = participant->create_topic("footopic", type.get_type_name(), TOPIC_QOS_DEFAULT);
++    ASSERT_NE(topic, nullptr);
++
++    TopicDescription* topic_description = participant->lookup_topicdescription("footopic");
++    ASSERT_NE(topic_description, nullptr);
++    ASSERT_EQ(topic, dynamic_cast<Topic*>(topic_description));
++
++    ASSERT_TRUE(participant->delete_topic(topic) == ReturnCode_t::RETCODE_OK);
++    ASSERT_TRUE(DomainParticipantFactory::get_instance()->delete_participant(participant) == ReturnCode_t::RETCODE_OK);
++}
++
+ void set_listener_test (
+         Topic* topic,
+         TopicListener* listener,

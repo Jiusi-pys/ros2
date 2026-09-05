@@ -1,0 +1,21 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 769f1d11c183f8dda5cc29edeccc23be3807b0cb..4a5bd0c4b71b2610a8e5868ad5b485f19999aa6c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -84,9 +84,15 @@ if(NOT _EXIT_CODE EQUAL 0)
+   endif()
+   include(ExternalProject)
+ 
++  set(foonathan_source_version vendor-1.4.1)
++  if(OHOS_CROSS_BUILD)
++    set(foonathan_source_version 1de8562aa2b8241ca3d562ddc6d1e9a5cfc07e94)
++    list(APPEND extra_cmake_args -DCMAKE_SKIP_RPATH=ON)
++  endif()
++
+   externalproject_add(foo_mem-ext
+   GIT_REPOSITORY https://github.com/eProsima/memory.git
+-  GIT_TAG vendor-1.4.1
++  GIT_TAG ${foonathan_source_version}
+   TIMEOUT 600
+   # Avoid the update (git pull) and so the recompilation of foonathan_memory library each time.
+   UPDATE_COMMAND ""

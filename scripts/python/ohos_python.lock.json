@@ -1,0 +1,374 @@
+{
+  "schema_version": 1,
+  "target": {
+    "architecture": "aarch64",
+    "platform": "linux-ohos",
+    "python_version": "3.12.7",
+    "python_api_version": "3.12",
+    "soabi": "cpython-312-aarch64-linux-ohos",
+    "extension_suffix": ".cpython-312-aarch64-linux-ohos.so",
+    "remote_prefix": "/data/python312-rk3588a"
+  },
+  "source": {
+    "harness": {
+      "url": "https://github.com/Jiusi-pys/python.git",
+      "branch": "main",
+      "commit": "7b8c427d38fc0bbe723f73a2b88c0e085cd379ab"
+    },
+    "port_config": {
+      "url": "https://github.com/Jiusi-pys/python.git",
+      "branch": "python3.12.12",
+      "commit": "098f200c30f1f35051d73041e6acbad46af60904",
+      "config_sub_git_blob": "5ce8f1edddb7e7507109dc9a6d5c5a160938ec04",
+      "config_site_git_blob": "c186915836bb40a35f5bc2f4bb3656aa18029bcc"
+    },
+    "cpython": {
+      "version": "3.12.7",
+      "url": "https://www.python.org/ftp/python/3.12.7/Python-3.12.7.tar.xz",
+      "sha256": "24887b92e2afd4a2ac602419ad4b596372f67ac9b077190f459aba390faf5550"
+    }
+  },
+  "runtime_interface": {
+    "include_tree_sha256": "e18575d7539e1bf652bbc9bf812c7af8c0d8420dd6163e41fbc17fd23c703f69",
+    "files": [
+      {
+        "path": "include/python3.12/Python.h",
+        "sha256": "729ef157f6026e6e1b3104593f87dddc597c3b83b60c7c2965878c62a56c6f7d"
+      },
+      {
+        "path": "include/python3.12/patchlevel.h",
+        "sha256": "1ed375c3c731e1d43f1a055c65d81bed4369f841a515dcb5cc3ef0da5b6d3d00"
+      },
+      {
+        "path": "lib/libpython3.12.so.1.0",
+        "sha256": "47193e17cf471888d1ec325447f8b89f16c022d310a477db9d3d4744eaef191a"
+      },
+      {
+        "path": "lib/libffi.so.8",
+        "sha256": "a0a9d09207320d5371e0da31fbc2828fbd492d57a2e88a71dace5d95a39df060"
+      },
+      {
+        "path": "lib/_sysconfigdata__linux_aarch64-linux-ohos.py",
+        "sha256": "222dc493a2ab757af62c05f183101c5bbabe6d96b79b0cb5743286e76398ea10"
+      },
+      {
+        "path": "lib/config-3.12-aarch64-linux-ohos/Makefile",
+        "sha256": "d637136bee321aaf160c81b2446868b003739ad9758dddc32af2e28d0ee4bb6b"
+      }
+    ]
+  },
+  "runtime_artifact": {
+    "excluded_symlinks": [
+      {
+        "path": "bin/cat",
+        "target": "/system/bin/cat",
+        "reason": "OpenHarmony system-tool alias is not part of CPython"
+      },
+      {
+        "path": "bin/ls",
+        "target": "/system/bin/ls",
+        "reason": "OpenHarmony system-tool alias is not part of CPython"
+      },
+      {
+        "path": "share/zoneinfo/localtime",
+        "target": "/etc/localtime",
+        "reason": "Board-local timezone selection is not a relocatable CPython runtime input"
+      }
+    ]
+  },
+  "source_build": {
+    "source_lock": {
+      "path": "scripts/python_source/source_build.lock.json",
+      "sha256": "c24230c7011dadea70cf945d4ba07d37a094afc15fc1e6ddc52c73ced50fd202"
+    },
+    "build_recipe_sha256": "96437a8412585ee549c5149d37e5f6380777925e53788fbaaed9f1a9f455a4dd",
+    "source_build_receipt": {
+      "filename": "PYTHON_SOURCE_BUILD_RECEIPT.json",
+      "sha256": "e2b0997aa80cb9c4f6c8cc251b1c2d9aa42283a285cdbe0fc54abde0469b8199"
+    }
+  },
+  "sdists": [
+    {
+      "project": "empy",
+      "version": "3.3.4",
+      "filename": "empy-3.3.4.tar.gz",
+      "sha256": "73ac49785b601479df4ea18a7c79bc1304a8a7c34c02b9472cf1206ae88f01b3",
+      "role": "pure-python-overlay"
+    },
+    {
+      "project": "psutil",
+      "version": "5.9.8",
+      "filename": "psutil-5.9.8.tar.gz",
+      "sha256": "6be126e3225486dff286a8fb9a06246a5253f4c7c53b475ea5f5ac934e64194c",
+      "role": "ohos-cross-build"
+    }
+  ],
+  "wheels": [
+    {
+      "project": "argcomplete",
+      "version": "3.1.4",
+      "filename": "argcomplete-3.1.4-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "fbe56f8cda08aa9a04b307d8482ea703e96a6a801611acb4be9bf3942017989f"
+    },
+    {
+      "project": "catkin-pkg",
+      "version": "1.0.0",
+      "filename": "catkin_pkg-1.0.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "10a6589e9edf3cd5bd18e35e094d20b516e6351bcf0da891c28a0ff526fdb7cc"
+    },
+    {
+      "project": "cffi",
+      "version": "2.1.1",
+      "filename": "cffi-2.1.1-cp312-cp312-musllinux_1_2_aarch64.whl",
+      "architecture": "aarch64-musllinux",
+      "sha256": "208f941bb9d18e768138677f0a6d2ce01f590df56043dda1df1535ac57c88517"
+    },
+    {
+      "project": "colcon-cmake",
+      "version": "0.2.30",
+      "filename": "colcon_cmake-0.2.30-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "2be9af465f64babd588e296f61c777d2c8386f9a82477dd3da7cf5142db6367d"
+    },
+    {
+      "project": "colcon-core",
+      "version": "0.21.1",
+      "filename": "colcon_core-0.21.1-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "06d67e1b23026e689a720578f140bd4b69c7ea83523e4eab7baeb26b0fe35fe6"
+    },
+    {
+      "project": "colcon-python-setup-py",
+      "version": "0.2.9",
+      "filename": "colcon_python_setup_py-0.2.9-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "6ba76adb954cb963ada852dd01fa33890ba71638c48cdb43404acb0b52e98163"
+    },
+    {
+      "project": "colcon-ros",
+      "version": "0.5.0",
+      "filename": "colcon_ros-0.5.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "21720baf112fdf3e1e96951bbf2aec0dc5b09afb884dc6cc50a2b419840749dd"
+    },
+    {
+      "project": "colcon-test-result",
+      "version": "0.3.8",
+      "filename": "colcon_test_result-0.3.8-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "0c54f701ffd4593c515b9bf2db16adf5c26526ed81ab6b4e4e9d867ed690e782"
+    },
+    {
+      "project": "coloredlogs",
+      "version": "15.0.1",
+      "filename": "coloredlogs-15.0.1-py2.py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934"
+    },
+    {
+      "project": "cryptography",
+      "version": "50.0.1",
+      "filename": "cryptography-50.0.1-cp311-abi3-musllinux_1_2_aarch64.whl",
+      "architecture": "aarch64-musllinux",
+      "sha256": "be224a65493ec5b74a158ff22a5522ce4a5ca1e543c647a3a4730d4a09e5f959"
+    },
+    {
+      "project": "distlib",
+      "version": "0.4.3",
+      "filename": "distlib-0.4.3-py2.py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "4b0ce306c966eb73bc3a7b6abad017c556dadd92c44701562cd528ac7fde4d5b"
+    },
+    {
+      "project": "docutils",
+      "version": "0.20.1",
+      "filename": "docutils-0.20.1-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "96f387a2c5562db4476f09f13bbab2192e764cac08ebbf3a34a95d9b1e4a59d6"
+    },
+    {
+      "project": "humanfriendly",
+      "version": "10.0",
+      "filename": "humanfriendly-10.0-py2.py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477"
+    },
+    {
+      "project": "importlib-metadata",
+      "version": "4.13.0",
+      "filename": "importlib_metadata-4.13.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "8a8a81bcf996e74fee46f0d16bd3eaa382a7eb20fd82445c3ad11f4090334116"
+    },
+    {
+      "project": "importlib_resources",
+      "version": "7.1.0",
+      "filename": "importlib_resources-7.1.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "1bd7b48b4088eddb2cd16382150bb515af0bd2c70128194392725f82ad2c96a1"
+    },
+    {
+      "project": "iniconfig",
+      "version": "2.3.0",
+      "filename": "iniconfig-2.3.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12"
+    },
+    {
+      "project": "lark",
+      "version": "1.1.9",
+      "filename": "lark-1.1.9-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "a0dd3a87289f8ccbb325901e4222e723e7d745dbfc1803eaf5f3d2ace19cf2db"
+    },
+    {
+      "project": "lxml",
+      "version": "6.1.2",
+      "filename": "lxml-6.1.2-cp312-cp312-musllinux_1_2_aarch64.whl",
+      "architecture": "aarch64-musllinux",
+      "sha256": "52f6d4dff133c9778a24e9a2cfc1608930b15869866171aacc5131b5a418a003"
+    },
+    {
+      "project": "more-itertools",
+      "version": "11.1.0",
+      "filename": "more_itertools-11.1.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192"
+    },
+    {
+      "project": "numpy",
+      "version": "1.26.4",
+      "filename": "numpy-1.26.4-cp312-cp312-musllinux_1_1_aarch64.whl",
+      "architecture": "aarch64-musllinux",
+      "sha256": "ab47dbe5cc8210f55aa58e4805fe224dac469cde56b9f731a4c098b91917159a"
+    },
+    {
+      "project": "packaging",
+      "version": "24.0",
+      "filename": "packaging-24.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "2ddfb553fdf02fb784c234c7ba6ccc288296ceabec964ad2eae3777778130bc5"
+    },
+    {
+      "project": "pip",
+      "version": "24.0",
+      "filename": "pip-24.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "ba0d021a166865d2265246961bec0152ff124de910c5cc39f1156ce3fa7c69dc"
+    },
+    {
+      "project": "pluggy",
+      "version": "1.6.0",
+      "filename": "pluggy-1.6.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746"
+    },
+    {
+      "project": "pycparser",
+      "version": "3.0",
+      "filename": "pycparser-3.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"
+    },
+    {
+      "project": "pydot",
+      "version": "1.4.2",
+      "filename": "pydot-1.4.2-py2.py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "66c98190c65b8d2e2382a441b4c0edfdb4f4c025ef9cb9874de478fb0793a451"
+    },
+    {
+      "project": "Pygments",
+      "version": "2.19.2",
+      "filename": "pygments-2.19.2-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b"
+    },
+    {
+      "project": "pyparsing",
+      "version": "3.1.1",
+      "filename": "pyparsing-3.1.1-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "32c7c0b711493c72ff18a981d24f28aaf9c1fb7ed5e9667c9e84e3db623bdbfb"
+    },
+    {
+      "project": "pytest",
+      "version": "9.1.1",
+      "filename": "pytest-9.1.1-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c"
+    },
+    {
+      "project": "pytest-mock",
+      "version": "3.15.1",
+      "filename": "pytest_mock-3.15.1-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "0a25e2eb88fe5168d535041d09a4529a188176ae608a6d249ee65abc0949630d"
+    },
+    {
+      "project": "pytest-repeat",
+      "version": "0.9.4",
+      "filename": "pytest_repeat-0.9.4-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "c1738b4e412a6f3b3b9e0b8b29fcd7a423e50f87381ad9307ef6f5a8601139f3"
+    },
+    {
+      "project": "pytest-rerunfailures",
+      "version": "16.6",
+      "filename": "pytest_rerunfailures-16.6-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "6af2d1ebd6e5cb79666ac408942cd6a0672a49fefd8523664770718560795e13"
+    },
+    {
+      "project": "pytest-timeout",
+      "version": "2.4.0",
+      "filename": "pytest_timeout-2.4.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "c42667e5cdadb151aeb5b26d114aff6bdf5a907f176a007a30b940d3d865b5c2"
+    },
+    {
+      "project": "python-dateutil",
+      "version": "2.8.2",
+      "filename": "python_dateutil-2.8.2-py2.py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "961d03dc3453ebbc59dbdea9e4e11c5651520a876d0f4db161e8674aae935da9"
+    },
+    {
+      "project": "PyYAML",
+      "version": "6.0.2",
+      "filename": "PyYAML-6.0.2-cp312-cp312-musllinux_1_1_aarch64.whl",
+      "architecture": "aarch64-musllinux",
+      "sha256": "0833f8694549e586547b576dcfaba4a6b55b9e96098b36cdc7ebefe667dfed48"
+    },
+    {
+      "project": "setuptools",
+      "version": "68.1.2",
+      "filename": "setuptools-68.1.2-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "3d8083eed2d13afc9426f227b24fd1659489ec107c0e86cec2ffdde5c92e790b"
+    },
+    {
+      "project": "six",
+      "version": "1.16.0",
+      "filename": "six-1.16.0-py2.py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254"
+    },
+    {
+      "project": "wheel",
+      "version": "0.48.0",
+      "filename": "wheel-0.48.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+    },
+    {
+      "project": "zipp",
+      "version": "1.0.0",
+      "filename": "zipp-1.0.0-py2.py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "8dda78f06bd1674bd8720df8a50bb47b6e1233c503a4eed8e7810686bde37656"
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+diff --git a/include/lttng/tracepoint.h b/include/lttng/tracepoint.h
+index 05265c0..9c42fbc 100644
+--- a/include/lttng/tracepoint.h
++++ b/include/lttng/tracepoint.h
+@@ -460,7 +460,9 @@ lttng_ust__tracepoints__destroy(void)
+ static void
+ lttng_ust__tracepoints__destroy(void)
+ {
++#ifndef __MUSL__
+ 	int ret;
++#endif
+ 
+ 	if (--lttng_ust_tracepoint_registered)
+ 		return;
+@@ -484,11 +486,16 @@ lttng_ust__tracepoints__destroy(void)
+ 		 */
+ 		return;
+ 	}
++#ifndef __MUSL__
++	/* OHOS/musl: dlclose() fails on still-referenced handles at destructor
++	 * time and would abort(); the library stays mapped until process exit
++	 * anyway. */
+ 	ret = dlclose(lttng_ust_tracepoint_dlopen_ptr->liblttngust_handle);
+ 	if (ret) {
+ 		fprintf(stderr, "Error (%d) in dlclose\n", ret);
+ 		abort();
+ 	}
++#endif
+ 	memset(lttng_ust_tracepoint_dlopen_ptr, 0, sizeof(*lttng_ust_tracepoint_dlopen_ptr));
+ }
+ 
+@@ -638,7 +645,9 @@ lttng_ust__tracepoints__ptrs_destroy(void)
+ static void
+ lttng_ust__tracepoints__ptrs_destroy(void)
+ {
++#ifndef __MUSL__
+ 	int ret;
++#endif
+ 
+ 	if (--lttng_ust_tracepoint_ptrs_registered)
+ 		return;
+@@ -652,11 +661,16 @@ lttng_ust__tracepoints__ptrs_destroy(void)
+ 			&& lttng_ust_tracepoint_destructors_syms_ptr->tracepoint_get_destructors_state
+ 			&& lttng_ust_tracepoint_destructors_syms_ptr->tracepoint_get_destructors_state()
+ 			&& !lttng_ust_tracepoint_ptrs_registered) {
++#ifndef __MUSL__
++		/* OHOS/musl: dlclose() fails on still-referenced handles at
++		 * destructor time and would abort(); the library stays mapped
++		 * until process exit anyway. */
+ 		ret = dlclose(lttng_ust_tracepoint_dlopen_ptr->liblttngust_handle);
+ 		if (ret) {
+ 			fprintf(stderr, "Error (%d) in dlclose\n", ret);
+ 			abort();
+ 		}
++#endif
+ 		memset(lttng_ust_tracepoint_dlopen_ptr, 0, sizeof(*lttng_ust_tracepoint_dlopen_ptr));
+ 	}
+ }
+diff --git a/src/lib/lttng-ust-common/ust-cancelstate.c b/src/lib/lttng-ust-common/ust-cancelstate.c
+index e42c7b4..4ed93c0 100644
+--- a/src/lib/lttng-ust-common/ust-cancelstate.c
++++ b/src/lib/lttng-ust-common/ust-cancelstate.c
+@@ -26,7 +26,15 @@ int lttng_ust_cancelstate_disable_push(void)
+ 
+ 	if (state->nesting++)
+ 		goto end;
++#ifdef __MUSL__
++	/* OHOS musl has no thread cancellation (no pthread_setcancelstate);
++	 * cancellation never happens, so the push/pop bookkeeping alone is
++	 * sufficient. */
++	ret = 0;
++	oldstate = 0;
++#else
+ 	ret = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &oldstate);
++#endif
+ 	if (ret) {
+ 		ERR("pthread_setcancelstate: ret=%d", ret);
+ 		return -1;
+@@ -45,15 +53,23 @@ int lttng_ust_cancelstate_disable_pop(void)
+ 		return -1;
+ 	if (--state->nesting)
+ 		goto end;
++#ifdef __MUSL__
++	/* OHOS musl: no pthread_setcancelstate; see _push(). */
++	ret = 0;
++	oldstate = 0;
++#else
+ 	ret = pthread_setcancelstate(state->oldstate, &oldstate);
++#endif
+ 	if (ret) {
+ 		ERR("pthread_setcancelstate: ret=%d", ret);
+ 		return -1;
+ 	}
++#ifndef __MUSL__
+ 	if (oldstate != PTHREAD_CANCEL_DISABLE) {
+ 		ERR("pthread_setcancelstate: unexpected oldstate");
+ 		return -1;
+ 	}
++#endif
+ end:
+ 	return 0;
+ }
+diff --git a/src/lib/lttng-ust/lttng-ust-comm.c b/src/lib/lttng-ust/lttng-ust-comm.c
+index d0cb9f2..83f30d8 100644
+--- a/src/lib/lttng-ust/lttng-ust-comm.c
++++ b/src/lib/lttng-ust/lttng-ust-comm.c
+@@ -2417,6 +2417,20 @@ void lttng_ust_exit(void)
+ 	ust_unlock();
+ 
+ 	pthread_mutex_lock(&ust_exit_mutex);
++#ifdef __MUSL__
++	/*
++	 * OHOS musl has no pthread_cancel. The listener threads hold no
++	 * resources and process exit reaps them, so just mark them
++	 * inactive.
++	 */
++	if (global_apps.thread_active) {
++		global_apps.thread_active = 0;
++	}
++	if (local_apps.thread_active) {
++		local_apps.thread_active = 0;
++	}
++	(void) ret;
++#else
+ 	/* cancel threads */
+ 	if (global_apps.thread_active) {
+ 		ret = pthread_cancel(global_apps.ust_listener);
+@@ -2436,6 +2450,7 @@ void lttng_ust_exit(void)
+ 			local_apps.thread_active = 0;
+ 		}
+ 	}
++#endif
+ 	pthread_mutex_unlock(&ust_exit_mutex);
+ 
+ 	/*
+

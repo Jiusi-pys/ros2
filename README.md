@@ -19,6 +19,33 @@ Current generic-port verification is deliberately reported by layer:
 
 See [the support matrix](docs/kaihongos_support_matrix.md) for evidence limits.
 
+### Fast DDS RK3588A evidence candidate
+
+Fast-DDS commit `e66e90fd7b1e7a14d80129002474c68bc16da2bb`
+(`fix(ohos): anchor topic RTTI and use matching bundled TinyXML2`) has been
+cross-built for OpenHarmony with `rmw_fastrtps`
+`54d2240637f18e3ec710bb73c51c79abaf91ece4`. The OHOS-specific change gives
+`TopicDescription` one out-of-line RTTI key function in `libfastrtps`, avoiding
+cross-DSO `dynamic_cast` failures in the libc++abi environment. The bundled
+TinyXML2 header and implementation are selected as one source pair when the
+third-party option is forced.
+
+On two RK3588A boards, the base deployment prefix
+`/data/local/tmp/ros2/lib` (not a temporary overlay) has passed the RTTI symbol
+contract, the `TestSubscriptionUse.no_content_filter_set` regression, all 16
+selected `rmw_fastrtps_cpp` executables, all 16 selected
+`rmw_fastrtps_dynamic_cpp` executables, and true-default A-to-B ROS 2
+communication with both `RMW_IMPLEMENTATION` and
+`FASTDDS_BUILTIN_TRANSPORTS` unset. Both nodes selected `rmw_fastrtps_cpp` and
+the subscriber received `Hello World: 1..8`.
+
+This is targeted runtime evidence, not a blanket Fast DDS release claim. The
+native Fast-DDS GTest target was not directly cross-run, dedicated SHM/zero-copy
+coverage is experimental, and DDS Security/TLS is outside this profile. A
+release must retain a separately signed FastDDS evidence manifest and archive
+SHA-256 in an independent record or WORM store; a local hash seal alone is not
+release authorization.
+
 Source locking covers both the 111 top-level repositories and build-time
 vendor downloads. The OHOS `ament_vendor` hook resolves mutable upstream tags
 through `cmake/ohos-vendor-sources.lock.json`, rejects unknown tag/URL pairs,
@@ -139,14 +166,33 @@ an acceptance entry point. Its historical prefix assertion rejects even the
 current isolated deployment. The replacement rejects the legacy runtime and
 other verification prefixes while allowing only the expected current prefix.
 
-## MDDS release boundary
+## Legacy MDDS-specific workflow
 
-The generic profile neither builds nor validates MDDS/rmw_mdds/mdds_gateway.
-Their lock entries reference public commits; unpublished MDDS series, dirty
-snapshots and legacy launcher/deployment changes are intentionally not part of
-this release. Existing committed MDDS test history is retained, without turning
-it into generic-port acceptance evidence. Use a separately reviewed MDDS
-workflow when those components are needed.
+The following launcher rules apply to `deploy_ohos.sh` and the separate MDDS
+profile, not to `deploy_ohos_generic.sh` or its direct Fast DDS executables.
+
+On the board, run commands only when the deployed environment was accepted:
+
+```sh
+if . /data/local/tmp/ros2/env.sh; then
+  ros2 --help                       # deployment-owned wrapper, not /usr/local/bin/ros2
+  mdds_exec "$ROS2_TALKER_RAW"     # token is scoped to this child process
+fi
+```
+
+Automated callers must use `. /data/local/tmp/ros2/env.sh || exit 70` (or an
+equivalent checked conditional). A failed source can return to its caller;
+running the next command unconditionally could reuse an inherited stale
+overlay.
+
+The shared `libmdds.so` never grants or changes the caller's process token.
+Every DSoftBus process must enter through `mdds_token_exec`/`mdds_exec`.
+The default board suite runs, in order on one isolated domain, one explicitly
+unprivileged fail-closed probe and then the just-built package launcher; both
+must appear in the exact archived verdict set.
+
+See [AGENTS.md](AGENTS.md) for the full porting details (toolchain, musl
+quirks, Qt/OGRE recipes, board-test infrastructure, debugging tips).
 
 ## Reproducible port snapshot
 
@@ -159,9 +205,9 @@ are represented in `patches/` as:
   non-ignored untracked working-tree state captured through a temporary Git
   index. The real subrepo index/worktree is not changed.
 
-- `./scripts/export_patches.sh` — development-only export of unpublished commits
-  and current worktree snapshots. Inspect its output before publication; this
-  tool can include work outside the generic release scope.
+- `./scripts/export_patches.sh` — export all unpublished commits and current
+  worktree snapshots, including Jiusi-owned repos whose HEAD is not yet on
+  their remote.
 - `pixi run python scripts/freeze_ros2_repos.py` — regenerate the immutable
   base manifest after exporting patches.
 - `./scripts/apply_patches.sh` — replay `patches/` onto a fresh
@@ -181,10 +227,10 @@ pixi run python scripts/freeze_ros2_repos.py
 ```
 
 Before release, reproduce in an empty directory using the lock manifest and
-run the full build and relevant board gates. Only explicitly authorized port
-changes belong in the published patch inventory. In this generic profile the
-owned MDDS repositories have no unpublished fallback patches; local MDDS work
-remains outside the release checkout. Pushing is a separate human gate.
+run the full build and relevant board/E2E gates. An unpushed owned-repository
+HEAD is acceptable only while its complete fallback series/snapshot is
+present; pushing remains a human provenance gate and is never done by these
+scripts.
 
 # About 
 The Robot Operating System (ROS) is a set of software libraries and tools that help you build robot applications.

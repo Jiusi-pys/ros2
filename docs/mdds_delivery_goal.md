@@ -66,8 +66,15 @@ evidence categories. Only terminate processes owned by the current test run.
   used the rebuilt `libmdds.so` in its own test directory; shared board
   deployment libraries were not replaced.
 - `ownership_fake_green_20260906`: 24/25 fake Socket/Bytes tests passed. The
-  remaining first-announcement test exposed its 60-second fixture announce
-  period versus an immediate assertion; correction and rerun are required.
+  remaining test exposed its 60-second fixture announce period versus an
+  immediate assertion. After correcting the fixture, all 25 passed in
+  `ownership_fake_green2_20260906`.
+- `graph_ownership_overlay_20260906_02`: real cross-board ownership regression
+  PASS with both real process exit codes zero. Both rebuilt libraries were
+  loaded from a hash-verified per-run overlay; shared board deployment stayed
+  unchanged. This covers two nodes' pub/sub/service/client ownership, not the
+  complete graph/CLI acceptance matrix. MDDS commit `c0ec5d7` and RMW commit
+  `7477f51` contain the feature; pre-existing changes remain separate.
 - `board_dsoftbus_contexts.py`: real board A second-context creation failed
   with `dsoftbus callback/session slot busy` under the DSoftBus-only profile.
 - CLI inventory was read from both boards. Both complete entry-point metadata
@@ -79,6 +86,10 @@ evidence categories. Only terminate processes owned by the current test run.
   board-runner aggregate was invalidated by concurrent generation of the same
   package driver. Run board runners for the same package sequentially, even
   when targeting different boards; they share local generated files.
+- `broker_codec_green_20260906` passed the initial 10 codec/reassembly cases;
+  `broker_codec_final_20260906` passed all 12 after adding interleaved-transfer
+  and failed-admission regressions. This is a test-only library; no Unix client,
+  broker membership, or production DSoftBus integration is implemented yet.
 
 Further known graph gaps to address after ownership: internal service endpoints
 are exposed by topic queries, duplicate-node cardinality is collapsed, large

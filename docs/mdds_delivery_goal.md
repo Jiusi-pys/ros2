@@ -296,10 +296,25 @@ evidence categories. Only terminate processes owned by the current test run.
   the actual package's 26 cases also pass on the RK3588A binary128 ABI.
   Harness commit `f1e1c17` separately fixes legitimate `+` in READY paths.
 
+- Commits `e066dbb` and `3c7b056` add persistent broker lifetime and a foreground,
+  per-domain service launcher. Seven lifecycle tests and six real POSIX
+  exec/lock tests passed. The actual service rejected duplicate starts while
+  preserving live native communication, then drained on both boards.
+- `ros_broker_20260906_04` passed the production ROS integration subset:
+  two Contexts per board, 30 total exact reliable messages, four service calls,
+  duplicate-node counts and endpoint ownership, node destruction with its
+  Context retained, and peer-process withdrawal. All ROS/daemon processes
+  exited zero; actual library/SDK mappings and no owned UDP were checked.
+  The eight negative receipt tests passed. The runner and precise boundaries
+  are documented in `scripts/mdds_e2e/ROS_BROKER.md`.
+- The same actual run observed endpoint type hashes as `INVALID`. Source
+  inspection also confirms that enclave queries currently fill empty strings.
+  These metadata gaps must be corrected before the complete graph gate passes.
+
 There are still 21 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
-duplicate-node cardinality, large ANNOUNCE delivery
+broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,
-multi-process broker integration, and the full 98-case CLI/graph/transport
+the remaining multi-process integration matrix, and the full 98-case CLI/graph/transport
 matrix. Internal service-topic separation and announcement wakeup have been
 fixed as individual features; those fixes do not certify the remaining gates.

@@ -17,7 +17,9 @@ Each board creates two Contexts, each with an independent node, reliable
 publisher/subscription and AddTwoInts service/client. Two same-name nodes
 share one Context on each board. Phase 1 requires ten exact incoming messages,
 two correct service results, ACK completion, correct duplicate cardinality and
-per-node endpoint ownership on each board. Phase 2 destroys the beta node and
+per-node endpoint ownership on each board. Each Context selects its own enclave
+(`/A/alpha`, `/A/beta`, `/B/alpha`, `/B/beta`); every node/enclave association is
+checked, including duplicates. Phase 2 destroys the beta node and
 one duplicate while keeping beta's Context alive; each survivor exchanges five
 fresh messages and verifies endpoint/node removal. Finally A actually exits,
 and B must observe removal of A's nodes, publisher match and service availability
@@ -28,13 +30,13 @@ process reports its precise MDDS/RMW library mappings, full rclpy package/native
 verification and absence of owned UDP sockets. The native daemon is inspected
 for its exact executable, actual DSoftBus SDK mapping and absence of owned UDP.
 Host validation checks the exact received strings, service values, node counts,
-withdrawal and resource cleanup. Eight negative receipt checks reject corrupted
+withdrawal and resource cleanup. Nine negative receipt checks reject corrupted
 payloads, ghost nodes, missing withdrawal, wrong libraries, UDP, failed child
-exits and unfinished broker cleanup. Run them separately with:
+exits, incorrect enclave associations and unfinished broker cleanup. Run them separately with:
 
 ```sh
 .pixi/envs/default/python.exe scripts/mdds_e2e/test_ros_broker_receipt.py \
-  ohos_test_logs/ros_broker/ros_broker_20260906_04
+  ohos_test_logs/ros_broker/ros_enclave_green_20260907
 ```
 
 `ros_broker_20260906_04` passed this gate: 30 total exact received messages,
@@ -47,6 +49,8 @@ Run `_01` stopped during preparation because an older helper required a differen
 owner label; no ROS test ran in that attempt.
 
 This is a graph/data integration subset, not the full graph or CLI gate.
-In particular, observed endpoint type hashes remain `INVALID`; custom enclave
-metadata and other remaining graph contracts still require implementation and
-tests. CLI acceptance remains 21/98 until actual command receipts are added.
+In particular, observed endpoint type hashes remain `INVALID`; other remaining
+graph contracts still require implementation and tests. The strengthened enclave
+case failed in `ros_enclave_red_20260907` with empty enclave fields, then passed
+in `ros_enclave_green_20260907`, together with all nine negative receipt checks.
+CLI acceptance remains 21/98 until actual command receipts are added.

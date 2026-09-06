@@ -1,5 +1,6 @@
 # This probe verifies a graph/data subset; full type-hash/enclave/CLI gates are separate.
 import argparse
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -51,6 +52,8 @@ def wait(predicate, seconds=65):
         if (root / 'ros.stop').exists():
             raise RuntimeError('peer failed or stop arrived before phase completion')
         spin()
+    if records:
+        print('ROS_BROKER_ENCLAVES_OBSERVED ' + json.dumps(records[0]['node'].get_node_names_and_namespaces_with_enclaves()), flush=True)
     raise RuntimeError('ROS broker phase deadline expired')
 
 def snapshot(stage):
@@ -61,6 +64,15 @@ def snapshot(stage):
 def graph_ok(churn=False):
     observer = records[0]['node']
     nodes = observer.get_node_names_and_namespaces()
+    enclave_rows = [tuple(v) for v in observer.get_node_names_and_namespaces_with_enclaves() if v[1] == ns]
+    expected_enclaves = Counter()
+    for role in ('A', 'B'):
+        expected_enclaves[('alpha_' + role, ns, '/' + role + '/alpha')] = 1
+        expected_enclaves[('duplicate_' + role, ns, '/' + role + '/alpha')] = 1 if churn else 2
+        if not churn:
+            expected_enclaves[('beta_' + role, ns, '/' + role + '/beta')] = 1
+    if Counter(enclave_rows) != expected_enclaves:
+        return False
     for role in ('A', 'B'):
         if nodes.count(('duplicate_' + role, ns)) != (1 if churn else 2):
             return False
@@ -138,12 +150,13 @@ def exchange(active, phase, services=False):
     received = {r['name']: [v for v in r['received'] if v in {payload(a.peer_serial, r['name'], phase, i) for i in range(5)}] for r in active}
     result = {'role': a.role, 'phase': phase, 'messages': 5 * len(active), 'service_calls': len(active) if services else 0, 'graph': True, 'ack': True, 'nonce': a.nonce, 'received': received, 'service_results': {r['name']: r['future'].result().sum for r in active} if services else {}, 'nodes': [list(v) for v in records[0]['node'].get_node_names_and_namespaces() if v[1] == ns]}
     result['type_hashes'] = {path(role, name) + '/out': [str(getattr(ep, 'topic_type_hash', None)) for ep in records[0]['node'].get_publishers_info_by_topic(path(role, name) + '/out')] for role in ('A', 'B') for name in ('alpha', 'beta')}
+    result['enclaves'] = [list(v) for v in records[0]['node'].get_node_names_and_namespaces_with_enclaves() if v[1] == ns]
     print('ROS_BROKER_PHASE ' + json.dumps(result), flush=True)
 try:
     for name in ('alpha', 'beta'):
         context = Context()
         contexts.append(context)
-        rclpy.init(context=context, signal_handler_options=SignalHandlerOptions.NO)
+        rclpy.init(args=['--ros-args', '--enclave', '/' + a.role + '/' + name], context=context, signal_handler_options=SignalHandlerOptions.NO)
         assert get_rmw_implementation_identifier() == 'rmw_mdds'
         node = rclpy.create_node(name + '_' + a.role, namespace=ns, context=context, start_parameter_services=False, enable_rosout=False)
         all_nodes.append(node)

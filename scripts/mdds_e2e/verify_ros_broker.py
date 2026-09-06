@@ -54,6 +54,12 @@ def validate(root, run, a, b):
                 for role in ('A', 'B'):
                     expected_nodes['duplicate_' + role, ns] = 2 if n == 1 else 1
                 require(Counter((tuple(v) for v in phase['nodes'])) == expected_nodes, 'wrong complete node cardinality')
+                expected_enclaves = Counter()
+                for role in ('A', 'B'):
+                    for name in names:
+                        expected_enclaves[(name + '_' + role, ns, '/' + role + '/' + name)] = 1
+                    expected_enclaves[('duplicate_' + role, ns, '/' + role + '/alpha')] = 2 if n == 1 else 1
+                require(Counter(tuple(v) for v in phase.get('enclaves', [])) == expected_enclaves, 'wrong per-context enclave metadata')
             provenance = json_rows(logs['ros'], 'ROS_BROKER_PROVENANCE ')
             require([v['stage'] for v in provenance] == [1, 2], 'missing provenance')
             for v in provenance:

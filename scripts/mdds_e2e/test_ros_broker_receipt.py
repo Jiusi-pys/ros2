@@ -64,6 +64,10 @@ class Receipt(unittest.TestCase):
         p.write_text('\n'.join((x for x in p.read_text().splitlines() if not x.startswith('ROS_BROKER_PEER_WITHDRAWN '))) + '\n')
         self.assertFalse(self.result()['passed'])
 
+    def test_wrong_enclave_association_is_rejected(self):
+        self.alter_row(A, 'ROS_BROKER_PHASE ', lambda v: v['enclaves'][0].__setitem__(2, '/wrong_context'))
+        self.assertFalse(self.result()['passed'])
+
     def test_wrong_loaded_library_is_rejected(self):
         self.alter_row(A, 'ROS_BROKER_PROVENANCE ', lambda v: v.update(libmdds_paths=['/data/local/tmp/ros2/lib/libmdds.so']))
         self.assertFalse(self.result()['passed'])

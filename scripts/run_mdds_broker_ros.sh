@@ -115,4 +115,4 @@ for board in "$BOARD_A" "$BOARD_B"; do
 done
 "$GRAPH_HOST_PYTHON" "$scratch/verify_ros_broker.py" "$LOGDIR" "$MDDS_OWNED_RUN_ID" "$variant" "$BOARD_A" "$BOARD_B"
 "$GRAPH_HOST_PYTHON" "$scratch/test_ros_broker_receipt.py" "$LOGDIR" > "$LOGDIR/receipt_validation_tests.log" 2>&1
-printf 'ROS_BROKER_RECEIPT_TESTS PASS count=8\n'
+printf 'ROS_BROKER_RECEIPT_TESTS PASS count=9\n'

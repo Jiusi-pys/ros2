@@ -310,6 +310,14 @@ evidence categories. Only terminate processes owned by the current test run.
 - The same actual run observed endpoint type hashes as `INVALID`. Source
   inspection also confirms that enclave queries currently fill empty strings.
   These metadata gaps must be corrected before the complete graph gate passes.
+- MDDS commits `eb84a16` and `4f74710` add bounded discovery USER_DATA and
+  atomic local metadata creation. Codec and Participant RED/GREEN coverage
+  reached 58 and 100 passing cases respectively. RMW commit `9086418` then
+  propagates each Context's enclave and returns aligned node/enclave arrays.
+  Its graph unit cases passed 38/38; `ros_enclave_green_20260907` passed custom
+  enclaves on four actual Contexts across both boards, with the existing data,
+  service and retirement checks and nine receipt-negative tests. This closes
+  the tested enclave gap above, not the remaining endpoint type-hash gap.
 
 There are still 21 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include

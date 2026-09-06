@@ -7,6 +7,7 @@ import re
 import cli_acceptance as acceptance
 from cli_daemon import node_names, oracle, batch_recipe
 from cli_action import goal_id, FEEDBACK, RESULT
+from cli_service_events import events_match
 from cli_daemon_guard import owned
 from cli_service_graph import recipe as service_recipe
 from cli_node_info import recipe as node_info_recipe
@@ -36,7 +37,7 @@ def validate_report(value, root, run, board, nonce):
         if record['pid']!=daemon['pid'] or record['start']!=daemon['start']:raise ValueError('daemon replaced during graph queries')
     if value['daemon_exited']!={'pid':daemon['pid'],'start':daemon['start'],'terminated':True}:raise ValueError('daemon exit not tied to owned process')
     peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
-    recipes=batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role)
+    recipes=batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce)
     labels=['status_before','start','status_running','nodes_cached','nodes_direct']+[r[1] for r in recipes]+['stop','status_after','nodes_after_stop']
     if [r['label'] for r in value['results']]!=labels:raise ValueError('missing or reordered lifecycle command')
     services={label:(case,['ros2']+argv,expected) for case,label,argv,expected in recipes}
@@ -52,15 +53,24 @@ def validate_report(value, root, run, board, nonce):
         else:expected='The daemon is running' if label=='status_running' else 'The daemon is not running';expected_case='cli:daemon/status';argv=['ros2','daemon','status']
         if case!=expected_case or execution['argv']!=argv or result['expected']!=expected or not result['passed']:
             raise ValueError('wrong CLI lifecycle recipe')
-        if execution['returncode']!=0 or execution['board_serial']!=board or execution['child_pid']<=0 or not str(execution['child_start']).isdecimal():raise ValueError('CLI child identity/exit failed')
+        if execution['returncode'] not in ((0,2) if case=='cli:service/echo' else (0,)) or execution['board_serial']!=board or execution['child_pid']<=0 or not str(execution['child_start']).isdecimal():raise ValueError('CLI child identity/exit failed')
         log_ref={**execution['log'],'path':board+'.'+execution['log']['path']}
         raw=acceptance.read_artifact(log_ref,root).decode()
         stdout=raw.split('MDDS_CLI_STDOUT_BEGIN\n',1)[1].split('\nMDDS_CLI_STDOUT_END',1)[0]
-        if not oracle(case,stdout,expected):raise ValueError('CLI functional output differs')
+        if case=='cli:service/echo':
+            record=json.loads((root/(board+'.introspection.result.json')).read_text())
+            wanted={**expected,'run_id':run,'nonce':nonce,'board':board,'client_gid':record.get('client_gid'),'sequence_number':record.get('sequence_number')}
+            if record!=wanted or not events_match(stdout,record):raise ValueError('service event payload/identity differs')
+            if (root/(board+'.ros.log')).read_text().splitlines().count('CLI_INTROSPECTION_CLIENT '+json.dumps(record))!=1:raise ValueError('client introspection record missing')
+            peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
+            server=json.loads((root/(peer_board+'.introspection.server.json')).read_text())
+            if server!={**expected,'run_id':run,'nonce':nonce,'board':peer_board,'count':1}:raise ValueError('peer service callback differs')
+            if (root/(peer_board+'.ros.log')).read_text().splitlines().count('CLI_INTROSPECTION_SERVER '+json.dumps(server))!=1:raise ValueError('peer service callback missing')
+        elif not oracle(case,stdout,expected):raise ValueError('CLI functional output differs')
         if case=='cli:node/list':
             if 'nodes in the graph that share an exact name' not in raw:raise ValueError('duplicate-node warning missing')
         if case=='cli:node/info' and expected['duplicate'] and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' not in raw:raise ValueError('duplicate-node info warning missing')
-        if ('--no-daemon' in argv or case=='cli:action/send_goal') and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if ('--no-daemon' in argv or case in ('cli:action/send_goal','cli:service/echo')) and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
         if case=='cli:action/send_goal':
             peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
             received=json.loads((root/(peer_board+'.action_goal.json')).read_text())
@@ -108,6 +118,8 @@ def main():
                       'result_exact':'Result:\n    sequence:\n'+sequence,
                       'status_succeeded':'Goal finished with status: SUCCEEDED'}
             receipt['assertions']=[{'id':key,'passed':True,'execution':0,'pattern':text} for key,text in patterns.items()]
+        if case['id']=='cli:service/echo':
+            receipt['service_transactions']=[{'path':board+'.introspection.'+kind+'.json','sha256':acceptance.digest((root/(board+'.introspection.'+kind+'.json')).read_bytes())} for board in reports for kind in ('result','server')]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

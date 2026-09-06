@@ -35,6 +35,7 @@ dups = []
 contexts = []
 all_nodes = []
 executors = []
+introspection = None
 
 def payload(sender, name, phase, index):
     return f'{a.run_id}|{a.nonce}|{sender}|{name}|{phase}|{index}'
@@ -47,7 +48,33 @@ def spin():
         e.spin_once(timeout_sec=0)
     if any((r['bad'] for r in records)):
         raise RuntimeError('unexpected ROS payload')
+    tick_introspection()
     time.sleep(0.002)
+
+
+def tick_introspection():
+    if introspection is None:return
+    state=introspection;node=records[1]['node']
+    if not (root/'introspection.ready').exists() and node.count_subscribers(state['service']+'/_service_event')==1 and records[0]['node'].count_subscribers(ns+'/'+a.role+'/introspect/_service_event')==1:
+        (root/'introspection.ready').write_text(a.nonce+'\n')
+    if not (root/'introspection.go').exists():return
+    assert (root/'introspection.go').read_text().strip()==a.nonce
+    if state['future'] is None:
+        if not state['client'].wait_for_service(timeout_sec=0):return
+        infos=node.get_publishers_info_by_topic('rq'+state['service']+'Request',no_mangle=True)
+        assert len(infos)==1 and infos[0].node_name=='beta_'+a.role
+        state['client_gid']=list(infos[0].endpoint_gid)
+        request=AddTwoInts.Request();request.a=state['a'];request.b=state['b']
+        state['future']=state['client'].call_async(request)
+        pending=state['client']._pending_requests
+        state['sequence_number']=next(sequence for sequence,future in pending.items() if future is state['future'])
+    if state['future'].done() and not state['written']:
+        result=state['future'].result();assert result.sum==state['a']+state['b']
+        value={key:state[key] for key in ('service','a','b','client_gid','sequence_number')}
+        value.update(run_id=a.run_id,nonce=a.nonce,board=a.self_serial,sum=result.sum)
+        (root/'introspection.result.json').write_text(json.dumps(value)+'\n')
+        print('CLI_INTROSPECTION_CLIENT '+json.dumps(value),flush=True)
+        state['written']=True
 
 
 def cli_fixture():
@@ -290,12 +317,30 @@ try:
             return result
         records[0]['action_server']=ActionServer(records[0]['node'],Fibonacci,ns+'/'+a.role+'/cli_action',execute_cli_action)
         records[1]['action_client']=ActionClient(records[1]['node'],Fibonacci,ns+'/'+other+'/cli_action')
+    elif (root/'cli_batch').read_text().strip() == 'introspection':
+        from rclpy.service_introspection import ServiceIntrospectionState
+        server_count=[]
+        def introspection_serve(request,response):
+            server_count.append(1);assert len(server_count)==1
+            assert request.a==int(a.nonce[:7],16)+(100 if other=='A' else 200) and request.b==17
+            response.sum=request.a+request.b
+            value={'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'service':ns+'/'+a.role+'/introspect','a':request.a,'b':request.b,'sum':response.sum,'count':1}
+            (root/'introspection.server.json').write_text(json.dumps(value)+'\n')
+            print('CLI_INTROSPECTION_SERVER '+json.dumps(value),flush=True)
+            return response
+        event_qos=QoSProfile(depth=32,reliability=ReliabilityPolicy.RELIABLE)
+        event_server=records[0]['node'].create_service(AddTwoInts,ns+'/'+a.role+'/introspect',introspection_serve)
+        event_server.configure_introspection(records[0]['node'].get_clock(),event_qos,ServiceIntrospectionState.CONTENTS)
+        event_client=records[1]['node'].create_client(AddTwoInts,ns+'/'+other+'/introspect')
+        event_client.configure_introspection(records[1]['node'].get_clock(),event_qos,ServiceIntrospectionState.CONTENTS)
+        introspection={'client':event_client,'future':None,'written':False,'service':ns+'/'+other+'/introspect','a':int(a.nonce[:7],16)+(100 if a.role=='A' else 200),'b':17}
     snapshot(1)
     exchange(records, 1, True)
     cli_fixture()
     (root / 'phase1.done').write_text(a.nonce + '\n')
     wait(lambda: (root / 'phase2.go').is_file() and (root / 'phase2.go').read_text().strip() == a.nonce)
     beta = records[1]
+    introspection = None
     for key in ('action_client','action_server'):
         action=beta.pop(key,None)
         if action is not None:action.destroy()

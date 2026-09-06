@@ -220,6 +220,13 @@ def terminal_marker(run_id, case_id, returncode, argv, board_serial):
     return 'MDDS_CLI_TERMINAL ' + json.dumps(body, sort_keys=True, separators=(',', ':'))
 
 
+def controlled_stop_marker(run_id, case_id, execution):
+    body={'run_id':run_id,'case_id':case_id,'board_serial':execution['board_serial'],
+          'argv_sha256':digest(json.dumps(execution['argv'],ensure_ascii=True,separators=(',',':')).encode('utf-8')),
+          'stop':execution['controlled_stop']}
+    return 'MDDS_CLI_CONTROLLED_STOP '+json.dumps(body,sort_keys=True,separators=(',',':'))
+
+
 def read_artifact(reference, root):
     if not isinstance(reference, dict) or set(reference) != {'path', 'sha256'}:
         raise ValueError('evidence reference must have exactly path and sha256')
@@ -268,13 +275,28 @@ def validate_receipt(case, reference, manifest, root):
             raise ValueError('execution argv must be a nonempty string array')
         if '--help' in argv or '-h' in argv:
             raise ValueError('help output is not functional evidence')
-        if type(execution.get('returncode')) is not int or execution['returncode'] != 0:
+        code=execution.get('returncode')
+        controlled=case['id']=='cli:service/echo'
+        if type(code) is not int or code not in ((0,2) if controlled else (0,)):
             raise ValueError('functional command did not terminate successfully')
+        if not controlled and 'controlled_stop' in execution:
+            raise ValueError('controlled stop is not supported for this case')
         required = case['command']
         if not required or argv[:len(required)] == required:
             matched_command = True
         log = read_artifact(execution['log'], root).decode('utf-8')
-        marker = terminal_marker(manifest['run_id'], case['id'], 0, argv, board_serial)
+        if controlled:
+            start=execution.get('child_start');pid=execution.get('child_pid')
+            if type(pid) is not int or pid<=0 or not isinstance(start,str) or not start.isdecimal():
+                raise ValueError('controlled stop lacks child identity')
+            begin='MDDS_CLI_STDOUT_BEGIN\n';end='\nMDDS_CLI_STDOUT_END\n'
+            if log.count(begin)!=1 or log.count(end)!=1:raise ValueError('controlled stop lacks captured stdout')
+            stdout=log.split(begin,1)[1].split(end,1)[0]
+            expected_stop={'signal':2,'reason':'functional_observed','child_pid':pid,'child_start':start,'stdout_sha256':digest(stdout.encode('utf-8'))}
+            if execution.get('controlled_stop')!=expected_stop:raise ValueError('controlled stop identity or observed stdout differs')
+            stop_marker=controlled_stop_marker(manifest['run_id'],case['id'],execution)
+            if log.splitlines().count(stop_marker)!=1:raise ValueError('controlled stop marker missing or repeated')
+        marker = terminal_marker(manifest['run_id'], case['id'], code, argv, board_serial)
         if log.splitlines().count(marker) != 1:
             raise ValueError('raw log lacks exactly one matching command terminal marker')
         logs.append(log)

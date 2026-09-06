@@ -15,9 +15,11 @@ from cli_daemon_guard import assert_absent, domain_daemons, observe, owned, reti
 from cli_service_graph import oracle as service_oracle, recipe as service_recipe
 from cli_node_info import oracle as node_info_oracle, recipe as node_info_recipe
 from cli_action import oracle as action_oracle, recipe as action_recipe
+from cli_service_echo import recipe as echo_recipe, execute as execute_echo
 
 
-def batch_recipe(mode,ns,peer):
+def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='introspection':return echo_recipe(ns,peer,nonce)
     if mode=='action':return action_recipe(ns,peer)
     if mode=='daemon':return service_recipe(ns,peer)+node_info_recipe(ns,peer)
     raise ValueError('unknown CLI daemon batch')
@@ -108,7 +110,8 @@ def main():
     report={'run_id':run,'board':board,'peer':peer,'nonce':nonce,'results':[],'before':assert_absent()}
     output=root/'cli_daemon';output.mkdir(mode=0o700)
     def command(case,label,args,expected):
-        value=execute(['ros2']+args,output,run,board,case,label,expected)
+        if case=='cli:service/echo':value=execute_echo(['ros2']+args,output,run,board,case,label,expected,nonce)
+        else:value=execute(['ros2']+args,output,run,board,case,label,expected)
         report['results'].append(value)
         if not value['passed']:
             report['fixture_phase2_started_before_failure']=(root/'phase2.go').exists()
@@ -127,7 +130,7 @@ def main():
         command('cli:node/list','nodes_cached',['node','list'],expected)
         command('cli:node/list','nodes_direct',['node','list','--no-daemon','--spin-time','3'],expected)
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
-        for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role):
+        for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce):
             command(case,label,argv,wanted)
         report['daemon_after_queries']=inspect_daemon(root)
         if report['daemon_after_queries']['pid']!=report['daemon']['pid'] or report['daemon_after_queries']['start']!=report['daemon']['start']:

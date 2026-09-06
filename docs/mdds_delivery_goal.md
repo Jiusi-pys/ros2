@@ -387,7 +387,15 @@ in the peer callback. Ten output-oracle tests, nine action receipt tests and
 eleven surrounding ROS receipt tests pass. Cancellation and rejection remain
 separate action behavior gates.
 
-There are still only 41 independently validated CLI operations out of 98, without
+`cli_service_echo_20260907_02` adds real service echo on both boards with CONTENTS
+introspection enabled at the client and server. All four events have matching
+request-writer GID, sequence and nonce-derived payloads, bound to actual client
+and opposite-server records. Echo stops only after complete observation and its
+real SIGINT-derived return code 2 is preserved. Nine echo receipt tests, ten
+event-oracle tests, nine controlled-stop tests, seventeen original acceptance
+tests and eleven surrounding ROS receipt tests pass.
+
+There are still only 42 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

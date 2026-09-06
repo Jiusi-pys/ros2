@@ -46,7 +46,9 @@ evidence for the tested versions, platforms, and configurations.
   daemon composition are committed and component-tested. Native channel
   generation control and the physical wire pump have observed RED tests and
   are being implemented. The production factory has not switched to a physical
-  broker; the complete CLI matrix is still 12 PASS / 86 NOT_RUN, with no push.
+  broker. Two independently validated CLI batches now cover 21 distinct cases;
+  77 cases lack complete receipts. This is not a merged single-release gate,
+  and there has been no push.
 - Existing `run_mdds_cli.sh` substitutes graph counts for `action send_goal`.
   Replace that exemption with a real command/result test. The current generic
   acceptance suite already exercises real action commands for other RMWs.
@@ -231,6 +233,43 @@ evidence categories. Only terminate processes owned by the current test run.
   AF_UNIX and fragment codecs, with fake physical Channels. Small-MTU large
   ANNOUNCE, exact duplex payload, bounded admission, directional retirement,
   stale generation/nonce, FIFO tickets and timeout behavior await GREEN.
+- `rmw_wait_validation_red_20260906` reproduced twelve failures, including
+  nine real owned-child SIGSEGVs, against the old wait implementation.
+  `rmw_wait_validation_green_20260906` passed all twelve exact child filters;
+  `rmw_wait_actual_green_20260906` passed the actual package's twelve tests.
+  Commit `bb71497` validates all collections before consuming readiness and
+  rejects guard creation after shutdown. Independent Tier 2 review found no
+  actionable defect in that change. The separate 16-case timeout regression
+  then exposed three large-duration deadline overflows; repair is in progress.
+- `cli_offline_20260906_01` passed package creation and bag-plugin listing,
+  but its seven security operations failed after SROS2 supplied an EC curve
+  class to cryptography 50.0.1. SROS2 commit `d6d725b` supplies the required
+  instance. Host regression changed two failures to four passes; both boards
+  and the local install now contain the exact backed-up, verified module fix.
+  Each board generated a real P256 key/certificate and verified its signature.
+  `cli_offline_20260906_02` then passed all nine real operations and independent
+  host certificate/signature/file oracles. Commit `49740b8` contains the CLI
+  harness. The original twelve metadata cases and these nine have disjoint,
+  currently validated receipts; generating security artifacts does not prove
+  MDDS enforces their policies or that cross-board transport was exercised.
+- The first WirePump implementation passed nine tests; the remaining flow
+  test used an insufficient delivery barrier and observed an older queued
+  payload. `broker_wire_pump_delivery_barrier_green_20260906` passed all ten
+  with 272 real local SENDs, complete per-destination source checks, directional
+  retirement and a fresh exact surviving payload. Production WirePump was not
+  changed to satisfy that fixture correction. Independent Tier 3 review then
+  found a separate small-capacity negotiation defect; an eleventh test now
+  requires successful 512 KiB/1 MiB negotiation and boundary behavior.
+- Native channel tests reproduced bytes-before-up, stop cancellation and
+  concurrent transition-order failures. Their fixes passed nine cases; a
+  tenth reproduced natural retirement incorrectly promising an explicit close
+  completion. `broker_channel_ten_green_20260906` passed all ten after correcting
+  that status. A separate fresh-process test denied real C++ allocations during
+  stop: its RED left channels open after bad_alloc, and
+  `broker_channel_stop_noalloc_green_20260906` passed with zero rejected
+  allocations, all three SDK fds closed, the blocked send returned and all
+  channel/byte counters zero. External cleanup-owner callback reentry remains
+  a specifically identified lifecycle boundary requiring its own regression.
 
 Remaining gates include duplicate-node cardinality, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

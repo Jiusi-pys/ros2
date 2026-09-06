@@ -8,6 +8,7 @@ import cli_acceptance as acceptance
 from cli_daemon import node_names, oracle, batch_recipe
 from cli_action import goal_id, FEEDBACK, RESULT
 from cli_service_events import events_match
+from cli_parameters import values as parameter_values,typed_equal
 from cli_daemon_guard import owned
 from cli_service_graph import recipe as service_recipe
 from cli_node_info import recipe as node_info_recipe
@@ -70,7 +71,13 @@ def validate_report(value, root, run, board, nonce):
         if case=='cli:node/list':
             if 'nodes in the graph that share an exact name' not in raw:raise ValueError('duplicate-node warning missing')
         if case=='cli:node/info' and expected['duplicate'] and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' not in raw:raise ValueError('duplicate-node info warning missing')
-        if ('--no-daemon' in argv or case in ('cli:action/send_goal','cli:service/echo')) and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if ('--no-daemon' in argv or case.startswith('cli:param/') or case in ('cli:action/send_goal','cli:service/echo')) and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if case.startswith('cli:param/'):
+            peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
+            state=json.loads((root/(peer_board+'.parameter_state.json')).read_text())
+            wanted={'run_id':run,'nonce':nonce,'board':peer_board,'node':'/ros_broker_'+run+'/alpha_'+peer_role,'values':parameter_values(nonce,peer_role)}
+            if not typed_equal(state,wanted):raise ValueError('peer parameter state differs from fixture contract')
+            if case=='cli:param/dump' and (root/(board+'.parameters_dump.yaml')).read_text()!=stdout:raise ValueError('dump file differs from actual CLI output')
         if case=='cli:action/send_goal':
             peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
             received=json.loads((root/(peer_board+'.action_goal.json')).read_text())
@@ -120,6 +127,9 @@ def main():
             receipt['assertions']=[{'id':key,'passed':True,'execution':0,'pattern':text} for key,text in patterns.items()]
         if case['id']=='cli:service/echo':
             receipt['service_transactions']=[{'path':board+'.introspection.'+kind+'.json','sha256':acceptance.digest((root/(board+'.introspection.'+kind+'.json')).read_bytes())} for board in reports for kind in ('result','server')]
+        if case['id'].startswith('cli:param/'):
+            receipt['peer_parameter_state']=[{'path':board+'.parameter_state.json','sha256':acceptance.digest((root/(board+'.parameter_state.json')).read_bytes())} for board in reports]
+            if case['id']=='cli:param/dump':receipt['dump_files']=[{'path':board+'.parameters_dump.yaml','sha256':acceptance.digest((root/(board+'.parameters_dump.yaml')).read_bytes())} for board in reports]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

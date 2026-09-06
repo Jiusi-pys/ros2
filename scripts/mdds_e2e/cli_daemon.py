@@ -16,9 +16,11 @@ from cli_service_graph import oracle as service_oracle, recipe as service_recipe
 from cli_node_info import oracle as node_info_oracle, recipe as node_info_recipe
 from cli_action import oracle as action_oracle, recipe as action_recipe
 from cli_service_echo import recipe as echo_recipe, execute as execute_echo
+from cli_parameters import recipe as parameter_recipe,oracle as parameter_oracle
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='parameter_read':return parameter_recipe(ns,peer,nonce)
     if mode=='introspection':return echo_recipe(ns,peer,nonce)
     if mode=='action':return action_recipe(ns,peer)
     if mode=='daemon':return service_recipe(ns,peer)+node_info_recipe(ns,peer)
@@ -30,6 +32,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case.startswith('cli:param/'):return parameter_oracle(case,stdout,expected)
     if case.startswith('cli:action/'):return action_oracle(case,stdout,expected)
     if case=='cli:node/info':return node_info_oracle(stdout,expected)
     if case.startswith('cli:service/'):return service_oracle(case,stdout,expected)
@@ -61,7 +64,7 @@ def execute(argv, directory, run, board, case, label, expected):
             passed = passed and 'nodes in the graph that share an exact name' in stderr
         if case == 'cli:node/info' and expected['duplicate']:
             passed = passed and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' in stderr
-        if '--no-daemon' in argv or case=='cli:action/send_goal':
+        if '--no-daemon' in argv or case=='cli:action/send_goal' or case.startswith('cli:param/'):
             passed = passed and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' in stderr
         marker = 'MDDS_CLI_FUNCTIONAL CASE='+case+' RESULT=PASS'
         log = directory / (label+'.log')
@@ -70,6 +73,8 @@ def execute(argv, directory, run, board, case, label, expected):
                 acceptance.terminal_marker(run,case,child.returncode,argv,board)+'\n')
         if passed: text += marker+'\n'
         log.write_text(text,encoding='utf-8')
+        if case=='cli:param/dump' and passed:
+            (directory/'parameters_dump.yaml').write_text(stdout,encoding='utf-8')
         return {'case_id':case,'label':label,'expected':expected,'passed':passed,'execution':{
             'argv':argv,'actual_argv':actual,'child_pid':child.pid,'child_start':start,'board_serial':board,
             'returncode':child.returncode,'log':{'path':log.name,'sha256':acceptance.digest(log.read_bytes())}}}

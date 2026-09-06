@@ -395,7 +395,12 @@ real SIGINT-derived return code 2 is preserved. Nine echo receipt tests, ten
 event-oracle tests, nine controlled-stop tests, seventeen original acceptance
 tests and eleven surrounding ROS receipt tests pass.
 
-There are still only 42 independently validated CLI operations out of 98, without
+`cli_param_read_20260907_02` adds parameter list/get/describe/dump. All nine
+scalar/array types, exact names, range/read-only constraints, and run-owned
+typed YAML dumps match the peer's actual seed state. Eight output-oracle tests,
+six receipt mutation tests and eleven surrounding ROS receipt tests pass.
+
+There are still only 46 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

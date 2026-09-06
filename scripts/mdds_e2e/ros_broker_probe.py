@@ -243,8 +243,27 @@ try:
         contexts.append(context)
         rclpy.init(args=['--ros-args', '--enclave', '/' + a.role + '/' + name], context=context, signal_handler_options=SignalHandlerOptions.NO)
         assert get_rmw_implementation_identifier() == 'rmw_mdds'
-        node = rclpy.create_node(name + '_' + a.role, namespace=ns, context=context, start_parameter_services=False, enable_rosout=False)
+        parameter_mode=(root/'cli_batch').read_text().strip() in ('parameter_read','parameter_write')
+        node = rclpy.create_node(name + '_' + a.role, namespace=ns, context=context, start_parameter_services=parameter_mode and name=='alpha', enable_rosout=False)
         all_nodes.append(node)
+        if parameter_mode and name=='alpha':
+            from cli_parameters import values as parameter_values
+            from rcl_interfaces.msg import ParameterDescriptor,IntegerRange
+            seed=parameter_values(a.nonce,a.role)
+            for key,value in seed.items():
+                if key in ('use_sim_time','start_type_description_service'):continue
+                descriptor=ParameterDescriptor()
+                if key=='count':descriptor=ParameterDescriptor(description='Bounded counter',additional_constraints='whole steps',integer_range=[IntegerRange(from_value=0,to_value=100,step=1)])
+                elif key=='locked':descriptor=ParameterDescriptor(description='Immutable marker',read_only=True)
+                elif key=='ephemeral':descriptor=ParameterDescriptor(dynamic_typing=True)
+                if key=='octets':value=[bytes([n]) for n in value]
+                node.declare_parameter(key,value,descriptor)
+            observed={}
+            for key in node.list_parameters([],0).names:
+                value=node.get_parameter(key).value
+                observed[key]=[v[0] for v in value] if key=='octets' else value
+            assert observed==seed
+            (root/'parameter_state.json').write_text(json.dumps({'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'node':ns+'/alpha_'+a.role,'values':observed})+'\n')
         executor = SingleThreadedExecutor(context=context)
         executors.append(executor)
         executor.add_node(node)

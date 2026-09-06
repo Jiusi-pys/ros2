@@ -20,7 +20,11 @@ actual ROS CLI entry point for:
 - `topic pub --once`: a nonce-derived Int32 received exactly once by the
   opposite board, bound to its actual callback log and receipt;
 - `topic echo --once`: the opposite board's nonce-derived Int32 source,
-  with reliable/volatile QoS, field selection and a matching filter.
+  with reliable/volatile QoS, field selection and a matching filter;
+- `topic list --show-types`: exact fixture topic names/types, comparing normal
+  and `--include-hidden-topics` output against deliberately hidden Bool topics;
+- `service list --show-types`: exact fixture services/types, comparing normal
+  and `--include-hidden-services` output against deliberately hidden services.
 
 Type/find/info use the supported `--no-daemon --spin-time 3` options. Service
 call, publish and echo use their direct node implementations. No ROS CLI daemon is spawned by this
@@ -45,6 +49,7 @@ all passes. They reject wrong types, extra topics and wrong service results:
 ```sh
 .pixi/envs/default/python.exe scripts/mdds_e2e/test_cli_graph_basic.py
 .pixi/envs/default/python.exe scripts/mdds_e2e/test_cli_topic_data.py
+.pixi/envs/default/python.exe scripts/mdds_e2e/test_cli_graph_lists.py
 ```
 
 The seven topic-data oracle tests initially had three positive failures, then
@@ -61,3 +66,27 @@ ROS fixture and eleven negative receipt tests passed. Revalidating all four
 batches yields 27 unique accepted operations out of 98; duplicate cases in
 the expanded batch are counted once. Full graph and single-release CLI gates
 remain open.
+
+The listing extension executes two independently waited commands per case on
+each board. Its receipt requires both variants on both boards, with each log
+hashed and rechecked. Expected fixture names/types are constructed independently
+from the creation contract, not copied from the graph under test. The parser
+rejects duplicates, missing entries, hidden leaks, wrong types and raw internal
+request topics. Outside the fixture namespace it permits only correctly typed
+standard rosout/parameter-event topics and, in hidden service mode, the CLI's
+own type-description service. Twelve oracle tests went from six failures to
+zero. This extension still does not cover ROS CLI daemon mode.
+
+`cli_graph_lists_20260907_01` passed all eight cases on both boards (ten
+actual commands per board). Each listing receipt contains four executions,
+covering both visibility modes on both boards. Six host receipt tests accept
+the real batch and reject missing/duplicate variants, a conflicting expected
+mode, a wrong type even with a recomputed log hash, and a missing log:
+
+```sh
+.pixi/envs/default/python.exe scripts/mdds_e2e/test_cli_lists_receipt.py \
+  ohos_test_logs/ros_broker/cli_graph_lists_20260907_01
+```
+
+The surrounding ROS fixture and eleven negative receipt checks passed.
+Revalidation of all five batches yields 29 unique CLI operations out of 98.

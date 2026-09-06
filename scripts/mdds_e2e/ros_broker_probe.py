@@ -14,6 +14,7 @@ from rclpy.signals import SignalHandlerOptions
 from rclpy.utilities import get_rmw_implementation_identifier
 from std_msgs.msg import String
 from std_msgs.msg import Int32
+from std_msgs.msg import Bool
 from example_interfaces.srv import AddTwoInts
 from broker_local_ros_probe import provenance
 p = argparse.ArgumentParser()
@@ -254,6 +255,10 @@ try:
         (root / 'cli_received.json').write_text(json.dumps(value)+'\n')
         print('CLI_PUB_RX '+json.dumps(value),flush=True)
     cli_sub = records[0]['node'].create_subscription(Int32, ns+'/'+a.role+'/cli_sink', receive_cli_payload, qos)
+    hidden_pub = records[0]['node'].create_publisher(Bool, ns+'/'+a.role+'/_hidden', qos)
+    hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
+    hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
+    hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
     snapshot(1)
     exchange(records, 1, True)
     cli_fixture()

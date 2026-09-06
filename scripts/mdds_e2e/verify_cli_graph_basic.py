@@ -19,15 +19,24 @@ for board in acceptance.TARGET['board_serials']:
     if status['run_id']!=run or status['role']!='cli' or status['returncode']!=0:raise ValueError('CLI batch child failed')
     record=(root/(board+'.cli.child.pid')).read_text().strip()
     if record!=f"MDDS_OWNED_PROCESS RUN_ID={run} TAG=cli_child PID={status['child_pid']} START={status['child_start']}":raise ValueError('CLI batch ownership mismatch')
-    reports[board]={r['case_id']:r for r in value['results']}
+    reports[board]=value['results']
     contexts[board]=json.loads((root/(board+'.cli.fixture.json')).read_text())
     if contexts[board]['run_id']!=run or contexts[board]['nonce']!=nonce or contexts[board]['board']!=board:raise ValueError('fixture context mismatch')
 passed=[]
 for case in manifest['cases']:
-    if case['id'] not in ('cli:topic/type','cli:topic/find','cli:service/call','cli:topic/info','cli:topic/pub','cli:topic/echo'):continue
-    executions=[]
+    if case['id'] not in ('cli:topic/type','cli:topic/find','cli:service/call','cli:topic/info','cli:topic/pub','cli:topic/echo','cli:topic/list','cli:service/list'):continue
+    listing=case['id'] in ('cli:topic/list','cli:service/list')
+    selected=[]
     for board in acceptance.TARGET['board_serials']:
-        result=reports[board][case['id']];execution=copy.deepcopy(result['execution'])
+        board_results=[r for r in reports[board] if r['case_id']==case['id']]
+        if len(board_results)!=(2 if listing else 1):raise ValueError('missing or duplicate CLI variant')
+        if listing:
+            option='--include-hidden-'+('topics' if case['id']=='cli:topic/list' else 'services')
+            if sorted(option in r['execution']['argv'] for r in board_results)!=[False,True]:raise ValueError('missing visible/hidden CLI comparison')
+        selected.extend((board,r) for r in board_results)
+    executions=[]
+    for board,result in selected:
+        execution=copy.deepcopy(result['execution'])
         execution['log']['path']=board+'.'+execution['log']['path']
         raw=acceptance.read_artifact(execution['log'],root).decode('utf-8')
         stdout=raw.split('MDDS_CLI_STDOUT_BEGIN\n',1)[1].split('\nMDDS_CLI_STDOUT_END',1)[0]
@@ -38,7 +47,9 @@ for case in manifest['cases']:
                   'cli:topic/find':sorted(namespace+'/'+role+'/'+name+'/out' for role in ('A','B') for name in ('alpha','beta')),
                   'cli:service/call':int(nonce[:7],16)+(1 if peer=='B' else 2)+17,
                   'cli:topic/info':contexts[board]['topics'][namespace+'/'+peer+'/alpha/out'],
-                  'cli:topic/pub':base+2,'cli:topic/echo':base+1}[case['id']]
+                  'cli:topic/pub':base+2,'cli:topic/echo':base+1,
+                  'cli:topic/list':{'namespace':namespace,'kind':'topic','hidden':'--include-hidden-topics' in execution['argv']},
+                  'cli:service/list':{'namespace':namespace,'kind':'service','hidden':'--include-hidden-services' in execution['argv']}}[case['id']]
         if case['id']=='cli:topic/info':
             local_role='A' if peer=='B' else 'B'
             required={'Node namespace':namespace,'Topic type':'std_msgs/msg/String',

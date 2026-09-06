@@ -345,7 +345,13 @@ evidence categories. Only terminate processes owned by the current test run.
   across all four batches yields 27 unique operations; failed fixture attempts
   are retained and excluded.
 
-There are still only 27 independently validated CLI operations out of 98, without
+- `cli_graph_lists_20260907_01` adds `topic list` and `service list` receipts,
+  each comparing visible/hidden modes on both boards. Exact names/types and
+  filtering passed, together with 12 oracle tests, six host receipt mutation
+  tests and the surrounding ROS/DSoftBus checks. The five batches contain
+  29 unique validated operations.
+
+There are still only 29 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

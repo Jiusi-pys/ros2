@@ -1,4 +1,4 @@
-"""Six actual cross-board CLI cases while the ROS broker fixture is held live."""
+"""Actual cross-board CLI cases while the ROS broker fixture is held live."""
 import json
 import os
 from pathlib import Path
@@ -8,9 +8,12 @@ import subprocess
 import sys
 from board_graph_ownership import process_start
 import cli_acceptance as acceptance
+from cli_graph_lists import list_oracle
 
 
 def oracle(case, stdout, expected):
+    if case in ('cli:topic/list', 'cli:service/list'):
+        return list_oracle(stdout, expected)
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if case == 'cli:topic/type':
         return lines == [expected]
@@ -71,6 +74,8 @@ def execute(argv, output, run, board, case, expected):
         passed = child.returncode == 0 and oracle(case, stdout, expected)
         passed = passed and 'mdds transports active: dsoftbus(local=AF_UNIX physical=dsoftbus_broker' in stderr
         token = case.replace(':', '_').replace('/', '_')
+        if case in ('cli:topic/list', 'cli:service/list'):
+            token += '_hidden' if expected['hidden'] else '_visible'
         path = output / (token + '.log')
         assertion = f'MDDS_CLI_FUNCTIONAL CASE={case} RESULT=PASS'
         text = ('MDDS_CLI_ACTUAL_ARGV ' + json.dumps(actual) + '\nMDDS_CLI_STDOUT_BEGIN\n' + stdout +
@@ -107,6 +112,11 @@ def main():
         # Jazzy applies --field before --filter: m is the selected integer.
         ('cli:topic/echo', ['ros2','topic','echo',namespace+'/'+peer_role+'/cli_source','std_msgs/msg/Int32','--once','--field','data','--filter',f'm == {base+1}','--qos-reliability','reliable','--qos-durability','volatile','--timeout','10'], base+1),
     ]
+    for kind in ('topic', 'service'):
+        for hidden in (False, True):
+            argv = ['ros2',kind,'list','--show-types','--no-daemon','--spin-time','3']
+            if hidden: argv.append('--include-hidden-'+('topics' if kind=='topic' else 'services'))
+            cases.append(('cli:'+kind+'/list', argv, {'namespace':namespace,'kind':kind,'hidden':hidden}))
     output = root / 'cli_graph'; output.mkdir(mode=0o700)
     results = [execute(argv, output, run, board, case, expected) for case, argv, expected in cases]
     report = {'run_id':run,'board':board,'peer':peer,'nonce':nonce,'results':results}

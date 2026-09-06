@@ -271,7 +271,34 @@ evidence categories. Only terminate processes owned by the current test run.
   channel/byte counters zero. External cleanup-owner callback reentry remains
   a specifically identified lifecycle boundary requiring its own regression.
 
-Remaining gates include duplicate-node cardinality, large ANNOUNCE delivery
+- Native channel commit `3225164` now passes the final 15-case lifecycle suite,
+  the no-allocation stop case, and all 53 unchanged legacy SDK-fake cases.
+  Additional REDs covered pending-only errors, failed channel probes and
+  rejected same-number channel replacement. These fixes preserve old-key
+  retirement ownership. The independent native facade probe then passed real
+  Socket/Bytes delivery on both boards, up to 131072 bytes in each direction.
+- WirePump commit `51b501d` passes the final eleven cases, including the
+  independently identified 512 KiB/1 MiB negotiation correction. The affected
+  actor, local actor and daemon suites passed 15, 18 and 8 cases respectively.
+- Native remote daemon commit `ac98546` has nine identical RED/GREEN tests
+  (9 failures to 9 passes) and builds with `BUILD_TESTING=OFF`. Actual
+  Socket/Listen startup and complete cleanup passed on both boards. The
+  unmodified daemon subsequently delivered exact 3800, 65536, 131072 and
+  1048576-byte payloads in both directions in `bc_remote_green_20260906_01`.
+  Its actual processes mapped the board DSoftBus SDK and owned no UDP socket;
+  both client and daemon processes exited zero. The identical client binary
+  delivered nothing through local-only daemons in `bc_local_red_20260906_04`.
+  This verifies the native broker byte path; ROS Participant integration is
+  still pending. MDDS `docs/broker_dsoftbus_daemon.md` records the exact scope.
+- RMW timeout commit `63b05f9` passes all sixteen wait cases after three
+  overflow regressions. Long-double CDR commit `0f3c106` changed the frozen
+  27-case comparison from two big-endian read failures to zero failures;
+  the actual package's 26 cases also pass on the RK3588A binary128 ABI.
+  Harness commit `f1e1c17` separately fixes legitimate `+` in READY paths.
+
+There are still 21 independently validated CLI operations out of 98, without
+a complete single-release acceptance receipt. Remaining gates include
+duplicate-node cardinality, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,
 multi-process broker integration, and the full 98-case CLI/graph/transport
 matrix. Internal service-topic separation and announcement wakeup have been

@@ -19,9 +19,11 @@ from cli_service_echo import recipe as echo_recipe, execute as execute_echo
 from cli_parameters import recipe as parameter_recipe,oracle as parameter_oracle
 from cli_parameter_changes import recipe as parameter_change_recipe,oracle as parameter_change_oracle,loaded_values
 from cli_lifecycle import recipe as lifecycle_recipe,oracle as lifecycle_oracle
+from cli_components import recipe as component_recipe,oracle as component_oracle,containers
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='components':return component_recipe(ns,peer)
     if mode=='lifecycle':return lifecycle_recipe(ns,peer)
     if mode=='parameter_write':return parameter_change_recipe(ns,peer,nonce)
     if mode=='parameter_read':return parameter_recipe(ns,peer,nonce)
@@ -36,6 +38,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case.startswith('cli:component/'):return component_oracle(stdout,expected)
     if case.startswith('cli:lifecycle/'):return lifecycle_oracle(stdout,expected)
     if case in ('cli:param/set','cli:param/load','cli:param/delete'):return parameter_change_oracle(stdout,expected)
     if case.startswith('cli:param/'):return parameter_oracle(case,stdout,expected)
@@ -74,7 +77,7 @@ def execute(argv, directory, run, board, case, label, expected):
             passed = passed and 'nodes in the graph that share an exact name' in stderr
         if case == 'cli:node/info' and expected['duplicate']:
             passed = passed and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' in stderr
-        if '--no-daemon' in argv or case=='cli:action/send_goal' or case.startswith('cli:param/') or case in ('cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set'):
+        if '--no-daemon' in argv or case=='cli:action/send_goal' or case.startswith('cli:param/') or case in ('cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set','cli:component/load','cli:component/list','cli:component/unload'):
             passed = passed and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' in stderr
         marker = 'MDDS_CLI_FUNCTIONAL CASE='+case+' RESULT=PASS'
         log = directory / (label+'.log')
@@ -144,6 +147,7 @@ def main():
         # time to receive complete remote announcements before its first query.
         time.sleep(3)
         expected=node_names('/ros_broker_'+run)
+        if (root/'cli_batch').read_text().strip()=='components':expected+=containers('/ros_broker_'+run)
         command('cli:node/list','nodes_cached',['node','list'],expected)
         command('cli:node/list','nodes_direct',['node','list','--no-daemon','--spin-time','3'],expected)
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
@@ -152,6 +156,16 @@ def main():
             (output/'parameter_load.yaml').write_text(yaml.safe_dump({'/ros_broker_'+run+'/alpha_'+peer_role:{'ros__parameters':loaded_values(nonce,peer_role)}}))
         for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce):
             command(case,label,argv,wanted)
+            if (root/'cli_batch').read_text().strip()=='components':
+                stage={'component_load_survivor':'loaded','component_unload_primary':'retired','component_unload_survivor':'empty'}.get(label)
+                if stage:
+                    deadline=time.monotonic()+12
+                    while time.monotonic()<deadline and not (root/('components_'+stage+'.json')).exists():time.sleep(.1)
+                    proof=json.loads((root/('components_'+stage+'.json')).read_text())
+                    if proof['run_id']!=run or proof['nonce']!=nonce:raise ValueError('component proof identity differs')
+                    if stage=='loaded':
+                        from component_process import inspect
+                        report['container']=inspect(root,run)
         report['daemon_after_queries']=inspect_daemon(root)
         if report['daemon_after_queries']['pid']!=report['daemon']['pid'] or report['daemon_after_queries']['start']!=report['daemon']['start']:
             raise ValueError('daemon replaced during graph comparison')

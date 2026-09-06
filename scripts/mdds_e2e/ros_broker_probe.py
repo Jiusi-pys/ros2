@@ -36,6 +36,7 @@ contexts = []
 all_nodes = []
 executors = []
 introspection = None
+component_probe = None
 
 def payload(sender, name, phase, index):
     return f'{a.run_id}|{a.nonce}|{sender}|{name}|{phase}|{index}'
@@ -49,6 +50,7 @@ def spin():
     if any((r['bad'] for r in records)):
         raise RuntimeError('unexpected ROS payload')
     tick_introspection()
+    if component_probe is not None:component_probe.tick()
     time.sleep(0.002)
 
 
@@ -309,6 +311,9 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
+    if (root/'cli_batch').read_text().strip()=='components':
+        from board_component_probe import ComponentProbe
+        component_probe=ComponentProbe(root,a.run_id,a.nonce,a.self_serial,other,records[1]['node'])
     if (root/'cli_batch').read_text().strip() == 'lifecycle':
         from lifecycle_msgs.msg import TransitionEvent
         lifecycle_events=[]
@@ -402,6 +407,7 @@ try:
         (root/'parameter_final.json').write_text(json.dumps(final)+'\n')
         print('CLI_PARAMETER_FINAL '+json.dumps(final),flush=True)
     beta = records[1]
+    component_probe = None
     introspection = None
     for key in ('action_client','action_server'):
         action=beta.pop(key,None)

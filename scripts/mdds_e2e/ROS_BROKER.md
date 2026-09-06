@@ -75,7 +75,8 @@ requirements are documented in `CLI_DAEMON.md`. With its four new operations,
 current deduplicated CLI coverage, including the separate `MDDS_ROS_CLI_BATCH=action`
 batch documented in `CLI_ACTION.md` and service introspection in `CLI_SERVICE_ECHO.md`,
 parameter reads/mutations in `CLI_PARAMETERS.md`, and managed-node transitions
-in `CLI_LIFECYCLE.md`, is 53/98. Earlier expanded basic receipts were
+in `CLI_LIFECYCLE.md`, plus component containers in `CLI_COMPONENTS.md`, is 57/98.
+Earlier expanded basic receipts were
 superseded by the daemon-isolated run described in `CLI_GRAPH_BASIC.md`.
 
 `ros_no_profile_20260907` passed the full current subset in implicit policy mode,

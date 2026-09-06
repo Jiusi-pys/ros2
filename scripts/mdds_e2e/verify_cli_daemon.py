@@ -11,6 +11,7 @@ from cli_service_events import events_match
 from cli_parameters import values as parameter_values,typed_equal
 from cli_parameter_changes import loaded_values,expected_events
 from cli_lifecycle import expected_callbacks,expected_events as lifecycle_events
+from cli_components import containers
 import yaml
 from cli_daemon_guard import owned
 from cli_service_graph import recipe as service_recipe
@@ -32,6 +33,9 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
+    if (root/'cli_batch').read_text().strip()=='components':
+        from verify_components import validate
+        validate(value,root,run,board,nonce)
     daemon=value['daemon']
     for record in (daemon,value['daemon_after_queries']):
         if not owned(record,remote) or record['owned_udp'] or record['listeners']!=[{'table':'tcp','local':f'0100007F:{11511+175:04X}'}]:
@@ -51,6 +55,7 @@ def validate_report(value, root, run, board, nonce):
             expected_case,argv,expected=services[label]
         elif label.startswith('nodes_'):
             expected=node_names('/ros_broker_'+run);expected_case='cli:node/list'
+            if (root/'cli_batch').read_text().strip()=='components':expected+=containers('/ros_broker_'+run)
             argv=['ros2','node','list']+([] if label=='nodes_cached' else ['--no-daemon','--spin-time','3'])
         elif label=='start':expected='The daemon has been started';expected_case='cli:daemon/start';argv=['ros2','daemon','start']
         elif label=='stop':expected='The daemon has been stopped';expected_case='cli:daemon/stop';argv=['ros2','daemon','stop']
@@ -78,7 +83,7 @@ def validate_report(value, root, run, board, nonce):
         if case=='cli:node/list':
             if 'nodes in the graph that share an exact name' not in raw:raise ValueError('duplicate-node warning missing')
         if case=='cli:node/info' and expected['duplicate'] and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' not in raw:raise ValueError('duplicate-node info warning missing')
-        if ('--no-daemon' in argv or case.startswith('cli:param/') or case in ('cli:action/send_goal','cli:service/echo','cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set')) and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if ('--no-daemon' in argv or case.startswith('cli:param/') or case in ('cli:action/send_goal','cli:service/echo','cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set','cli:component/load','cli:component/list','cli:component/unload')) and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
         if case.startswith('cli:lifecycle/'):
             peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
             node='/ros_broker_'+run+'/alpha_'+peer_role
@@ -164,6 +169,8 @@ def main():
                 receipt['mutation_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('parameter_final.json','parameter_events.json','parameter_load.yaml')]
         if case['id'].startswith('cli:lifecycle/'):
             receipt['lifecycle_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('lifecycle_final.json','lifecycle_callbacks.json','lifecycle_events.json')]
+        if case['id'].startswith('cli:component/'):
+            receipt['component_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('components_loaded.json','components_retired.json','components_empty.json','container.log','container.status.json')]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

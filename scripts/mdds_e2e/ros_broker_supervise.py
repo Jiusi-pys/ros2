@@ -69,8 +69,11 @@ if role == 'daemon':
 elif role == 'ros':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [sys.executable, str(root / 'ros_broker_probe.py'), '--root', str(root), '--run-id', run, '--role', label, '--self-serial', self, '--peer-serial', peer, '--nonce', nonce, '--manifest-sha', os.environ['MDDS_RCLPY_MANIFEST_SHA']]
+elif role == 'container':
+    label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
+    command = [str(root/'component_prefix/lib/rclcpp_components/component_container'),'--ros-args','-r','__node:=container_'+label,'-r','__ns:=/components_'+run]
 elif role == 'cli':
-    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle') else 'cli_graph_basic.py'
+    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components') else 'cli_graph_basic.py'
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')

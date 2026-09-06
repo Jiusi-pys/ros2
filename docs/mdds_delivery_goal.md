@@ -412,7 +412,14 @@ the peer through configure, activate, deactivate, cleanup and shutdown, reads
 back every resulting state, and verifies five callbacks plus ten state events.
 Nine output-oracle, nine lifecycle receipt and eleven ROS receipt tests pass.
 
-There are still only 53 independently validated CLI operations out of 98, without
+`cli_components_20260907_01` adds component types/load/list/unload using private
+native containers and installed composition plugin bytes. Each peer container
+loads two Talkers; payloads and endpoint ownership are verified, ID 1 is
+unloaded while ID 2 retains its GID and publishes again, then ID 2 is removed.
+Native process/library provenance, no UDP and clean exits pass, with nine
+component receipt and eleven ROS receipt tests. Standalone is still separate.
+
+There are still only 57 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

@@ -379,7 +379,15 @@ test entries pass. `cli_node_green_20260907_01` then passes eight node-info view
 per board, exact action/hidden-endpoint ownership, no physical rebind, and the
 surrounding ROS fixture. Eighteen CLI receipt and eleven ROS receipt tests pass.
 
-There are still only 37 independently validated CLI operations out of 98, without
+`cli_action_20260907_01` adds action list/type/info/send_goal using the required
+action_tutorials_interfaces Fibonacci type. Each board sends order 5 to the
+opposite server, receives all five feedback prefixes and [0, 1, 1, 2, 3, 5]
+with SUCCEEDED status. The host binds that result to the same UUID and nonce
+in the peer callback. Ten output-oracle tests, nine action receipt tests and
+eleven surrounding ROS receipt tests pass. Cancellation and rejection remain
+separate action behavior gates.
+
+There are still only 41 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

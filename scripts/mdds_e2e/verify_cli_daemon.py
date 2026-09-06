@@ -5,12 +5,12 @@ from pathlib import Path
 import sys
 import re
 import cli_acceptance as acceptance
-from cli_daemon import node_names, oracle
+from cli_daemon import node_names, oracle, batch_recipe
+from cli_action import goal_id, FEEDBACK, RESULT
 from cli_daemon_guard import owned
 from cli_service_graph import recipe as service_recipe
 from cli_node_info import recipe as node_info_recipe
 
-LABELS=['status_before','start','status_running','nodes_cached','nodes_direct']+[r[1] for r in service_recipe('/fixture','B')+node_info_recipe('/fixture','B')]+['stop','status_after','nodes_after_stop']
 ABSENT={'domain':175,'daemons':[],'port_bindable':True}
 
 
@@ -35,9 +35,11 @@ def validate_report(value, root, run, board, nonce):
         if record['library_hashes']!=expected:raise ValueError('daemon libraries differ from frozen inputs')
         if record['pid']!=daemon['pid'] or record['start']!=daemon['start']:raise ValueError('daemon replaced during graph queries')
     if value['daemon_exited']!={'pid':daemon['pid'],'start':daemon['start'],'terminated':True}:raise ValueError('daemon exit not tied to owned process')
-    if [r['label'] for r in value['results']]!=LABELS:raise ValueError('missing or reordered lifecycle command')
     peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
-    services={label:(case,['ros2']+argv,expected) for case,label,argv,expected in service_recipe('/ros_broker_'+run,peer_role)+node_info_recipe('/ros_broker_'+run,peer_role)}
+    recipes=batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role)
+    labels=['status_before','start','status_running','nodes_cached','nodes_direct']+[r[1] for r in recipes]+['stop','status_after','nodes_after_stop']
+    if [r['label'] for r in value['results']]!=labels:raise ValueError('missing or reordered lifecycle command')
+    services={label:(case,['ros2']+argv,expected) for case,label,argv,expected in recipes}
     for result in value['results']:
         label=result['label'];execution=result['execution'];case=result['case_id']
         if label in services:
@@ -58,7 +60,14 @@ def validate_report(value, root, run, board, nonce):
         if case=='cli:node/list':
             if 'nodes in the graph that share an exact name' not in raw:raise ValueError('duplicate-node warning missing')
         if case=='cli:node/info' and expected['duplicate'] and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' not in raw:raise ValueError('duplicate-node info warning missing')
-        if '--no-daemon' in argv and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if ('--no-daemon' in argv or case=='cli:action/send_goal') and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if case=='cli:action/send_goal':
+            peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
+            received=json.loads((root/(peer_board+'.action_goal.json')).read_text())
+            wanted={'run_id':run,'nonce':nonce,'board':peer_board,'action':'/ros_broker_'+run+'/'+peer_role+'/cli_action',
+                    'goal_id':goal_id(stdout),'order':5,'feedback':FEEDBACK,'result':RESULT,'status':'SUCCEEDED','count':1}
+            if received!=wanted:raise ValueError('peer goal execution differs from CLI result')
+            if (root/(peer_board+'.ros.log')).read_text().splitlines().count('CLI_ACTION_GOAL '+json.dumps(received))!=1:raise ValueError('peer goal callback log missing')
 
 
 def main():
@@ -75,8 +84,9 @@ def main():
         if raw.splitlines().count('CLI_DAEMON_RESULT '+json.dumps(value))!=1:raise ValueError('daemon observation not bound to actual process log')
         reports[board]=value
     manifest=json.loads((root/'cli_acceptance_manifest.json').read_text());manifest['run_id']=run;passed=[]
+    executed={r['case_id'] for value in reports.values() for r in value['results']}
     for case in manifest['cases']:
-        if case['id'] not in ('cli:daemon/start','cli:daemon/status','cli:daemon/stop','cli:node/list','cli:node/info','cli:service/type','cli:service/find','cli:service/info'):continue
+        if case['id'] not in executed:continue
         executions=[]
         for board,value in reports.items():
             for result in value['results']:
@@ -88,6 +98,16 @@ def main():
                  'supporting_lifecycle':[{'path':board+'.cli.results.json','sha256':acceptance.digest((root/(board+'.cli.results.json')).read_bytes())} for board in reports],
                  'native_link_logs':[{'path':board+'.daemon.log','sha256':acceptance.digest((root/(board+'.daemon.log')).read_bytes())} for board in reports],
                  'supporting_fixture':{'path':'host_report.json','sha256':acceptance.digest((root/'host_report.json').read_bytes())}}
+        if case['id']=='cli:action/send_goal':
+            receipt['peer_goal_executions']=[{'path':board+'.action_goal.json','sha256':acceptance.digest((root/(board+'.action_goal.json')).read_bytes())} for board in reports]
+            raw=acceptance.read_artifact(executions[0]['log'],root).decode()
+            stdout=raw.split('MDDS_CLI_STDOUT_BEGIN\n',1)[1].split('\nMDDS_CLI_STDOUT_END',1)[0]
+            sequence=''.join('- '+str(number)+'\n' for number in RESULT)
+            patterns={'goal_accepted':'Goal accepted with ID: '+goal_id(stdout),
+                      'feedback_received':'Feedback:\n    partial_sequence:\n'+sequence,
+                      'result_exact':'Result:\n    sequence:\n'+sequence,
+                      'status_succeeded':'Goal finished with status: SUCCEEDED'}
+            receipt['assertions']=[{'id':key,'passed':True,'execution':0,'pattern':text} for key,text in patterns.items()]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

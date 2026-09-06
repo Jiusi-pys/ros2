@@ -268,6 +268,28 @@ try:
             peer_name='beta' if r['name']=='alpha' else 'alpha'
             r['action_server']=ActionServer(r['node'],Fibonacci,path(a.role,r['name'])+'/action',execute_action)
             r['action_client']=ActionClient(r['node'],Fibonacci,path(other,peer_name)+'/action')
+    elif (root/'cli_batch').read_text().strip() == 'action':
+        from rclpy.action import ActionClient, ActionServer
+        from action_tutorials_interfaces.action import Fibonacci
+        action_count=[]
+        def execute_cli_action(handle):
+            assert handle.request.order==5
+            action_count.append(1);assert len(action_count)==1
+            sequence=[0,1];feedbacks=[]
+            for length in range(2,7):
+                if length>2:sequence.append(sequence[-1]+sequence[-2])
+                feedback=Fibonacci.Feedback();feedback.partial_sequence=sequence
+                handle.publish_feedback(feedback);feedbacks.append(list(sequence))
+                time.sleep(.1)
+            result=Fibonacci.Result();result.sequence=sequence;handle.succeed()
+            record={'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'action':ns+'/'+a.role+'/cli_action',
+                    'goal_id':bytes(handle.goal_id.uuid).hex(),'order':handle.request.order,'feedback':feedbacks,
+                    'result':list(sequence),'status':'SUCCEEDED','count':1}
+            (root/'action_goal.json').write_text(json.dumps(record)+'\n')
+            print('CLI_ACTION_GOAL '+json.dumps(record),flush=True)
+            return result
+        records[0]['action_server']=ActionServer(records[0]['node'],Fibonacci,ns+'/'+a.role+'/cli_action',execute_cli_action)
+        records[1]['action_client']=ActionClient(records[1]['node'],Fibonacci,ns+'/'+other+'/cli_action')
     snapshot(1)
     exchange(records, 1, True)
     cli_fixture()

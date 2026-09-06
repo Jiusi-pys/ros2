@@ -14,6 +14,13 @@ from board_graph_ownership import process_start
 from cli_daemon_guard import assert_absent, domain_daemons, observe, owned, retire
 from cli_service_graph import oracle as service_oracle, recipe as service_recipe
 from cli_node_info import oracle as node_info_oracle, recipe as node_info_recipe
+from cli_action import oracle as action_oracle, recipe as action_recipe
+
+
+def batch_recipe(mode,ns,peer):
+    if mode=='action':return action_recipe(ns,peer)
+    if mode=='daemon':return service_recipe(ns,peer)+node_info_recipe(ns,peer)
+    raise ValueError('unknown CLI daemon batch')
 
 
 def node_names(namespace):
@@ -21,6 +28,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case.startswith('cli:action/'):return action_oracle(case,stdout,expected)
     if case=='cli:node/info':return node_info_oracle(stdout,expected)
     if case.startswith('cli:service/'):return service_oracle(case,stdout,expected)
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
@@ -51,7 +59,7 @@ def execute(argv, directory, run, board, case, label, expected):
             passed = passed and 'nodes in the graph that share an exact name' in stderr
         if case == 'cli:node/info' and expected['duplicate']:
             passed = passed and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' in stderr
-        if '--no-daemon' in argv:
+        if '--no-daemon' in argv or case=='cli:action/send_goal':
             passed = passed and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' in stderr
         marker = 'MDDS_CLI_FUNCTIONAL CASE='+case+' RESULT=PASS'
         log = directory / (label+'.log')
@@ -119,9 +127,7 @@ def main():
         command('cli:node/list','nodes_cached',['node','list'],expected)
         command('cli:node/list','nodes_direct',['node','list','--no-daemon','--spin-time','3'],expected)
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
-        for case,label,argv,wanted in service_recipe('/ros_broker_'+run,peer_role):
-            command(case,label,argv,wanted)
-        for case,label,argv,wanted in node_info_recipe('/ros_broker_'+run,peer_role):
+        for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role):
             command(case,label,argv,wanted)
         report['daemon_after_queries']=inspect_daemon(root)
         if report['daemon_after_queries']['pid']!=report['daemon']['pid'] or report['daemon_after_queries']['start']!=report['daemon']['start']:

@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 spec = importlib.util.spec_from_file_location('graph_fixture', Path(__file__).with_name('board_graph_ownership.py'))
@@ -95,6 +96,25 @@ class GraphEvidenceTest(unittest.TestCase):
                 fixture.supervise_command([sys.executable, '-c', 'pass'], status_path,
                                           self.run_id, 'observer', self.namespace)
             self.assertEqual(status_path.read_text(), 'original')
+
+
+class NodeCardinalityTest(unittest.TestCase):
+    def check(self, rows):
+        observer = SimpleNamespace(get_node_names_and_namespaces=lambda: rows)
+        return fixture.inspect_node_cardinality(observer, '/isolated')
+
+    def test_two_duplicate_registrations_are_required(self):
+        rows = [('duplicate', '/isolated')] * 2
+        self.assertEqual([], self.check(rows))
+        for count in (0, 1, 3):
+            with self.subTest(count=count):
+                self.assertTrue(self.check([('duplicate', '/isolated')] * count))
+
+    def test_other_namespaces_and_observer_do_not_satisfy_duplicate_count(self):
+        self.assertTrue(self.check([('duplicate', '/elsewhere')] * 2))
+        self.assertTrue(self.check([('observer', '/isolated')] * 2))
+        self.assertEqual([], self.check([('duplicate', '/isolated')] * 2 +
+                                       [('duplicate', '/elsewhere')] * 2))
 
 
 if __name__ == '__main__':

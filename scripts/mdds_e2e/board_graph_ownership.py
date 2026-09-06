@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-board regression for endpoint ownership of two nodes in one context."""
+"""Cross-board endpoint ownership and duplicate-node cardinality regression."""
 
 import argparse
 import json
@@ -123,8 +123,15 @@ def validate_result(log, status, run_id, role, namespace, overlay):
     return errors
 
 
+def inspect_node_cardinality(observer, namespace):
+    count = sum(name == 'duplicate' and ns == namespace
+                for name, ns in observer.get_node_names_and_namespaces())
+    return [] if count == 2 else [{'node': 'duplicate', 'namespace': namespace,
+                                  'expected_count': 2, 'actual_count': count}]
+
+
 def inspect(observer, namespace):
-    errors = []
+    errors = inspect_node_cardinality(observer, namespace)
     for name in ('alpha', 'beta'):
         base = f'{namespace}/{name}'
         expected = {
@@ -230,6 +237,10 @@ def run_graph(args, rclpy, nodes, AddTwoInts, String, get_rmw_implementation_ide
             node.create_subscription(String, base + '/in', lambda msg: None, 10)
             node.create_service(AddTwoInts, base + '/serve', lambda req, res: res)
             node.create_client(AddTwoInts, base + '/request')
+        for _ in range(2):
+            nodes.append(rclpy.create_node('duplicate', namespace=args.namespace,
+                                          start_parameter_services=False,
+                                          enable_rosout=False))
         print('GRAPH_SOURCE_READY', flush=True)
         while time.monotonic() < deadline:
             if args.stop_file and Path(args.stop_file).is_file():

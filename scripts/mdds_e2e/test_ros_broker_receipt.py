@@ -72,6 +72,10 @@ class Receipt(unittest.TestCase):
         self.alter_row(A, 'ROS_BROKER_PHASE ', lambda v: v['endpoint_hashes'].__setitem__('A/alpha/topic/publisher', ['INVALID']))
         self.assertFalse(self.result()['passed'])
 
+    def test_transport_policy_environment_is_verified(self):
+        self.alter_row(A, 'ROS_BROKER_PROVENANCE ', lambda v: v['transport_policy'].update(selector='udp'))
+        self.assertFalse(self.result()['passed'])
+
     def test_wrong_loaded_library_is_rejected(self):
         self.alter_row(A, 'ROS_BROKER_PROVENANCE ', lambda v: v.update(libmdds_paths=['/data/local/tmp/ros2/lib/libmdds.so']))
         self.assertFalse(self.result()['passed'])

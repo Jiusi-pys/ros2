@@ -3,6 +3,8 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source scripts/run_mdds_graph_ownership.sh
 variant=service
+policy_mode="${MDDS_ROS_PROFILE_MODE:-explicit}"
+[[ "$policy_mode" == explicit || "$policy_mode" == implicit ]] || exit 2
 scratch=scripts/mdds_e2e
 export MDDS_RUN_ID="${MDDS_RUN_ID:?explicit fresh run ID required}"
 [[ "$MDDS_RUN_ID" =~ ^[A-Za-z0-9_]{1,32}$ ]] || exit 2
@@ -25,9 +27,10 @@ cp scripts/mdds_e2e/{board_graph_ownership,broker_local_run}.py "$LOGDIR/"
 cp "$scratch/ros_broker_supervise.py" "$LOGDIR/ros_broker_supervise.py"
 cp src/Jiusi-pys/mdds/scripts/mdds_broker_service.py "$LOGDIR/"
 printf '%s\n' "$nonce" > "$LOGDIR/nonce"
+printf '%s\n' "$policy_mode" > "$LOGDIR/policy_mode"
 for board in "$BOARD_A" "$BOARD_B"; do
   ready=$(shell "$board" "mkdir '$MDDS_OWNED_REMOTE_DIR/lib' && printf LIB_READY" | tr -d '\r'); [[ "$ready" == LIB_READY ]]
-  for name in mdds_broker_daemon mdds_token_exec board_graph_ownership.py broker_local_run.py ros_broker_supervise.py mdds_broker_service.py libmdds.so librmw_mdds.so ros_broker_probe.py broker_local_ros_probe.py type_description_lifetime.py profile.env rclpy_overlay.tar rclpy_package.json type_hashes.json; do
+  for name in mdds_broker_daemon mdds_token_exec board_graph_ownership.py broker_local_run.py ros_broker_supervise.py mdds_broker_service.py libmdds.so librmw_mdds.so ros_broker_probe.py broker_local_ros_probe.py type_description_lifetime.py profile.env rclpy_overlay.tar rclpy_package.json type_hashes.json policy_mode; do
     hash=$(graph_sha "$LOGDIR/$name"); destination="$MDDS_OWNED_REMOTE_DIR/$name"; if [[ "$name" == libmdds.so || "$name" == librmw_mdds.so ]]; then destination="$MDDS_OWNED_REMOTE_DIR/lib/$name"; fi; graph_stage_artifact "$board" "$LOGDIR/$name" "$destination" "$hash"
     printf '%s  %s\n' "$hash" "$name" >> "$LOGDIR/inputs_$board.sha256"
   done
@@ -44,7 +47,11 @@ done
 launch_role() {
   local board="$1" peer="$2" role="$3" record line found=false
   record="$MDDS_OWNED_REMOTE_DIR/$role.child.pid"
-  mdds_owned_launch "$board" ". '$DEVICE_DIR/env.sh' || exit 70; . '$MDDS_OWNED_REMOTE_DIR/profile.env' || exit 70; export LD_LIBRARY_PATH='$MDDS_OWNED_REMOTE_DIR/lib':\$LD_LIBRARY_PATH; export PYTHONPATH='$MDDS_OWNED_REMOTE_DIR/python':\$PYTHONPATH; export PYTHONDONTWRITEBYTECODE=1; export MDDS_BROKER_ROOT='$MDDS_OWNED_REMOTE_DIR/brokers'; export MDDS_RCLPY_MANIFEST_SHA='$manifest_sha'; export ROS_DOMAIN_ID=175; export MDDS_DEBUG=1;" \
+  local policy_env=". '$MDDS_OWNED_REMOTE_DIR/profile.env' || exit 70;"
+  if [[ "$policy_mode" == implicit ]]; then
+    policy_env="unset MDDS_DEPLOYMENT_PROFILE MDDS_TRANSPORT ROS_LOCALHOST_ONLY; export RMW_IMPLEMENTATION=rmw_mdds; export ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT;"
+  fi
+  mdds_owned_launch "$board" ". '$DEVICE_DIR/env.sh' || exit 70; $policy_env export LD_LIBRARY_PATH='$MDDS_OWNED_REMOTE_DIR/lib':\$LD_LIBRARY_PATH; export PYTHONPATH='$MDDS_OWNED_REMOTE_DIR/python':\$PYTHONPATH; export PYTHONDONTWRITEBYTECODE=1; export MDDS_BROKER_ROOT='$MDDS_OWNED_REMOTE_DIR/brokers'; export MDDS_RCLPY_MANIFEST_SHA='$manifest_sha'; export ROS_DOMAIN_ID=175; export MDDS_DEBUG=1;" \
     "python3.12 '$MDDS_OWNED_REMOTE_DIR/ros_broker_supervise.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' '$role' '$board' '$peer' '$nonce' '$variant'" "$role.log"
   for ((attempt=0;attempt<30;++attempt)); do
     line=$(shell "$board" "if test -f '$record' && test ! -L '$record'; then cat '$record'; fi" | tr -d '\r')
@@ -116,4 +123,4 @@ for board in "$BOARD_A" "$BOARD_B"; do
 done
 "$GRAPH_HOST_PYTHON" "$scratch/verify_ros_broker.py" "$LOGDIR" "$MDDS_OWNED_RUN_ID" "$variant" "$BOARD_A" "$BOARD_B"
 "$GRAPH_HOST_PYTHON" "$scratch/test_ros_broker_receipt.py" "$LOGDIR" > "$LOGDIR/receipt_validation_tests.log" 2>&1
-printf 'ROS_BROKER_RECEIPT_TESTS PASS count=10\n'
+printf 'ROS_BROKER_RECEIPT_TESTS PASS count=11\n'

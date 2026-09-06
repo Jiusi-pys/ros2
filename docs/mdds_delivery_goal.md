@@ -325,6 +325,12 @@ evidence categories. Only terminate processes owned by the current test run.
   every active ordinary/request/reply endpoint to the generated type-description
   hashes across both boards; ten negative receipt checks passed. This does not
   certify the remaining full graph/CLI matrix or DDS XTypes negotiation.
+- RMW commit `6a2d01a` makes the production OHOS default DSoftBus-only without
+  a profile. Seven policy cases changed from six failures to zero; all nine
+  native RMW test entries passed, while six host checks were skipped explicitly.
+  Loopback event/wait fixtures use an uninstalled test library, never a
+  production environment escape. `ros_no_profile_20260907` passed the actual
+  two-board subset with profile/selector absent, including eleven receipt tests.
 
 There are still 21 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include

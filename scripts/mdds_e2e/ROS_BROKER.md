@@ -6,6 +6,11 @@ From the ROS workspace in Git Bash:
 MDDS_RUN_ID=ros_broker_fresh_01 bash scripts/run_mdds_broker_ros.sh
 ```
 
+Set `MDDS_ROS_PROFILE_MODE=implicit` to verify production startup with
+`MDDS_DEPLOYMENT_PROFILE` and `MDDS_TRANSPORT` absent. The runner still sets the
+supported ROS discovery range to `SYSTEM_DEFAULT`. The actual policy environment
+is included in both ROS provenance snapshots and verified by the host.
+
 Use a fresh run ID containing at most 32 letters, digits or underscores. The
 runner uses the two configured RK3588A serials, domain 175, the current
 production MDDS/RMW build libraries and broker service, and a complete private
@@ -36,14 +41,14 @@ process reports its precise MDDS/RMW library mappings, full rclpy package/native
 verification and absence of owned UDP sockets. The native daemon is inspected
 for its exact executable, actual DSoftBus SDK mapping and absence of owned UDP.
 Host validation checks the exact received strings, service values, node counts,
-withdrawal and resource cleanup. Ten negative receipt checks reject corrupted
+withdrawal and resource cleanup. Eleven negative receipt checks reject corrupted
 payloads, ghost nodes, missing withdrawal, wrong libraries, UDP, failed child
 exits, incorrect enclave associations, wrong type hashes and unfinished broker
-cleanup. Run them separately with:
+cleanup, and a conflicting policy environment. Run them separately with:
 
 ```sh
 .pixi/envs/default/python.exe scripts/mdds_e2e/test_ros_broker_receipt.py \
-  ohos_test_logs/ros_broker/ros_hash_green_20260907
+  ohos_test_logs/ros_broker/ros_no_profile_20260907
 ```
 
 `ros_broker_20260906_04` passed this gate: 30 total exact received messages,
@@ -64,3 +69,7 @@ frozen old RMW in `ros_hash_red_20260907_02`; `ros_hash_green_20260907` passed a
 generated hash checks and ten negative receipt tests. The first hash run stopped
 before launching ROS because a host path needed Windows conversion.
 CLI acceptance remains 21/98 until actual command receipts are added.
+
+`ros_no_profile_20260907` passed the full current subset in implicit policy mode,
+including all eleven negative receipt checks. This proves no-profile startup
+does not select UDP; unsupported discovery restrictions still fail explicitly.

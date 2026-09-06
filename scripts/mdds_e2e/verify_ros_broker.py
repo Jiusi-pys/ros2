@@ -24,6 +24,8 @@ def validate(root, run, a, b):
         nonce = (root / 'nonce').read_text().strip()
         remote = '/data/local/tmp/ros2/.mdds-owned-runs/' + run
         ns = '/ros_broker_' + run
+        policy_mode = (root / 'policy_mode').read_text().strip()
+        require(policy_mode in ('explicit', 'implicit'), 'invalid policy mode')
         type_hashes = json.loads((root / 'type_hashes.json').read_text())['hashes']
         for board, peer, label in ((a, b, 'A'), (b, a, 'B')):
             logs = {role: (root / f'{board}.{role}.log').read_text() for role in ('ros', 'daemon')}
@@ -72,6 +74,7 @@ def validate(root, run, a, b):
             provenance = json_rows(logs['ros'], 'ROS_BROKER_PROVENANCE ')
             require([v['stage'] for v in provenance] == [1, 2], 'missing provenance')
             for v in provenance:
+                require(v.get('transport_policy') == {'mode': policy_mode, 'profile': 'ohos_dsoftbus' if policy_mode == 'explicit' else None, 'selector': None, 'discovery_range': 'SYSTEM_DEFAULT'}, 'wrong actual transport-policy environment')
                 require(not v['owned_udp_sockets'] and v['pid'] == status['ros']['child_pid'], 'ROS process UDP/identity mismatch')
                 require(v['libmdds_paths'] == [remote + '/lib/libmdds.so'] and v['librmw_mdds_paths'] == [remote + '/lib/librmw_mdds.so'], 'wrong loaded ROS libraries')
                 require(v['rclpy']['native_sha256'] == json.loads((root / 'rclpy_package.json').read_text())['native_sha256'], 'wrong rclpy native')

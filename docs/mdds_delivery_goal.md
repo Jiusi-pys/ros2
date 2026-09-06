@@ -42,6 +42,11 @@ evidence for the tested versions, platforms, and configurations.
 - DSoftBus currently reserves one fixed session per board/domain and one
   engine per process. Complete CLI requires multiple participants/processes;
   fix that constraint without introducing UDP.
+- The complete local broker ROS gate has passed. Remote Server routing and
+  daemon composition are committed and component-tested. Native channel
+  generation control and the physical wire pump have observed RED tests and
+  are being implemented. The production factory has not switched to a physical
+  broker; the complete CLI matrix is still 12 PASS / 86 NOT_RUN, with no push.
 - Existing `run_mdds_cli.sh` substitutes graph counts for `action send_goal`.
   Replace that exemption with a real command/result test. The current generic
   acceptance suite already exercises real action commands for other RMWs.
@@ -191,6 +196,41 @@ evidence categories. Only terminate processes owned by the current test run.
   exited 0, package/library mapping and hashes matched, and cleanup passed.
   The native rclpy extension was loaded from a private package. Every result
   explicitly records `physical_dsoftbus_proven=false`; CLI remains 12/98.
+- `broker_remote_adapter_red_20260906` ->
+  `broker_remote_adapter_green_20260906` changed all 15 remote integration
+  cases from failure to pass. The 18 local actor and 8 daemon regressions also
+  passed. Commit `afcaea2` joins remote LinkSession and the existing Routes
+  authority; independent Tier 3 review found no high-confidence defect.
+- `token_boundary_red_20260906` reproduced library startup changing the
+  caller's token and incorrectly succeeding on the unprivileged leg.
+  `token_boundary_green_20260906` passed both real SDK authorization legs:
+  unprivileged Socket rejection and explicit launcher success, with unchanged
+  entry/exit tokens. Commit `d7f4cd2` contains the process-identity boundary.
+  Read-only snapshots of both current board permission files include the
+  `com.kaihong.mdds.*` native-app rule. This is startup evidence only.
+- `broker_remote_daemon_red_20260906` ->
+  `broker_remote_daemon_green_20260906` changed six lifecycle cases from
+  failure to pass; `broker_remote_daemon_local_regression_20260906` passed
+  the eight existing owned-daemon cases. Commit `8fb7708` requires physical
+  driver start before READY and retires the driver before Server/listener
+  teardown. Tier 3 review found no high-confidence defect. Tests inject the
+  driver; the actual SDK/WirePump driver remains an integration gate.
+- `reliable_reorder_red_20260906` failed three owned-child component cases;
+  `reliable_reorder_green_20260906` passed three, including offset 63/64/65,
+  both budget scopes and both allocation failure points. All child exits were
+  observed and reaped, with no timeout/signal. Commit `4103da4` preserves
+  reliable ACK holes after receive-window/memory rejection. Independent Tier 2
+  review found no high-confidence defect. This isolated UDP loopback fixture
+  is component evidence, not an OpenHarmony transport fallback.
+- `broker_dsoftbus_channel_red_20260906` recorded six failures against the
+  old Engine facade. The native implementation is being tested next; source
+  review additionally identified a new-Key bytes-before-up notification race
+  that requires a seventh deterministic regression before correction.
+- `broker_wire_pump_red_20260906` recorded all ten tests failing against
+  the unimplemented pump. The fixture uses real Server/Routes/LinkSession,
+  AF_UNIX and fragment codecs, with fake physical Channels. Small-MTU large
+  ANNOUNCE, exact duplex payload, bounded admission, directional retirement,
+  stale generation/nonce, FIFO tickets and timeout behavior await GREEN.
 
 Remaining gates include duplicate-node cardinality, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

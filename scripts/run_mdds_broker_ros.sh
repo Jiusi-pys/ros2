@@ -11,10 +11,11 @@ mdds_owned_init ros_broker "$BOARD_A" "$BOARD_B"
 trap 'rc=$?; trap - EXIT; mdds_owned_finish || rc=1; exit "$rc"' EXIT
 LOGDIR="ohos_test_logs/ros_broker/$MDDS_OWNED_RUN_ID"
 [[ ! -e "$LOGDIR" ]]; mkdir -p "$LOGDIR"
+"$GRAPH_HOST_PYTHON" scripts/mdds_e2e/ros_type_hashes.py "$(pwd -W)" "$LOGDIR/type_hashes.json"
 cp build_ohos/mdds/mdds_broker_daemon "$LOGDIR/"
 cp build_ohos/mdds/mdds_token_exec "$LOGDIR/"
 cp build_ohos/mdds/libmdds.so "$LOGDIR/"
-cp build_ohos/rmw_mdds/librmw_mdds.so "$LOGDIR/"
+cp "${MDDS_ROS_RMW_LIBRARY:-build_ohos/rmw_mdds/librmw_mdds.so}" "$LOGDIR/librmw_mdds.so"
 cp scripts/mdds_e2e/ros_broker_probe.py "$LOGDIR/"
 cp scripts/mdds_e2e/{type_description_lifetime,broker_local_ros_probe}.py "$LOGDIR/"
 cp src/ros2/rmw_mdds/rmw_mdds/config/ohos_dsoftbus.env "$LOGDIR/profile.env"
@@ -26,7 +27,7 @@ cp src/Jiusi-pys/mdds/scripts/mdds_broker_service.py "$LOGDIR/"
 printf '%s\n' "$nonce" > "$LOGDIR/nonce"
 for board in "$BOARD_A" "$BOARD_B"; do
   ready=$(shell "$board" "mkdir '$MDDS_OWNED_REMOTE_DIR/lib' && printf LIB_READY" | tr -d '\r'); [[ "$ready" == LIB_READY ]]
-  for name in mdds_broker_daemon mdds_token_exec board_graph_ownership.py broker_local_run.py ros_broker_supervise.py mdds_broker_service.py libmdds.so librmw_mdds.so ros_broker_probe.py broker_local_ros_probe.py type_description_lifetime.py profile.env rclpy_overlay.tar rclpy_package.json; do
+  for name in mdds_broker_daemon mdds_token_exec board_graph_ownership.py broker_local_run.py ros_broker_supervise.py mdds_broker_service.py libmdds.so librmw_mdds.so ros_broker_probe.py broker_local_ros_probe.py type_description_lifetime.py profile.env rclpy_overlay.tar rclpy_package.json type_hashes.json; do
     hash=$(graph_sha "$LOGDIR/$name"); destination="$MDDS_OWNED_REMOTE_DIR/$name"; if [[ "$name" == libmdds.so || "$name" == librmw_mdds.so ]]; then destination="$MDDS_OWNED_REMOTE_DIR/lib/$name"; fi; graph_stage_artifact "$board" "$LOGDIR/$name" "$destination" "$hash"
     printf '%s  %s\n' "$hash" "$name" >> "$LOGDIR/inputs_$board.sha256"
   done
@@ -115,4 +116,4 @@ for board in "$BOARD_A" "$BOARD_B"; do
 done
 "$GRAPH_HOST_PYTHON" "$scratch/verify_ros_broker.py" "$LOGDIR" "$MDDS_OWNED_RUN_ID" "$variant" "$BOARD_A" "$BOARD_B"
 "$GRAPH_HOST_PYTHON" "$scratch/test_ros_broker_receipt.py" "$LOGDIR" > "$LOGDIR/receipt_validation_tests.log" 2>&1
-printf 'ROS_BROKER_RECEIPT_TESTS PASS count=9\n'
+printf 'ROS_BROKER_RECEIPT_TESTS PASS count=10\n'

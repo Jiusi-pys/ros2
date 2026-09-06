@@ -318,6 +318,13 @@ evidence categories. Only terminate processes owned by the current test run.
   enclaves on four actual Contexts across both boards, with the existing data,
   service and retirement checks and nine receipt-negative tests. This closes
   the tested enclave gap above, not the remaining endpoint type-hash gap.
+- RMW commit `76aa9dc` closes the tested endpoint type-hash propagation gap:
+  generated C/C++ message hashes and distinct request/response hashes reach the
+  first MDDS announcement and local/remote endpoint info. The final 49-case
+  suite and ten event regressions passed. `ros_hash_green_20260907` matched
+  every active ordinary/request/reply endpoint to the generated type-description
+  hashes across both boards; ten negative receipt checks passed. This does not
+  certify the remaining full graph/CLI matrix or DDS XTypes negotiation.
 
 There are still 21 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include

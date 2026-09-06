@@ -22,6 +22,7 @@ a = p.parse_args()
 root = Path(a.root)
 other = 'B' if a.role == 'A' else 'A'
 ns = '/ros_broker_' + a.run_id
+expected_type_hashes = json.loads((root / 'type_hashes.json').read_text())['hashes']
 assert a.role in ('A', 'B') and a.self_serial != a.peer_serial
 assert os.environ['MDDS_BROKER_ROOT'] == str(root / 'brokers')
 assert os.environ['MDDS_DEPLOYMENT_PROFILE'] == 'ohos_dsoftbus' and 'MDDS_TRANSPORT' not in os.environ
@@ -54,12 +55,35 @@ def wait(predicate, seconds=65):
         spin()
     if records:
         print('ROS_BROKER_ENCLAVES_OBSERVED ' + json.dumps(records[0]['node'].get_node_names_and_namespaces_with_enclaves()), flush=True)
+        print('ROS_BROKER_HASHES_OBSERVED ' + json.dumps(endpoint_hashes()), flush=True)
     raise RuntimeError('ROS broker phase deadline expired')
 
 def snapshot(stage):
     value = provenance(str(root / 'lib/libmdds.so'), str(root / 'python'), str(root / 'rclpy_package.json'), a.manifest_sha)
     value.update(stage=stage, role=a.role)
     print('ROS_BROKER_PROVENANCE ' + json.dumps(value, sort_keys=True), flush=True)
+
+def endpoint_hashes():
+    observer = records[0]['node']
+    result = {}
+    for role in ('A', 'B'):
+        for name in ('alpha', 'beta'):
+            base = path(role, name)
+            for label, topic, raw in [('topic', base + '/out', False), ('request', 'rq' + base + '/serveRequest', True), ('response', 'rr' + base + '/serveReply', True)]:
+                for kind, getter in [('publisher', observer.get_publishers_info_by_topic), ('subscription', observer.get_subscriptions_info_by_topic)]:
+                    result[role + '/' + name + '/' + label + '/' + kind] = [str(ep.topic_type_hash) for ep in getter(topic, no_mangle=raw)]
+    return result
+
+
+def expected_endpoint_hashes(churn):
+    result = {}
+    for role in ('A', 'B'):
+        for name in ('alpha', 'beta'):
+            for label, type_name in [('topic', 'std_msgs/msg/String'), ('request', 'example_interfaces/srv/AddTwoInts_Request'), ('response', 'example_interfaces/srv/AddTwoInts_Response')]:
+                for kind in ('publisher', 'subscription'):
+                    result[role + '/' + name + '/' + label + '/' + kind] = [] if churn and name == 'beta' else [expected_type_hashes[type_name]]
+    return result
+
 
 def graph_ok(churn=False):
     observer = records[0]['node']
@@ -72,6 +96,8 @@ def graph_ok(churn=False):
         if not churn:
             expected_enclaves[('beta_' + role, ns, '/' + role + '/beta')] = 1
     if Counter(enclave_rows) != expected_enclaves:
+        return False
+    if endpoint_hashes() != expected_endpoint_hashes(churn):
         return False
     for role in ('A', 'B'):
         if nodes.count(('duplicate_' + role, ns)) != (1 if churn else 2):
@@ -151,6 +177,7 @@ def exchange(active, phase, services=False):
     result = {'role': a.role, 'phase': phase, 'messages': 5 * len(active), 'service_calls': len(active) if services else 0, 'graph': True, 'ack': True, 'nonce': a.nonce, 'received': received, 'service_results': {r['name']: r['future'].result().sum for r in active} if services else {}, 'nodes': [list(v) for v in records[0]['node'].get_node_names_and_namespaces() if v[1] == ns]}
     result['type_hashes'] = {path(role, name) + '/out': [str(getattr(ep, 'topic_type_hash', None)) for ep in records[0]['node'].get_publishers_info_by_topic(path(role, name) + '/out')] for role in ('A', 'B') for name in ('alpha', 'beta')}
     result['enclaves'] = [list(v) for v in records[0]['node'].get_node_names_and_namespaces_with_enclaves() if v[1] == ns]
+    result['endpoint_hashes'] = endpoint_hashes()
     print('ROS_BROKER_PHASE ' + json.dumps(result), flush=True)
 try:
     for name in ('alpha', 'beta'):

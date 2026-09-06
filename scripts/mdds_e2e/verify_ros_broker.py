@@ -24,6 +24,7 @@ def validate(root, run, a, b):
         nonce = (root / 'nonce').read_text().strip()
         remote = '/data/local/tmp/ros2/.mdds-owned-runs/' + run
         ns = '/ros_broker_' + run
+        type_hashes = json.loads((root / 'type_hashes.json').read_text())['hashes']
         for board, peer, label in ((a, b, 'A'), (b, a, 'B')):
             logs = {role: (root / f'{board}.{role}.log').read_text() for role in ('ros', 'daemon')}
             status = {role: json.loads((root / f'{board}.{role}.status.json').read_text()) for role in logs}
@@ -60,6 +61,14 @@ def validate(root, run, a, b):
                         expected_enclaves[(name + '_' + role, ns, '/' + role + '/' + name)] = 1
                     expected_enclaves[('duplicate_' + role, ns, '/' + role + '/alpha')] = 2 if n == 1 else 1
                 require(Counter(tuple(v) for v in phase.get('enclaves', [])) == expected_enclaves, 'wrong per-context enclave metadata')
+                expected_hashes = {}
+                for role in ('A', 'B'):
+                    for endpoint in ('alpha', 'beta'):
+                        for category, type_name in [('topic', 'std_msgs/msg/String'), ('request', 'example_interfaces/srv/AddTwoInts_Request'), ('response', 'example_interfaces/srv/AddTwoInts_Response')]:
+                            for kind in ('publisher', 'subscription'):
+                                key = role + '/' + endpoint + '/' + category + '/' + kind
+                                expected_hashes[key] = [] if n == 2 and endpoint == 'beta' else [type_hashes[type_name]]
+                require(phase.get('endpoint_hashes') == expected_hashes, 'wrong generated message/request/response type hash')
             provenance = json_rows(logs['ros'], 'ROS_BROKER_PROVENANCE ')
             require([v['stage'] for v in provenance] == [1, 2], 'missing provenance')
             for v in provenance:

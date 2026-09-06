@@ -29,7 +29,7 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def provenance(overlay_lib):
+def provenance(overlay_lib, rclpy_overlay='', rclpy_manifest='', rclpy_manifest_sha256=''):
     paths = set()
     rmw_paths = set()
     for line in Path('/proc/self/maps').read_text().splitlines():
@@ -62,8 +62,18 @@ def provenance(overlay_lib):
             if columns[9] in socket_inodes:
                 udp.append({'table': table_name, 'local': columns[1], 'inode': columns[9]})
     require(not udp, f'Owned UDP sockets are forbidden: {udp}')
-    return {'pid': os.getpid(), 'libmdds_paths': sorted(paths),
-            'librmw_mdds_paths': sorted(rmw_paths), 'owned_udp_sockets': udp}
+    result = {'pid': os.getpid(), 'libmdds_paths': sorted(paths),
+              'librmw_mdds_paths': sorted(rmw_paths), 'owned_udp_sockets': udp}
+    if rclpy_manifest:
+        from broker_local_run import inspect_rclpy_overlay
+        result['rclpy'] = inspect_rclpy_overlay(
+            rclpy_overlay, rclpy_manifest, rclpy_manifest_sha256)
+    return result
+
+
+def probe_provenance(args):
+    return provenance(args.overlay_lib, args.rclpy_overlay, args.rclpy_manifest,
+                      args.rclpy_manifest_sha256)
 
 
 def check_profile():
@@ -197,7 +207,7 @@ def contexts(args, namespace, topic_a, topic_b):
         wait(records, lambda: all(complete_graph(r, namespace, ['alpha', 'beta'],
                                                 topic_a, topic_b, 'alpha', 'beta') for r in records),
              args.timeout, 'Both context graphs must show exact node and endpoint ownership')
-        original_provenance = provenance(args.overlay_lib)
+        original_provenance = probe_provenance(args)
         wanted_alpha = [f'{args.run_id}:beta:{n}' for n in range(args.count)]
         wanted_beta = [f'{args.run_id}:alpha:{n}' for n in range(args.count)]
         for n in range(args.count):
@@ -240,7 +250,7 @@ def contexts(args, namespace, topic_a, topic_b):
         ack(beta)
         ack(gamma)
         return {'mode': 'contexts', 'before': original_provenance,
-                'after': provenance(args.overlay_lib), 'initial_samples_per_direction': args.count,
+                'after': probe_provenance(args), 'initial_samples_per_direction': args.count,
                 'alpha_retired': True, 'beta_to_fresh_gamma': True,
                 'beta_received': beta['received'], 'gamma_received': gamma['received']}
     finally:
@@ -272,7 +282,7 @@ def worker(args, namespace, topic_a, topic_b):
              record['node'].count_publishers(completion_topic) == 2 and
              record['node'].count_subscribers(completion_topic) == 2,
              args.timeout, f'{role} process graph did not converge')
-        loaded = provenance(args.overlay_lib)
+        loaded = probe_provenance(args)
         expected = [f'{args.run_id}:{peer}:{n}' for n in range(args.count)]
         print('BROKER_WORKER_READY ' + role, flush=True)
         for n in range(args.count):
@@ -300,10 +310,13 @@ def worker(args, namespace, topic_a, topic_b):
             wait([record], lambda: f'{args.run_id}:beta:RELEASE_ALPHA' in control_received,
                  args.timeout, 'Alpha cannot exit before beta confirms its completion barrier')
             ack(record, 'control_publisher')
-        return {'mode': 'worker', 'role': role, 'provenance': loaded,
-                'received': record['received'], 'peer_retired': role == 'beta',
-                'completion_barrier': True,
-                'release_phase': 'sent' if role == 'beta' else 'received'}
+        result = {'mode': 'worker', 'role': role, 'provenance': loaded,
+                  'received': record['received'], 'peer_retired': role == 'beta',
+                  'completion_barrier': True,
+                  'release_phase': 'sent' if role == 'beta' else 'received'}
+        if args.rclpy_manifest:
+            result['after_provenance'] = probe_provenance(args)
+        return result
     finally:
         close_node(record)
 
@@ -314,12 +327,17 @@ def main():
     parser.add_argument('--role', choices=('alpha', 'beta'))
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--overlay-lib', default='')
+    parser.add_argument('--rclpy-overlay', default='')
+    parser.add_argument('--rclpy-manifest', default='')
+    parser.add_argument('--rclpy-manifest-sha256', default='')
     parser.add_argument('--count', type=int, default=5)
     parser.add_argument('--timeout', type=float, default=20)
     args = parser.parse_args()
     require(re.fullmatch(r'[A-Za-z0-9_]{1,48}', args.run_id) is not None, 'Invalid run id')
     require(1 <= args.count <= 16 and 0 < args.timeout <= 60, 'Invalid test bounds')
     require(args.mode != 'worker' or args.role is not None, 'Worker role is required')
+    rclpy_options = (args.rclpy_overlay, args.rclpy_manifest, args.rclpy_manifest_sha256)
+    require(not any(rclpy_options) or all(rclpy_options), 'Incomplete private rclpy options')
     namespace = '/mdds_broker_' + args.run_id
     topic_a, topic_b = namespace + '/a_to_b', namespace + '/b_to_a'
     try:

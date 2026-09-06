@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from broker_local_run import mark_executable, validate_result
+from broker_local_run import mark_executable, validate_result, inspect_rclpy_overlay
 
 
 class BrokerLocalMetadataTests(unittest.TestCase):
@@ -131,6 +131,91 @@ class BrokerLocalMetadataTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     mark_executable(str(artifact), '0' * 64)
                 chmod.assert_not_called()
+
+
+
+class BrokerRclpyOverlayTests(unittest.TestCase):
+    def setUp(self):
+        BrokerLocalMetadataTests.setUp(self)
+        self.native = '_rclpy_pybind11.cpython-312-aarch64-linux-ohos.so'
+        self.python_root = self.lib.rsplit('/', 1)[0] + '/python'
+        self.manifest_sha = 'b' * 64
+        self.manifest = {'native_name': self.native, 'native_sha256': 'a' * 64,
+                         'archive_sha256': 'c' * 64, 'files': {'rclpy/__init__.py': {}, 'rclpy/' + self.native: {}}}
+        self.rclpy = {'package_file': self.python_root + '/rclpy/__init__.py',
+                      'native_file': self.python_root + '/rclpy/' + self.native,
+                      'mapped_native_paths': [self.python_root + '/rclpy/' + self.native],
+                      'native_sha256': 'a' * 64, 'manifest_sha256': self.manifest_sha,
+                      'package_archive_sha256': 'c' * 64, 'package_files_verified': 2}
+
+    def validate(self, result=None, role='contexts'):
+        result = result if result is not None else self.result
+        status = dict(self.status, role=role)
+        record = self.record.replace('contexts_child', role + '_child')
+        log = ('BROKER_LOCAL_ROS_RESULT ' + json.dumps(result) + '\n' +
+               'GRAPH_PROCESS_EXIT ' + json.dumps(status) + '\n')
+        return validate_result(log, status, record, self.run, role, self.lib, 5,
+                               rclpy_manifest=self.manifest, rclpy_manifest_sha256=self.manifest_sha)
+
+    def test_selected_overlay_requires_before_and_after_loaded_native_proof(self):
+        self.assertTrue(self.validate())
+        self.result['before']['rclpy'] = copy.deepcopy(self.rclpy)
+        self.result['after']['rclpy'] = copy.deepcopy(self.rclpy)
+        self.assertEqual([], self.validate())
+        for key, value in [('package_file', '/shared/rclpy/__init__.py'),
+                           ('native_file', '/shared/' + self.native),
+                           ('mapped_native_paths', ['/shared/' + self.native]),
+                           ('native_sha256', '0' * 64), ('manifest_sha256', '0' * 64),
+                           ('package_files_verified', 1)]:
+            with self.subTest(key=key):
+                result = copy.deepcopy(self.result)
+                result['after']['rclpy'][key] = value
+                self.assertTrue(self.validate(result))
+
+    def test_worker_overlay_requires_a_second_provenance_after_its_barrier(self):
+        provenance = copy.deepcopy(self.result['before'])
+        provenance['rclpy'] = copy.deepcopy(self.rclpy)
+        result = {'mode': 'worker', 'role': 'alpha', 'run_id': self.run, 'verdict': 'PASS',
+                  'physical_dsoftbus_proven': False, 'provenance': provenance,
+                  'received': [f'{self.run}:beta:{n}' for n in range(5)],
+                  'peer_retired': False, 'completion_barrier': True, 'release_phase': 'received'}
+        self.assertTrue(self.validate(result, role='alpha'))
+        result['after_provenance'] = copy.deepcopy(provenance)
+        self.assertEqual([], self.validate(result, role='alpha'))
+        result['after_provenance']['rclpy']['native_sha256'] = '0' * 64
+        self.assertTrue(self.validate(result, role='alpha'))
+
+    def test_runtime_probe_rejects_shared_mapping_and_modified_package_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'python'
+            package = root / 'rclpy'
+            package.mkdir(parents=True)
+            initializer = package / '__init__.py'
+            initializer.write_bytes(b'private package')
+            native = package / self.native
+            native.write_bytes(b'private native')
+            files = {p.relative_to(root).as_posix(): {'sha256': hashlib.sha256(p.read_bytes()).hexdigest(),
+                                                    'bytes': p.stat().st_size} for p in (initializer, native)}
+            manifest = {'schema_version': 1, 'native_name': self.native,
+                        'native_sha256': files['rclpy/' + self.native]['sha256'],
+                        'archive_sha256': 'c' * 64, 'files': files}
+            manifest_file = Path(directory) / 'manifest.json'
+            manifest_file.write_text(json.dumps(manifest), encoding='utf-8')
+            expected = hashlib.sha256(manifest_file.read_bytes()).hexdigest()
+            arguments = {'package_file': str(initializer), 'native_file': str(native),
+                         'maps_text': '1-2 r-xp 0 00:00 1 ' + str(native) + '\n'}
+            record = inspect_rclpy_overlay(root, manifest_file, expected, **arguments)
+            self.assertEqual(str(native), record.get('native_file'))
+            self.assertEqual(2, record.get('package_files_verified'))
+            with self.assertRaises(ValueError):
+                inspect_rclpy_overlay(root, manifest_file, '0' * 64, **arguments)
+            bad = dict(arguments, maps_text=arguments['maps_text'] +
+                       '3-4 r-xp 0 00:00 2 /shared/' + self.native + '\n')
+            with self.assertRaises(ValueError):
+                inspect_rclpy_overlay(root, manifest_file, expected, **bad)
+            initializer.write_bytes(b'changed package')
+            with self.assertRaises(ValueError):
+                inspect_rclpy_overlay(root, manifest_file, expected, **arguments)
 
 
 if __name__ == '__main__':

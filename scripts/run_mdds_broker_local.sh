@@ -17,6 +17,10 @@ BROKER_LOGROOT="${MDDS_BROKER_LOGROOT:-ohos_test_logs/broker_local}"
 BROKER_DAEMON_STARTED=0
 BROKER_DAEMON_STOPPED=0
 BROKER_DAEMON_COLLECTED=0
+BROKER_RCLPY_NATIVE=""
+BROKER_RCLPY_PACKAGE=install_ohos/Lib/site-packages/rclpy
+BROKER_RCLPY_PACKAGE_EXPLICIT=0
+BROKER_RCLPY_PROBE_ARGS=()
 declare -A BROKER_SOURCES=() BROKER_HASHES=() BROKER_DESTINATIONS=() BROKER_PIDS=()
 
 broker_local_parse_args() {
@@ -27,11 +31,14 @@ broker_local_parse_args() {
       --variant) BROKER_VARIANT="$2" ;;
       --scenario) BROKER_SCENARIO="$2" ;;
       --run-id) export MDDS_RUN_ID="$2" ;;
+      --rclpy-native) [[ -n "$2" ]] || return 2; BROKER_RCLPY_NATIVE="$2" ;;
+      --rclpy-package) [[ -n "$2" ]] || return 2; BROKER_RCLPY_PACKAGE="$2"; BROKER_RCLPY_PACKAGE_EXPLICIT=1 ;;
       *) echo "ERROR: unknown broker-local argument: $1" >&2; return 2 ;;
     esac
     shift 2
   done
   [[ "$BROKER_VARIANT" == overlay || "$BROKER_VARIANT" == baseline ]] || return 2
+  [[ "$BROKER_RCLPY_PACKAGE_EXPLICIT" == 0 || -n "$BROKER_RCLPY_NATIVE" ]] || return 2
   [[ "$BROKER_SCENARIO" == all || "$BROKER_SCENARIO" == contexts || "$BROKER_SCENARIO" == processes ]] || return 2
   [[ "$BROKER_BOARD" =~ ^[A-Za-z0-9_.-]+$ ]] || return 2
   [[ "$BROKER_LOGROOT" =~ ^[A-Za-z0-9][A-Za-z0-9_./-]*$ && "/$BROKER_LOGROOT/" != *"/../"* && "/$BROKER_LOGROOT/" != *"/./"* ]] || return 2
@@ -53,9 +60,28 @@ broker_local_freeze_inputs() {
   BROKER_SOURCES[broker_local_run.py]=scripts/mdds_e2e/broker_local_run.py
   BROKER_SOURCES[board_graph_ownership.py]=scripts/mdds_e2e/board_graph_ownership.py
   BROKER_SOURCES[profile.env]=install_ohos/share/rmw_mdds/config/ohos_dsoftbus.env
+  if [[ -n "$BROKER_RCLPY_NATIVE" ]]; then
+    BROKER_SOURCES[type_description_lifetime.py]=scripts/mdds_e2e/type_description_lifetime.py
+  fi
   local name
   for name in "${!BROKER_SOURCES[@]}"; do
     BROKER_HASHES[$name]=$(graph_sha "${BROKER_SOURCES[$name]}") || return 1
+    [[ "${BROKER_HASHES[$name]}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  done
+}
+
+broker_local_prepare_rclpy_inputs() {
+  [[ -n "$BROKER_RCLPY_NATIVE" ]] || return 0
+  local helper="${BROKER_SOURCES[type_description_lifetime.py]}" name
+  [[ "$(graph_sha "$helper")" == "${BROKER_HASHES[type_description_lifetime.py]}" ]] || return 1
+  cp -- "$helper" "$LOGDIR/type_description_lifetime.py" || return 1
+  BROKER_SOURCES[type_description_lifetime.py]="$LOGDIR/type_description_lifetime.py"
+  "$GRAPH_HOST_PYTHON" -B "$LOGDIR/type_description_lifetime.py" pack \
+    --package "$BROKER_RCLPY_PACKAGE" --native "$BROKER_RCLPY_NATIVE" \
+    --archive "$LOGDIR/rclpy_overlay.tar" --manifest "$LOGDIR/rclpy_package.json" || return 1
+  for name in rclpy_overlay.tar rclpy_package.json; do
+    BROKER_SOURCES[$name]="$LOGDIR/$name"
+    BROKER_HASHES[$name]=$(graph_sha "$LOGDIR/$name") || return 1
     [[ "${BROKER_HASHES[$name]}" =~ ^[0-9a-f]{64}$ ]] || return 1
   done
 }
@@ -112,12 +138,16 @@ broker_local_wait_status() {
 
 broker_local_collect() {
   local role="$1"
+  local -a rclpy_args=()
+  if [[ -n "$BROKER_RCLPY_NATIVE" && "$role" != daemon ]]; then
+    rclpy_args=(--rclpy-manifest "$LOGDIR/rclpy_package.json" --rclpy-manifest-sha256 "${BROKER_HASHES[rclpy_package.json]}")
+  fi
   graph_fetch_verified "$BROKER_BOARD" "$MDDS_OWNED_REMOTE_DIR/$role.status.json" "$LOGDIR/$role.status.json" || return 1
   graph_fetch_verified "$BROKER_BOARD" "$MDDS_OWNED_REMOTE_DIR/$role.log" "$LOGDIR/$role.log" || return 1
   "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/broker_local_run.py verify \
     --run-id "$MDDS_OWNED_RUN_ID" --fixture-role "$role" --libdir "$REMOTE_LIB" \
     --socket "$BROKER_SOCKET" --count "$BROKER_COUNT" --log "$LOGDIR/$role.log" \
-    --status-file "$LOGDIR/$role.status.json" --child-record "$LOGDIR/$role.child.pid"
+    --status-file "$LOGDIR/$role.status.json" --child-record "$LOGDIR/$role.child.pid" "${rclpy_args[@]}"
 }
 
 broker_local_wait_daemon() {
@@ -169,6 +199,7 @@ broker_local_main() {
   LOGDIR="$BROKER_LOGROOT/$MDDS_RUN_ID"
   [[ ! -e "$LOGDIR" && ! -L "$LOGDIR" ]] || return 1
   mkdir -p "$LOGDIR"
+  broker_local_prepare_rclpy_inputs || return 1
   mdds_owned_init broker_local "$BROKER_BOARD" || return 1
   trap broker_local_exit EXIT
   trap 'exit 130' INT
@@ -187,20 +218,26 @@ broker_local_main() {
   ready=$(shell "$BROKER_BOARD" ". $DEVICE_DIR/env.sh || exit 70; python3.12 '$REMOTE_RUNNER' mark-executable --run-id '$MDDS_OWNED_RUN_ID' --artifact '$MDDS_OWNED_REMOTE_DIR/mdds_broker_local_test_daemon' --sha256 '${BROKER_HASHES[mdds_broker_local_test_daemon]}'" | tr -d '\r')
   [[ "$ready" == "BROKER_EXEC_READY sha256=${BROKER_HASHES[mdds_broker_local_test_daemon]}" ]] || return 1
   BROKER_ENVS=". $DEVICE_DIR/env.sh || exit 70; . $MDDS_OWNED_REMOTE_DIR/profile.env || exit 70; export RMW_IMPLEMENTATION=rmw_mdds; export ROS_DOMAIN_ID=49; export LD_LIBRARY_PATH=$REMOTE_LIB:\$LD_LIBRARY_PATH; export MDDS_BROKER_LOCAL_TEST_SOCKET=$BROKER_SOCKET;"
+  if [[ -n "$BROKER_RCLPY_NATIVE" ]]; then
+    ready=$(shell "$BROKER_BOARD" ". $DEVICE_DIR/env.sh || exit 70; python3.12 '$REMOTE_RUNNER' prepare-rclpy --run-id '$MDDS_OWNED_RUN_ID' --archive '$MDDS_OWNED_REMOTE_DIR/rclpy_overlay.tar' --rclpy-overlay '$MDDS_OWNED_REMOTE_DIR/python' --rclpy-manifest '$MDDS_OWNED_REMOTE_DIR/rclpy_package.json' --rclpy-manifest-sha256 '${BROKER_HASHES[rclpy_package.json]}'" | tr -d '\r')
+    [[ "$ready" == "BROKER_RCLPY_READY manifest_sha256=${BROKER_HASHES[rclpy_package.json]}" ]] || return 1
+    BROKER_ENVS+=" export PYTHONPATH=$MDDS_OWNED_REMOTE_DIR/python:\${PYTHONPATH:-}; export PYTHONDONTWRITEBYTECODE=1;"
+    BROKER_RCLPY_PROBE_ARGS=(--rclpy-overlay "$MDDS_OWNED_REMOTE_DIR/python" --rclpy-manifest "$MDDS_OWNED_REMOTE_DIR/rclpy_package.json" --rclpy-manifest-sha256 "${BROKER_HASHES[rclpy_package.json]}")
+  fi
   broker_local_launch daemon "$MDDS_OWNED_REMOTE_DIR/mdds_broker_local_test_daemon" \
     --socket "$BROKER_SOCKET" --run-id "$MDDS_OWNED_RUN_ID" --domain 49 --uid 0 --run-ms 600000 || return 1
   BROKER_DAEMON_STARTED=1
   broker_local_wait_daemon || return 1
   if [[ "$BROKER_SCENARIO" == contexts || "$BROKER_SCENARIO" == all ]]; then
     broker_local_launch contexts python3.12 "$MDDS_OWNED_REMOTE_DIR/broker_local_ros_probe.py" \
-      --mode contexts --run-id "$MDDS_OWNED_RUN_ID" --overlay-lib "$REMOTE_LIB/libmdds.so" --count "$BROKER_COUNT" || return 1
+      --mode contexts --run-id "$MDDS_OWNED_RUN_ID" --overlay-lib "$REMOTE_LIB/libmdds.so" --count "$BROKER_COUNT" "${BROKER_RCLPY_PROBE_ARGS[@]}" || return 1
     broker_local_wait_status contexts || return 1
     broker_local_collect contexts || result=1
   fi
   if [[ "$result" == 0 && ( "$BROKER_SCENARIO" == processes || "$BROKER_SCENARIO" == all ) ]]; then
     for name in alpha beta; do
       broker_local_launch "$name" python3.12 "$MDDS_OWNED_REMOTE_DIR/broker_local_ros_probe.py" \
-        --mode worker --role "$name" --run-id "$MDDS_OWNED_RUN_ID" --overlay-lib "$REMOTE_LIB/libmdds.so" --count "$BROKER_COUNT" || return 1
+        --mode worker --role "$name" --run-id "$MDDS_OWNED_RUN_ID" --overlay-lib "$REMOTE_LIB/libmdds.so" --count "$BROKER_COUNT" "${BROKER_RCLPY_PROBE_ARGS[@]}" || return 1
     done
     broker_local_wait_status alpha || return 1
     broker_local_wait_status beta || return 1

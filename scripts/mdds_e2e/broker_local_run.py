@@ -41,7 +41,68 @@ def mark_executable(path, expected_sha):
         os.close(fd)
 
 
-def validate_result(log, status, record, run_id, role, libdir, count, socket_path=''):
+def read_rclpy_manifest(path, expected_sha):
+    from type_description_lifetime import regular_bytes, digest
+    if not re.fullmatch(r'[0-9a-f]{64}', expected_sha):
+        raise ValueError('invalid frozen rclpy package manifest digest')
+    raw = regular_bytes(path, 256 * 1024)
+    if digest(raw) != expected_sha:
+        raise ValueError('rclpy package manifest changed')
+    manifest = json.loads(raw)
+    if (manifest.get('schema_version') != 1 or
+            not re.fullmatch(r'_rclpy_pybind11[A-Za-z0-9_.-]*\.so', manifest.get('native_name', '')) or
+            not re.fullmatch(r'[0-9a-f]{64}', manifest.get('native_sha256', '')) or
+            not re.fullmatch(r'[0-9a-f]{64}', manifest.get('archive_sha256', '')) or
+            not isinstance(manifest.get('files'), dict) or not 1 <= len(manifest['files']) <= 256):
+        raise ValueError('invalid rclpy package manifest inventory')
+    return manifest
+
+
+def inspect_rclpy_overlay(python_root, manifest_path, expected_manifest_sha, *,
+                          package_file=None, native_file=None, maps_text=None):
+    """Prove the selected full package and native are imported, mapped and intact."""
+    from type_description_lifetime import regular_bytes, digest, safe_member
+    root = Path(python_root)
+    manifest = read_rclpy_manifest(manifest_path, expected_manifest_sha)
+    if package_file is None or native_file is None:
+        import rclpy
+        from rclpy.impl.implementation_singleton import rclpy_implementation
+        package_file, native_file = rclpy.__file__, rclpy_implementation.__file__
+    expected_package = root / 'rclpy/__init__.py'
+    expected_native = root / 'rclpy' / manifest['native_name']
+    if Path(package_file) != expected_package or Path(native_file) != expected_native:
+        raise ValueError('rclpy package/native import escaped the private package')
+    if maps_text is None:
+        maps_text = Path('/proc/self/maps').read_text()
+    mapped = set()
+    for line in maps_text.splitlines():
+        fields = line.split(None, 5)
+        if len(fields) == 6:
+            path = fields[5].strip()
+            if Path(path.removesuffix(' (deleted)')).name.startswith('_rclpy_pybind11'):
+                mapped.add(path)
+    if mapped != {str(expected_native)}:
+        raise ValueError('wrong or duplicate actual rclpy native mapping')
+    needed = {'rclpy/__init__.py', 'rclpy/' + manifest['native_name']}
+    if not needed.issubset(manifest['files']):
+        raise ValueError('rclpy manifest omits native or package initializer')
+    for relative, info in manifest['files'].items():
+        if not safe_member(relative) or not isinstance(info, dict):
+            raise ValueError('unsafe rclpy manifest member')
+        raw = regular_bytes(root / relative)
+        if len(raw) != info.get('bytes') or digest(raw) != info.get('sha256'):
+            raise ValueError('extracted rclpy package bytes changed: ' + relative)
+    if digest(regular_bytes(expected_native)) != manifest['native_sha256']:
+        raise ValueError('mapped rclpy native hash differs from selected input')
+    return {'package_file': str(expected_package), 'native_file': str(expected_native),
+            'mapped_native_paths': sorted(mapped), 'native_sha256': manifest['native_sha256'],
+            'manifest_sha256': expected_manifest_sha,
+            'package_archive_sha256': manifest['archive_sha256'],
+            'package_files_verified': len(manifest['files'])}
+
+
+def validate_result(log, status, record, run_id, role, libdir, count, socket_path='',
+                    rclpy_manifest=None, rclpy_manifest_sha256=''):
     errors = []
     if not isinstance(status, dict):
         return ['missing real child wait status']
@@ -117,6 +178,20 @@ def validate_result(log, status, record, run_id, role, libdir, count, socket_pat
                     'librmw_mdds_paths': [libdir + '/librmw_mdds.so'], 'owned_udp_sockets': []}
         if not isinstance(value, dict) or any(value.get(key) != want for key, want in expected.items()):
             errors.append('wrong loaded overlay/process identity or owned UDP socket exists')
+        if rclpy_manifest is not None:
+            native = rclpy_manifest.get('native_name', '')
+            python_root = libdir.rsplit('/', 1)[0] + '/python'
+            expected_rclpy = {
+                'package_file': python_root + '/rclpy/__init__.py',
+                'native_file': python_root + '/rclpy/' + native,
+                'mapped_native_paths': [python_root + '/rclpy/' + native],
+                'native_sha256': rclpy_manifest.get('native_sha256'),
+                'manifest_sha256': rclpy_manifest_sha256,
+                'package_archive_sha256': rclpy_manifest.get('archive_sha256'),
+                'package_files_verified': len(rclpy_manifest.get('files', {}))}
+            if (not isinstance(value, dict) or value.get('rclpy') != expected_rclpy or
+                    not re.fullmatch(r'[0-9a-f]{64}', rclpy_manifest_sha256)):
+                errors.append('missing or wrong loaded rclpy package/native/hash provenance')
 
     if role == 'contexts':
         if (result.get('mode') != 'contexts' or result.get('alpha_retired') is not True or
@@ -135,6 +210,8 @@ def validate_result(log, status, record, run_id, role, libdir, count, socket_pat
         if result.get('mode') != 'worker' or result.get('role') != role:
             errors.append('wrong worker mode or role')
         provenance(result.get('provenance'))
+        if rclpy_manifest is not None:
+            provenance(result.get('after_provenance'))
         peer = 'beta' if role == 'alpha' else 'alpha'
         if result.get('received') != [f'{run_id}:{peer}:{n}' for n in range(count)]:
             errors.append('worker payload sequence differs')
@@ -150,7 +227,7 @@ def validate_result(log, status, record, run_id, role, libdir, count, socket_pat
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=('supervise', 'verify', 'pair', 'mark-executable'))
+    parser.add_argument('operation', choices=('supervise', 'verify', 'pair', 'mark-executable', 'prepare-rclpy'))
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--fixture-role', choices=('contexts', 'alpha', 'beta', 'daemon'))
     parser.add_argument('--status-file')
@@ -164,9 +241,28 @@ def main():
     parser.add_argument('--command', nargs=argparse.REMAINDER)
     parser.add_argument('--artifact')
     parser.add_argument('--sha256')
+    parser.add_argument('--rclpy-manifest')
+    parser.add_argument('--rclpy-manifest-sha256', default='')
+    parser.add_argument('--rclpy-overlay')
+    parser.add_argument('--archive')
     args = parser.parse_args()
     if not re.fullmatch(r'[A-Za-z0-9_]{1,32}', args.run_id):
         parser.error('run id must contain 1..32 letters, digits or underscores')
+    if args.operation == 'prepare-rclpy':
+        if not all((args.rclpy_manifest, args.rclpy_manifest_sha256, args.rclpy_overlay, args.archive)):
+            parser.error('prepare-rclpy requires manifest/digest/overlay/archive')
+        from type_description_lifetime import extract_rclpy, regular_bytes
+        root = Path(__file__).resolve().parent
+        if (root.parent.name != '.mdds-owned-runs' or root.name != args.run_id or
+                Path(args.rclpy_manifest).parent != root or Path(args.archive).parent != root or
+                Path(args.rclpy_overlay) != root / 'python' or
+                regular_bytes(root / 'owner', 1024) !=
+                f'MDDS_RUN_OWNER RUN_ID={args.run_id} LABEL=broker_local\n'.encode()):
+            raise ValueError('rclpy overlay is not in the selected owned broker run')
+        manifest = read_rclpy_manifest(args.rclpy_manifest, args.rclpy_manifest_sha256)
+        extract_rclpy(args.archive, manifest, args.rclpy_overlay)
+        print('BROKER_RCLPY_READY manifest_sha256=' + args.rclpy_manifest_sha256, flush=True)
+        return 0
     if args.operation == 'mark-executable':
         if not args.artifact or not args.sha256:
             parser.error('mark-executable requires artifact path and frozen SHA256')
@@ -191,10 +287,16 @@ def main():
         return 0
     if not args.fixture_role or not args.status_file or not args.child_record or not args.log:
         parser.error('verify requires role, status, child record and log')
+    manifest = None
+    if args.rclpy_manifest:
+        manifest = read_rclpy_manifest(args.rclpy_manifest, args.rclpy_manifest_sha256)
+    elif args.rclpy_manifest_sha256:
+        parser.error('rclpy manifest digest requires the manifest file')
     errors = validate_result(Path(args.log).read_text(encoding='utf-8'),
                              json.loads(Path(args.status_file).read_text(encoding='utf-8')),
                              Path(args.child_record).read_text(encoding='utf-8'),
-                             args.run_id, args.fixture_role, args.libdir, args.count, args.socket)
+                             args.run_id, args.fixture_role, args.libdir, args.count, args.socket,
+                             manifest, args.rclpy_manifest_sha256)
     print('BROKER_LOCAL_CASE ' + json.dumps({'run_id': args.run_id, 'role': args.fixture_role,
           'verdict': 'FAIL' if errors else 'PASS', 'errors': errors,
           'physical_dsoftbus_proven': False}, sort_keys=True), flush=True)

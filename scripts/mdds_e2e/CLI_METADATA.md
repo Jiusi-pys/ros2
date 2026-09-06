@@ -33,6 +33,35 @@ registered CLI extension groups; duplicate entries inside those groups fail.
 
 ## Parent-managed board execution
 
+The host harness establishes ownership, stages all five dependencies, waits for
+the real metadata child, collects exact-hash evidence and replays acceptance:
+
+```bash
+MDDS_RUN_ID=cli_metadata_20260906_01 ./scripts/run_mdds_cli_metadata.sh
+```
+
+It targets board A only. `MDDS_METADATA_WAIT_SECONDS` accepts 2..1200 seconds
+and defaults to 1200; a summary file cannot satisfy the wait. The supervisor
+uses `board_graph_ownership.supervise_command` to record the actual metadata
+process return code and its PID/start identity. It then publishes a bounded
+`cli_metadata.tar` and a separate packaging terminal record. The child PID is
+registered for exact cleanup before the supervisor PID, and the host prints
+batch PASS only after cleanup succeeds.
+
+The collected archive is SHA256-checked before extraction. Only regular flat
+JSON/log members are accepted: no directories, links, device names, duplicate
+members or path traversal. Limits are 16 MiB archive/expanded bytes, 4 MiB per
+member and 128 members. The host requires the original acceptance verifier to
+report exactly twelve passing receipts, 86 `NOT_RUN` cases and a locked gateway
+gate, in addition to the real metadata-process RC 0. Nonzero child exit remains
+a failure even when the board summary and every receipt claim success.
+
+The harness freezes its board dependencies and host verifier under
+`ohos_test_logs/cli_metadata/<run-id>` and retains the archive, process log,
+PID/status records and host verification report there. It does not replace the
+shared board libraries or deployment. The following manual invocation describes
+the underlying board runner when a parent already manages its own harness.
+
 The parent must establish the usual MDDS activity lock and a fresh owned run
 directory. Its `owner` file must contain the exact run ID:
 
@@ -77,6 +106,8 @@ selected metadata cases passed. Preflight or output-ownership failure returns 2.
 ```powershell
 & .pixi/envs/default/python.exe scripts/mdds_e2e/test_board_cli_metadata.py -v
 & .pixi/envs/default/python.exe scripts/mdds_e2e/test_cli_acceptance.py -v
+& .pixi/envs/default/python.exe scripts/mdds_e2e/test_cli_metadata_archive.py -v
+& 'C:/Program Files/Git/bin/bash.exe' scripts/test_cli_metadata_harness.sh
 ```
 
 The host tests cover every selected oracle's positive and negative output,

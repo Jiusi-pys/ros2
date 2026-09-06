@@ -61,5 +61,17 @@ class ListReceipts(unittest.TestCase):
         (self.root / (BOARD + '.' + self.hidden()['execution']['log']['path'])).unlink()
         self.assertNotEqual(self.run_verifier(), 0)
 
+    def test_missing_isolation(self):
+        self.report.pop('daemon_absence')
+        self.assertNotEqual(self.run_verifier(), 0)
+
+    def test_incomplete_isolation(self):
+        self.report['daemon_absence'].pop()
+        self.assertNotEqual(self.run_verifier(), 0)
+
+    def test_existing_daemon(self):
+        self.report['daemon_absence'][0]['daemons'] = [{'pid':123}]
+        self.assertNotEqual(self.run_verifier(), 0)
+
 
 if __name__ == '__main__': unittest.main()

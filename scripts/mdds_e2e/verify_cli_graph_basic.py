@@ -19,6 +19,7 @@ for board in acceptance.TARGET['board_serials']:
     if status['run_id']!=run or status['role']!='cli' or status['returncode']!=0:raise ValueError('CLI batch child failed')
     record=(root/(board+'.cli.child.pid')).read_text().strip()
     if record!=f"MDDS_OWNED_PROCESS RUN_ID={run} TAG=cli_child PID={status['child_pid']} START={status['child_start']}":raise ValueError('CLI batch ownership mismatch')
+    if value.get('daemon_absence') != [{'command_index':index,'domain':175,'daemons':[],'port_bindable':True} for index in range(-1,len(value['results']))]:raise ValueError('CLI daemon isolation not proven at every command boundary')
     reports[board]=value['results']
     contexts[board]=json.loads((root/(board+'.cli.fixture.json')).read_text())
     if contexts[board]['run_id']!=run or contexts[board]['nonce']!=nonce or contexts[board]['board']!=board:raise ValueError('fixture context mismatch')
@@ -69,6 +70,7 @@ for case in manifest['cases']:
             marker='CLI_PUB_RX '+json.dumps(received)
             if peer_log.splitlines().count(marker)!=1:raise ValueError('peer callback evidence missing')
         if result['expected']!=expected or not result['passed'] or not oracle(case['id'],stdout,expected):raise ValueError('functional CLI oracle failed')
+        if case['id'] in ('cli:topic/type','cli:topic/find','cli:topic/info','cli:topic/echo','cli:topic/list','cli:service/list') and '--no-daemon' not in execution['argv']:raise ValueError('CLI strategy command is not explicitly isolated')
         if 'mdds transports active: dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('CLI did not report production broker selection')
         if not str(execution['child_start']).isdecimal() or execution['child_pid']<=0:raise ValueError('missing actual CLI child identity')
         executions.append(execution)

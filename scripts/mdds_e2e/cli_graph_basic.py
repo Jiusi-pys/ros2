@@ -9,6 +9,7 @@ import sys
 from board_graph_ownership import process_start
 import cli_acceptance as acceptance
 from cli_graph_lists import list_oracle
+from cli_daemon_guard import assert_absent, domain_daemons, owned, retire
 
 
 def oracle(case, stdout, expected):
@@ -93,6 +94,7 @@ def main():
     root = Path(sys.argv[1]); run, board, peer, nonce = sys.argv[2:6]
     if (root / 'owner').read_text() != f'MDDS_RUN_OWNER RUN_ID={run} LABEL=ros_broker\n':
         raise ValueError('wrong run owner')
+    daemon_absence = [{'command_index':-1, **assert_absent()}]
     namespace = '/ros_broker_' + run
     peer_role = 'B' if board == acceptance.TARGET['board_serials'][0] else 'A'
     service = namespace + '/' + peer_role + '/alpha/serve'
@@ -110,7 +112,7 @@ def main():
         ('cli:topic/info', ['ros2','topic','info',topic,'--verbose','--no-daemon','--spin-time','3'], context['topics'][topic]),
         ('cli:topic/pub', ['ros2','topic','pub',namespace+'/'+peer_role+'/cli_sink','std_msgs/msg/Int32',json.dumps({'data':base+2}),'--once','--keep-alive','0.5','--qos-reliability','reliable'], base+2),
         # Jazzy applies --field before --filter: m is the selected integer.
-        ('cli:topic/echo', ['ros2','topic','echo',namespace+'/'+peer_role+'/cli_source','std_msgs/msg/Int32','--once','--field','data','--filter',f'm == {base+1}','--qos-reliability','reliable','--qos-durability','volatile','--timeout','10'], base+1),
+        ('cli:topic/echo', ['ros2','topic','echo',namespace+'/'+peer_role+'/cli_source','std_msgs/msg/Int32','--no-daemon','--once','--field','data','--filter',f'm == {base+1}','--qos-reliability','reliable','--qos-durability','volatile','--timeout','10'], base+1),
     ]
     for kind in ('topic', 'service'):
         for hidden in (False, True):
@@ -118,8 +120,16 @@ def main():
             if hidden: argv.append('--include-hidden-'+('topics' if kind=='topic' else 'services'))
             cases.append(('cli:'+kind+'/list', argv, {'namespace':namespace,'kind':kind,'hidden':hidden}))
     output = root / 'cli_graph'; output.mkdir(mode=0o700)
-    results = [execute(argv, output, run, board, case, expected) for case, argv, expected in cases]
-    report = {'run_id':run,'board':board,'peer':peer,'nonce':nonce,'results':results}
+    results = []
+    try:
+        for index, (case, argv, expected) in enumerate(cases):
+            results.append(execute(argv, output, run, board, case, expected))
+            daemon_absence.append({'command_index':index, **assert_absent()})
+    finally:
+        for daemon in domain_daemons():
+            if owned(daemon, str(root)):
+                retire(daemon['pid'], root, daemon['start'])
+    report = {'run_id':run,'board':board,'peer':peer,'nonce':nonce,'results':results,'daemon_absence':daemon_absence}
     (output/'results.json').write_text(json.dumps(report,indent=2)+'\n')
     print('CLI_GRAPH_RESULT '+json.dumps(report),flush=True)
     return 0 if all(v['passed'] for v in results) else 1

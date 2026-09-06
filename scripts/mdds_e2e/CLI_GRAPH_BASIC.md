@@ -26,8 +26,9 @@ actual ROS CLI entry point for:
 - `service list --show-types`: exact fixture services/types, comparing normal
   and `--include-hidden-services` output against deliberately hidden services.
 
-Type/find/info use the supported `--no-daemon --spin-time 3` options. Service
-call, publish and echo use their direct node implementations. No ROS CLI daemon is spawned by this
+Type/find/info/list use the supported `--no-daemon --spin-time 3` options;
+echo also explicitly selects `--no-daemon`. Service call and publish use
+their direct node implementations. No ROS CLI daemon is spawned by this
 batch. Each command is a separately waited child with bounded timeout and
 recorded actual argv, PID/start identity, stdout, stderr and return code.
 The surrounding ROS fixture then completes node/process retirement and native
@@ -90,3 +91,24 @@ mode, a wrong type even with a recomputed log hash, and a missing log:
 
 The surrounding ROS fixture and eleven negative receipt checks passed.
 Revalidation of all five batches yields 29 unique CLI operations out of 98.
+
+Subsequent live process inspection found that the earlier echo recipe had
+omitted `--no-daemon`. Jazzy echo uses `NodeStrategy`, so failed run
+`cli_topic_data_20260907_02` left a daemon on each board and later echo commands
+could reuse it. The earlier description of echo as inherently direct was wrong.
+Their command output remains historical evidence, but those expanded batches
+do not prove daemon isolation. The two processes were identified by command,
+PID/start, private broker root and exact RMW/MDDS mappings, then retired with
+SIGTERM; both loopback daemon ports were verified free.
+
+The corrected runner checks absence of domain-175 daemon processes and a
+bindable loopback CLI port before the batch and after every command. The host
+requires all boundary records and explicit `--no-daemon` on strategy commands.
+The strengthened verifier rejects the prior batch. Seven ownership tests
+went from one failure to zero, and receipt mutation tests now also reject
+missing/incomplete isolation records and an existing daemon.
+
+`cli_no_daemon_20260907_01` passes all eight cases with all eleven per-board
+daemon-absence boundaries, the full current ROS fixture, eleven ROS receipt
+tests and nine CLI receipt tests. It supersedes the two earlier expanded
+batches for current acceptance. Unique accepted coverage remains 29/98.

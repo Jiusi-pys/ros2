@@ -351,6 +351,14 @@ evidence categories. Only terminate processes owned by the current test run.
   tests and the surrounding ROS/DSoftBus checks. The five batches contain
   29 unique validated operations.
 
+The expanded CLI batches above were superseded by `cli_no_daemon_20260907_01`:
+source and live-process inspection found echo could reuse an old ROS CLI
+daemon. Its corrected recipe explicitly disables the daemon and checks process
+absence plus a free loopback port at every command boundary. The strengthened
+verifier rejects the prior receipts; the replacement batch passes all eight
+cases, with seven ownership and nine CLI receipt tests. Unique coverage remains
+29/98. The earlier payload observations are retained as historical evidence.
+
 There are still only 29 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery

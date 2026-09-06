@@ -332,7 +332,13 @@ evidence categories. Only terminate processes owned by the current test run.
   production environment escape. `ros_no_profile_20260907` passed the actual
   two-board subset with profile/selector absent, including eleven receipt tests.
 
-There are still 21 independently validated CLI operations out of 98, without
+- `cli_graph_20260907_01` executed real `topic type`, `topic find` and
+  `service call` commands on both boards against the live opposite-side fixture.
+  All three complete dual-board receipts passed the canonical case validator.
+  The surrounding data/graph/retirement fixture also passed. The full set of
+  existing per-case receipts was revalidated: 24 unique CLI operations now pass.
+
+There are still only 24 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

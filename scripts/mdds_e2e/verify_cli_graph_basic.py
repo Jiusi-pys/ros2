@@ -1,0 +1,49 @@
+"""Build canonical dual-board CLI receipts only after exact functional checks."""
+import copy
+import json
+from pathlib import Path
+import sys
+import cli_acceptance as acceptance
+from cli_graph_basic import oracle
+
+root=Path(sys.argv[1]);run=sys.argv[2];nonce=(root/'nonce').read_text().strip()
+support=json.loads((root/'host_report.json').read_text())
+if not support['passed']:raise ValueError('supporting production ROS/DSoftBus fixture failed')
+manifest=json.loads((root/'cli_acceptance_manifest.json').read_text());manifest['run_id']=run
+reports={}
+for board in acceptance.TARGET['board_serials']:
+    value=json.loads((root/(board+'.cli.results.json')).read_text())
+    status=json.loads((root/(board+'.cli.status.json')).read_text())
+    if value['run_id']!=run or value['board']!=board or value['nonce']!=nonce:raise ValueError('CLI batch identity mismatch')
+    if status['run_id']!=run or status['role']!='cli' or status['returncode']!=0:raise ValueError('CLI batch child failed')
+    record=(root/(board+'.cli.child.pid')).read_text().strip()
+    if record!=f"MDDS_OWNED_PROCESS RUN_ID={run} TAG=cli_child PID={status['child_pid']} START={status['child_start']}":raise ValueError('CLI batch ownership mismatch')
+    reports[board]={r['case_id']:r for r in value['results']}
+passed=[]
+for case in manifest['cases']:
+    if case['id'] not in ('cli:topic/type','cli:topic/find','cli:service/call'):continue
+    executions=[]
+    for board in acceptance.TARGET['board_serials']:
+        result=reports[board][case['id']];execution=copy.deepcopy(result['execution'])
+        execution['log']['path']=board+'.'+execution['log']['path']
+        raw=acceptance.read_artifact(execution['log'],root).decode('utf-8')
+        stdout=raw.split('MDDS_CLI_STDOUT_BEGIN\n',1)[1].split('\nMDDS_CLI_STDOUT_END',1)[0]
+        peer='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
+        namespace='/ros_broker_'+run
+        expected={'cli:topic/type':'std_msgs/msg/String',
+                  'cli:topic/find':sorted(namespace+'/'+role+'/'+name+'/out' for role in ('A','B') for name in ('alpha','beta')),
+                  'cli:service/call':int(nonce[:7],16)+(1 if peer=='B' else 2)+17}[case['id']]
+        if result['expected']!=expected or not result['passed'] or not oracle(case['id'],stdout,expected):raise ValueError('functional CLI oracle failed')
+        if 'mdds transports active: dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('CLI did not report production broker selection')
+        if not str(execution['child_start']).isdecimal() or execution['child_pid']<=0:raise ValueError('missing actual CLI child identity')
+        executions.append(execution)
+    marker='MDDS_CLI_FUNCTIONAL CASE='+case['id']+' RESULT=PASS'
+    receipt={'schema_version':1,'run_id':run,'case_id':case['id'],'kind':'functional','status':'PASS',
+             'board_serials':acceptance.TARGET['board_serials'],'rmw_implementation':'rmw_mdds','transport':'dsoftbus',
+             'executions':executions,'assertions':[{'id':'functional_result','passed':True,'execution':0,'pattern':marker}],
+             'supporting_fixture':{'path':'host_report.json','sha256':acceptance.digest((root/'host_report.json').read_bytes())}}
+    path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
+    ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
+    case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])
+(root/'cli_partial_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+print('CLI_GRAPH_BASIC_PASS '+json.dumps(passed))

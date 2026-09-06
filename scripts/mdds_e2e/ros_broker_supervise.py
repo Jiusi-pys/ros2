@@ -69,6 +69,8 @@ if role == 'daemon':
 elif role == 'ros':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [sys.executable, str(root / 'ros_broker_probe.py'), '--root', str(root), '--run-id', run, '--role', label, '--self-serial', self, '--peer-serial', peer, '--nonce', nonce, '--manifest-sha', os.environ['MDDS_RCLPY_MANIFEST_SHA']]
+elif role == 'cli':
+    command = [sys.executable, str(root / 'cli_graph_basic.py'), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')
 raise SystemExit(supervise_command(command, root / (role + '.status.json'), run, role, '/ros_broker_' + run, root / (role + '.child.pid')))

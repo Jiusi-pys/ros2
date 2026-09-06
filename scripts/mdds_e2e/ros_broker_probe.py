@@ -259,12 +259,24 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
+    if (root/'cli_batch').read_text().strip() == 'daemon':
+        from rclpy.action import ActionClient, ActionServer
+        from example_interfaces.action import Fibonacci
+        def execute_action(handle):
+            result=Fibonacci.Result();result.sequence=[0,1];handle.succeed();return result
+        for r in records:
+            peer_name='beta' if r['name']=='alpha' else 'alpha'
+            r['action_server']=ActionServer(r['node'],Fibonacci,path(a.role,r['name'])+'/action',execute_action)
+            r['action_client']=ActionClient(r['node'],Fibonacci,path(other,peer_name)+'/action')
     snapshot(1)
     exchange(records, 1, True)
     cli_fixture()
     (root / 'phase1.done').write_text(a.nonce + '\n')
     wait(lambda: (root / 'phase2.go').is_file() and (root / 'phase2.go').read_text().strip() == a.nonce)
     beta = records[1]
+    for key in ('action_client','action_server'):
+        action=beta.pop(key,None)
+        if action is not None:action.destroy()
     beta['executor'].remove_node(beta['node'])
     beta['node'].destroy_node()
     all_nodes.remove(beta['node'])
@@ -298,6 +310,10 @@ try:
         assert withdrew
     print('ROS_BROKER_RESULT PASS role=' + a.role, flush=True)
 finally:
+    for r in records:
+        for key in ('action_client','action_server'):
+            action=r.pop(key,None)
+            if action is not None:action.destroy()
     for n in reversed(all_nodes):
         n.destroy_node()
     for e in executors:

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
-from verify_cli_daemon import validate_report
+from verify_cli_daemon import validate_report, validate_native_link
 
 ROOT=Path(sys.argv.pop(1)).resolve()
 BOARD='3e01ff55454d202020104033bf453b00'
@@ -41,6 +41,18 @@ class DaemonReceipt(unittest.TestCase):
         next(r for r in self.value['results'] if r['label']=='service_info_cached')['expected']['Clients count']='0';self.reject()
     def test_cached_substituted_for_direct_service_info(self):
         next(r for r in self.value['results'] if r['label']=='service_info_direct')['execution']['argv'].remove('--no-daemon');self.reject()
+    def test_missing_hidden_node_info(self):
+        self.value['results']=[r for r in self.value['results'] if r['label']!='node_info_alpha_hidden_cached'];self.reject()
+    def test_wrong_action_owner(self):
+        next(r for r in self.value['results'] if r['label']=='node_info_alpha_cached')['expected']['sections']['Action Clients']={};self.reject()
+    def test_wrong_node_info_target(self):
+        next(r for r in self.value['results'] if r['label']=='node_info_beta_direct')['execution']['argv'][3]='/foreign/node';self.reject()
+    def test_rebound_native_link(self):
+        raw=(ROOT/(BOARD+'.daemon.log')).read_text(encoding='utf-8')
+        bind=next(line for line in raw.splitlines() if line.startswith('[mdds/dsoftbus] OnBind('))
+        with self.assertRaises(ValueError):validate_native_link(raw+'\n'+bind+'\n')
+    def test_missing_native_bind(self):
+        with self.assertRaises(ValueError):validate_native_link('')
 
 
 if __name__=='__main__':unittest.main()

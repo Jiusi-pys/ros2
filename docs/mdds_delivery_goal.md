@@ -371,7 +371,15 @@ six hidden-inclusive services, exact type, and one client/server in cached and
 direct modes. Both boards pass all seven batch cases, ten service-oracle tests,
 thirteen daemon receipt tests and eleven ROS receipt checks.
 
-There are still only 36 independently validated CLI operations out of 98, without
+The action-bearing node-info fixture exposed a real broker scheduling defect:
+one flush per client per poll accumulated frames and closed the shared remote
+link. MDDS commit `e1bc3fe` uses the existing actor budget for additional fair
+visits until an idle round. Two RED regressions turn GREEN; all 32 MDDS board
+test entries pass. `cli_node_green_20260907_01` then passes eight node-info views
+per board, exact action/hidden-endpoint ownership, no physical rebind, and the
+surrounding ROS fixture. Eighteen CLI receipt and eleven ROS receipt tests pass.
+
+There are still only 37 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

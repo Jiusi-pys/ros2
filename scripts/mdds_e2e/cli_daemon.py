@@ -13,6 +13,7 @@ import cli_acceptance as acceptance
 from board_graph_ownership import process_start
 from cli_daemon_guard import assert_absent, domain_daemons, observe, owned, retire
 from cli_service_graph import oracle as service_oracle, recipe as service_recipe
+from cli_node_info import oracle as node_info_oracle, recipe as node_info_recipe
 
 
 def node_names(namespace):
@@ -20,6 +21,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case=='cli:node/info':return node_info_oracle(stdout,expected)
     if case.startswith('cli:service/'):return service_oracle(case,stdout,expected)
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if case == 'cli:node/list': return Counter(lines) == Counter(expected)
@@ -47,6 +49,8 @@ def execute(argv, directory, run, board, case, label, expected):
         passed = child.returncode == 0 and oracle(case,stdout,expected)
         if case == 'cli:node/list':
             passed = passed and 'nodes in the graph that share an exact name' in stderr
+        if case == 'cli:node/info' and expected['duplicate']:
+            passed = passed and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' in stderr
         if '--no-daemon' in argv:
             passed = passed and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' in stderr
         marker = 'MDDS_CLI_FUNCTIONAL CASE='+case+' RESULT=PASS'
@@ -98,7 +102,11 @@ def main():
     def command(case,label,args,expected):
         value=execute(['ros2']+args,output,run,board,case,label,expected)
         report['results'].append(value)
-        if not value['passed']:raise RuntimeError('CLI case failed: '+label)
+        if not value['passed']:
+            report['fixture_phase2_started_before_failure']=(root/'phase2.go').exists()
+            if case=='cli:node/info':
+                report['diagnostic_node_list']=execute(['ros2','node','list','--no-daemon','--spin-time','3'],output,run,board,'cli:node/list','diagnostic_nodes',node_names('/ros_broker_'+run))
+            raise RuntimeError('CLI case failed: '+label)
     try:
         command('cli:daemon/status','status_before',['daemon','status'],'The daemon is not running')
         command('cli:daemon/start','start',['daemon','start'],'The daemon has been started')
@@ -112,6 +120,8 @@ def main():
         command('cli:node/list','nodes_direct',['node','list','--no-daemon','--spin-time','3'],expected)
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
         for case,label,argv,wanted in service_recipe('/ros_broker_'+run,peer_role):
+            command(case,label,argv,wanted)
+        for case,label,argv,wanted in node_info_recipe('/ros_broker_'+run,peer_role):
             command(case,label,argv,wanted)
         report['daemon_after_queries']=inspect_daemon(root)
         if report['daemon_after_queries']['pid']!=report['daemon']['pid'] or report['daemon_after_queries']['start']!=report['daemon']['start']:

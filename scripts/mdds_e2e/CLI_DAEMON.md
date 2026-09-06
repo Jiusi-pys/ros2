@@ -28,7 +28,9 @@ contract. A pre-existing foreign daemon is an error and is left untouched.
 
 Every actual CLI child has argv, PID/start, stdout/stderr, a real wait result
 and a hash-bound log. The host rechecks the complete lifecycle before issuing
-four canonical dual-board receipts (`daemon start/status/stop`, `node list`).
+canonical dual-board receipts for every executed case. The original cases
+are daemon start/status/stop and node list; service graph and node-info
+extensions are also part of the current batch.
 Daemon process disappearance is recorded separately from CLI stop's return
 code, since the standard CLI detaches the daemon rather than returning a
 waitable child handle to the test driver.
@@ -66,3 +68,7 @@ service output-oracle tests went from four failures to zero. Thirteen daemon
 receipt tests also pass, including rejection of a missing hidden query,
 incorrect service counts and cached queries substituted for direct queries.
 Deduplicated coverage is now 36/98.
+
+`CLI_NODE_INFO.md` documents the subsequent action-bearing node-info fixture,
+the broker scheduling defect it exposed, and the corrected physical run.
+With node info included, current unique CLI coverage is 37/98.

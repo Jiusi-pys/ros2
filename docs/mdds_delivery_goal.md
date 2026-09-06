@@ -407,7 +407,12 @@ final peer state, YAML and raw callbacks all match. Eight output-oracle, nine
 absence-contract, nine mutation-receipt, seventeen acceptance and eleven ROS
 receipt tests pass.
 
-There are still only 49 independently validated CLI operations out of 98, without
+`cli_lifecycle_20260907_01` adds lifecycle nodes/get/list/set. Each board drives
+the peer through configure, activate, deactivate, cleanup and shutdown, reads
+back every resulting state, and verifies five callbacks plus ten state events.
+Nine output-oracle, nine lifecycle receipt and eleven ROS receipt tests pass.
+
+There are still only 53 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

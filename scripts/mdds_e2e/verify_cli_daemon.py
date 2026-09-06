@@ -10,6 +10,7 @@ from cli_action import goal_id, FEEDBACK, RESULT
 from cli_service_events import events_match
 from cli_parameters import values as parameter_values,typed_equal
 from cli_parameter_changes import loaded_values,expected_events
+from cli_lifecycle import expected_callbacks,expected_events as lifecycle_events
 import yaml
 from cli_daemon_guard import owned
 from cli_service_graph import recipe as service_recipe
@@ -77,7 +78,18 @@ def validate_report(value, root, run, board, nonce):
         if case=='cli:node/list':
             if 'nodes in the graph that share an exact name' not in raw:raise ValueError('duplicate-node warning missing')
         if case=='cli:node/info' and expected['duplicate'] and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' not in raw:raise ValueError('duplicate-node info warning missing')
-        if ('--no-daemon' in argv or case.startswith('cli:param/') or case in ('cli:action/send_goal','cli:service/echo')) and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if ('--no-daemon' in argv or case.startswith('cli:param/') or case in ('cli:action/send_goal','cli:service/echo','cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set')) and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if case.startswith('cli:lifecycle/'):
+            peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
+            node='/ros_broker_'+run+'/alpha_'+peer_role
+            identity={'run_id':run,'nonce':nonce,'board':peer_board,'node':node}
+            final=json.loads((root/(peer_board+'.lifecycle_final.json')).read_text())
+            callbacks=json.loads((root/(peer_board+'.lifecycle_callbacks.json')).read_text())
+            events=json.loads((root/(board+'.lifecycle_events.json')).read_text())
+            if final!={**identity,'state':{'id':4,'label':'finalized'}} or callbacks!={**identity,'callbacks':expected_callbacks()} or events!={**identity,'board':board,'events':lifecycle_events()}:raise ValueError('lifecycle state/callback/events differ')
+            peer_log=(root/(peer_board+'.ros.log')).read_text().splitlines()
+            event_log=(root/(board+'.ros.log')).read_text().splitlines()
+            if peer_log.count('CLI_LIFECYCLE_FINAL '+json.dumps(final))!=1 or any(peer_log.count('CLI_LIFECYCLE_CALLBACK '+json.dumps(item))!=1 for item in callbacks['callbacks']) or any(event_log.count('CLI_LIFECYCLE_EVENT '+json.dumps(item))!=1 for item in events['events']):raise ValueError('lifecycle raw evidence missing')
         if case.startswith('cli:param/'):
             peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
             state=json.loads((root/(peer_board+'.parameter_state.json')).read_text())
@@ -150,6 +162,8 @@ def main():
             if case['id']=='cli:param/dump':receipt['dump_files']=[{'path':board+'.parameters_dump.yaml','sha256':acceptance.digest((root/(board+'.parameters_dump.yaml')).read_bytes())} for board in reports]
             if case['id'] in ('cli:param/set','cli:param/load','cli:param/delete'):
                 receipt['mutation_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('parameter_final.json','parameter_events.json','parameter_load.yaml')]
+        if case['id'].startswith('cli:lifecycle/'):
+            receipt['lifecycle_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('lifecycle_final.json','lifecycle_callbacks.json','lifecycle_events.json')]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

@@ -18,9 +18,11 @@ from cli_action import oracle as action_oracle, recipe as action_recipe
 from cli_service_echo import recipe as echo_recipe, execute as execute_echo
 from cli_parameters import recipe as parameter_recipe,oracle as parameter_oracle
 from cli_parameter_changes import recipe as parameter_change_recipe,oracle as parameter_change_oracle,loaded_values
+from cli_lifecycle import recipe as lifecycle_recipe,oracle as lifecycle_oracle
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='lifecycle':return lifecycle_recipe(ns,peer)
     if mode=='parameter_write':return parameter_change_recipe(ns,peer,nonce)
     if mode=='parameter_read':return parameter_recipe(ns,peer,nonce)
     if mode=='introspection':return echo_recipe(ns,peer,nonce)
@@ -34,6 +36,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case.startswith('cli:lifecycle/'):return lifecycle_oracle(stdout,expected)
     if case in ('cli:param/set','cli:param/load','cli:param/delete'):return parameter_change_oracle(stdout,expected)
     if case.startswith('cli:param/'):return parameter_oracle(case,stdout,expected)
     if case.startswith('cli:action/'):return action_oracle(case,stdout,expected)
@@ -71,7 +74,7 @@ def execute(argv, directory, run, board, case, label, expected):
             passed = passed and 'nodes in the graph that share an exact name' in stderr
         if case == 'cli:node/info' and expected['duplicate']:
             passed = passed and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' in stderr
-        if '--no-daemon' in argv or case=='cli:action/send_goal' or case.startswith('cli:param/'):
+        if '--no-daemon' in argv or case=='cli:action/send_goal' or case.startswith('cli:param/') or case in ('cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set'):
             passed = passed and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' in stderr
         marker = 'MDDS_CLI_FUNCTIONAL CASE='+case+' RESULT=PASS'
         log = directory / (label+'.log')

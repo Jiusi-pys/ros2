@@ -244,7 +244,11 @@ try:
         rclpy.init(args=['--ros-args', '--enclave', '/' + a.role + '/' + name], context=context, signal_handler_options=SignalHandlerOptions.NO)
         assert get_rmw_implementation_identifier() == 'rmw_mdds'
         parameter_mode=(root/'cli_batch').read_text().strip() in ('parameter_read','parameter_write')
-        node = rclpy.create_node(name + '_' + a.role, namespace=ns, context=context, start_parameter_services=parameter_mode and name=='alpha', enable_rosout=False)
+        if (root/'cli_batch').read_text().strip()=='lifecycle' and name=='alpha':
+            from board_lifecycle_fixture import create
+            node=create(name+'_'+a.role,root,a.run_id,a.nonce,a.self_serial,namespace=ns,context=context,start_parameter_services=False,enable_rosout=False)
+        else:
+            node = rclpy.create_node(name + '_' + a.role, namespace=ns, context=context, start_parameter_services=parameter_mode and name=='alpha', enable_rosout=False)
         all_nodes.append(node)
         if parameter_mode and name=='alpha':
             from cli_parameters import values as parameter_values
@@ -305,6 +309,18 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
+    if (root/'cli_batch').read_text().strip() == 'lifecycle':
+        from lifecycle_msgs.msg import TransitionEvent
+        lifecycle_events=[]
+        def on_lifecycle_event(message):
+            record={'start':{'id':message.start_state.id,'label':message.start_state.label},
+                    'goal':{'id':message.goal_state.id,'label':message.goal_state.label},
+                    'transition':{'id':message.transition.id,'label':message.transition.label},'timestamp':message.timestamp}
+            lifecycle_events.append(record)
+            value={'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'node':ns+'/alpha_'+other,'events':lifecycle_events}
+            (root/'lifecycle_events.json').write_text(json.dumps(value)+'\n')
+            print('CLI_LIFECYCLE_EVENT '+json.dumps(record),flush=True)
+        lifecycle_subscription=records[1]['node'].create_subscription(TransitionEvent,ns+'/alpha_'+other+'/transition_event',on_lifecycle_event,QoSProfile(depth=32,reliability=ReliabilityPolicy.RELIABLE))
     if (root/'cli_batch').read_text().strip() == 'parameter_write':
         from rcl_interfaces.msg import ParameterEvent
         from rclpy.parameter import parameter_value_to_python
@@ -372,6 +388,11 @@ try:
     cli_fixture()
     (root / 'phase1.done').write_text(a.nonce + '\n')
     wait(lambda: (root / 'phase2.go').is_file() and (root / 'phase2.go').read_text().strip() == a.nonce)
+    if (root/'cli_batch').read_text().strip()=='lifecycle':
+        state_id,state_label=records[0]['node']._state_machine.current_state
+        final={'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'node':ns+'/alpha_'+a.role,'state':{'id':state_id,'label':state_label}}
+        (root/'lifecycle_final.json').write_text(json.dumps(final)+'\n')
+        print('CLI_LIFECYCLE_FINAL '+json.dumps(final),flush=True)
     if (root/'cli_batch').read_text().strip() == 'parameter_write':
         node=records[0]['node'];observed={}
         for key in node.list_parameters([],0).names:

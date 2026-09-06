@@ -38,3 +38,8 @@ private native executable/plugin provenance, peer payloads, selective removal,
 survivor identity/data continuity and clean container exits. Nine component
 receipt mutation tests and eleven surrounding ROS receipt tests pass.
 Unique accepted CLI coverage is 57/98; standalone remains unverified.
+
+The subsequent standalone batch is documented in `CLI_STANDALONE.md`.
+`cli_standalone_20260907_02` verifies actual CLI-created containers, peer data,
+graceful process-group stop and graph withdrawal. Current unique coverage,
+including this separate case, is 58/98.

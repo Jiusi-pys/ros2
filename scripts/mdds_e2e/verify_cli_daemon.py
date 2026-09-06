@@ -33,6 +33,7 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
+    if (root/'cli_batch').read_text().strip()=='standalone' and value.get('standalone_start_nonce')!=nonce:raise ValueError('standalone started without matching barrier')
     if (root/'cli_batch').read_text().strip()=='components':
         from verify_components import validate
         validate(value,root,run,board,nonce)
@@ -79,6 +80,9 @@ def validate_report(value, root, run, board, nonce):
             server=json.loads((root/(peer_board+'.introspection.server.json')).read_text())
             if server!={**expected,'run_id':run,'nonce':nonce,'board':peer_board,'count':1}:raise ValueError('peer service callback differs')
             if (root/(peer_board+'.ros.log')).read_text().splitlines().count('CLI_INTROSPECTION_SERVER '+json.dumps(server))!=1:raise ValueError('peer service callback missing')
+        elif case=='cli:component/standalone':
+            from verify_standalone import validate
+            validate(execution,expected,raw,root,run,board,nonce)
         elif not oracle(case,stdout,expected):raise ValueError('CLI functional output differs')
         if case=='cli:node/list':
             if 'nodes in the graph that share an exact name' not in raw:raise ValueError('duplicate-node warning missing')
@@ -170,7 +174,8 @@ def main():
         if case['id'].startswith('cli:lifecycle/'):
             receipt['lifecycle_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('lifecycle_final.json','lifecycle_callbacks.json','lifecycle_events.json')]
         if case['id'].startswith('cli:component/'):
-            receipt['component_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('components_loaded.json','components_retired.json','components_empty.json','container.log','container.status.json')]
+            suffixes=('standalone_received.json','standalone_gone.json','standalone.ready','standalone.start','standalone.stop') if case['id']=='cli:component/standalone' else ('components_loaded.json','components_retired.json','components_empty.json','container.log','container.status.json')
+            receipt['component_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in suffixes]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

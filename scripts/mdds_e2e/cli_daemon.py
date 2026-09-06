@@ -20,9 +20,11 @@ from cli_parameters import recipe as parameter_recipe,oracle as parameter_oracle
 from cli_parameter_changes import recipe as parameter_change_recipe,oracle as parameter_change_oracle,loaded_values
 from cli_lifecycle import recipe as lifecycle_recipe,oracle as lifecycle_oracle
 from cli_components import recipe as component_recipe,oracle as component_oracle,containers
+from cli_standalone import recipe as standalone_recipe,execute as execute_standalone
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='standalone':return standalone_recipe(ns,peer)
     if mode=='components':return component_recipe(ns,peer)
     if mode=='lifecycle':return lifecycle_recipe(ns,peer)
     if mode=='parameter_write':return parameter_change_recipe(ns,peer,nonce)
@@ -131,6 +133,7 @@ def main():
     output=root/'cli_daemon';output.mkdir(mode=0o700)
     def command(case,label,args,expected):
         if case=='cli:service/echo':value=execute_echo(['ros2']+args,output,run,board,case,label,expected,nonce)
+        elif case=='cli:component/standalone':value=execute_standalone(['ros2']+args,output,run,board,case,label,expected,nonce)
         else:value=execute(['ros2']+args,output,run,board,case,label,expected)
         report['results'].append(value)
         if not value['passed']:
@@ -150,12 +153,23 @@ def main():
         if (root/'cli_batch').read_text().strip()=='components':expected+=containers('/ros_broker_'+run)
         command('cli:node/list','nodes_cached',['node','list'],expected)
         command('cli:node/list','nodes_direct',['node','list','--no-daemon','--spin-time','3'],expected)
+        if (root/'cli_batch').read_text().strip()=='standalone':
+            with (root/'standalone.ready').open('x') as marker:marker.write(nonce+'\n')
+            deadline=time.monotonic()+20
+            while time.monotonic()<deadline and not (root/'standalone.start').exists():time.sleep(.1)
+            if (root/'standalone.start').read_text().strip()!=nonce:raise ValueError('standalone start barrier mismatch')
+            report['standalone_start_nonce']=nonce
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
         if (root/'cli_batch').read_text().strip()=='parameter_write':
             import yaml
             (output/'parameter_load.yaml').write_text(yaml.safe_dump({'/ros_broker_'+run+'/alpha_'+peer_role:{'ros__parameters':loaded_values(nonce,peer_role)}}))
         for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce):
             command(case,label,argv,wanted)
+            if case=='cli:component/standalone':
+                deadline=time.monotonic()+12
+                while time.monotonic()<deadline and not (root/'standalone_gone.json').exists():time.sleep(.1)
+                proof=json.loads((root/'standalone_gone.json').read_text())
+                if proof['run_id']!=run or proof['nonce']!=nonce:raise ValueError('standalone withdrawal identity mismatch')
             if (root/'cli_batch').read_text().strip()=='components':
                 stage={'component_load_survivor':'loaded','component_unload_primary':'retired','component_unload_survivor':'empty'}.get(label)
                 if stage:

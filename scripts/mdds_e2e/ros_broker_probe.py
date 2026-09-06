@@ -314,6 +314,9 @@ try:
     if (root/'cli_batch').read_text().strip()=='components':
         from board_component_probe import ComponentProbe
         component_probe=ComponentProbe(root,a.run_id,a.nonce,a.self_serial,other,records[1]['node'])
+    elif (root/'cli_batch').read_text().strip()=='standalone':
+        from board_standalone_probe import StandaloneProbe
+        component_probe=StandaloneProbe(root,a.run_id,a.nonce,a.self_serial,other,records[1]['node'])
     if (root/'cli_batch').read_text().strip() == 'lifecycle':
         from lifecycle_msgs.msg import TransitionEvent
         lifecycle_events=[]

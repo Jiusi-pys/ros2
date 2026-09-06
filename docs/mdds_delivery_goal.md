@@ -419,7 +419,13 @@ unloaded while ID 2 retains its GID and publishes again, then ID 2 is removed.
 Native process/library provenance, no UDP and clean exits pass, with nine
 component receipt and eleven ROS receipt tests. Standalone is still separate.
 
-There are still only 57 independently validated CLI operations out of 98, without
+`cli_standalone_20260907_02` adds the actual component standalone command.
+Both boards receive the peer's Talker payload, verify native child ownership
+and private libraries, then stop through SIGINT after a two-receiver barrier.
+Real CLI code 0, native child disappearance and complete graph withdrawal
+pass, with six ownership, twelve receipt and eleven ROS receipt tests.
+
+There are still only 58 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

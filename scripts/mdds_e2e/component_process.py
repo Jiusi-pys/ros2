@@ -12,7 +12,12 @@ def inspect(root,run):
     record=(root/'container.child.pid').read_text().strip()
     match=re.fullmatch('MDDS_OWNED_PROCESS RUN_ID='+re.escape(run)+r' TAG=container_child PID=(\d+) START=(\d+)',record)
     if not match or process_start(int(match[1]))!=match[2]:raise ValueError('wrong container owner')
-    pid=int(match[1]);proc=Path('/proc')/str(pid)
+    return inspect_pid(root,run,int(match[1]))
+
+
+def inspect_pid(root,run,pid):
+    proc=Path('/proc')/str(pid)
+    start=process_start(pid)
     executable=str(root/'component_prefix/lib/rclcpp_components/component_container')
     if os.readlink(proc/'exe')!=executable:raise ValueError('wrong native container binary')
     wanted={str(root/'lib/libmdds.so'),str(root/'lib/librmw_mdds.so'),str(root/'component_prefix/lib/libtalker_component.so')}
@@ -37,5 +42,7 @@ def inspect(root,run):
             parts=line.split()
             if parts[9] in sockets:udp.append(line)
     if udp:raise ValueError('container owns UDP sockets')
-    return {'run_id':run,'pid':pid,'start':process_start(pid),'executable':executable,'argv':(proc/'cmdline').read_bytes().rstrip(b'\0').decode().split('\0'),
+    stat=(proc/'stat').read_text().rsplit(')',1)[1].split()
+    if process_start(pid)!=start:raise ValueError('container PID reused during inspection')
+    return {'run_id':run,'pid':pid,'start':start,'parent_pid':int(stat[1]),'process_group':int(stat[2]),'executable':executable,'argv':(proc/'cmdline').read_bytes().rstrip(b'\0').decode().split('\0'),
             'hashes':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in sorted(wanted|{executable})},'owned_udp':udp}

@@ -88,10 +88,34 @@ evidence categories. Only terminate processes owned by the current test run.
   when targeting different boards; they share local generated files.
 - `broker_codec_green_20260906` passed the initial 10 codec/reassembly cases;
   `broker_codec_final_20260906` passed all 12 after adding interleaved-transfer
-  and failed-admission regressions. This is a test-only library; no Unix client,
-  broker membership, or production DSoftBus integration is implemented yet.
+  and failed-admission regressions. Commit `0f64f20` contains this test-only
+  library; it is not yet a production DSoftBus broker transport.
+- `announce_wake_red_20260906` recorded exactly the seven new wake tests
+  failing; `announce_wake_green_20260906` passed all 34 fake-ABI cases,
+  including notification-during-send and shutdown. The production-library
+  regression `graph_announce_overlay_20260906_01` passed on both real boards.
+  Commit `f80df03` preserves pending announcement generations.
+- `service_visibility_red_20260906` recorded 14 graph failures and
+  `native_namespace_data_red_20260906` recorded three data-isolation failures.
+  After the RMW `rt/rq/rr` mapping, `native_namespace_green_20260906` passed all
+  83 native GTest cases in six programs (six lint wrappers were skipped by the
+  board runner). `graph_native_namespace_20260906_01` also passed on real
+  DSoftBus. Commit `6e60bec` contains the naming change; old plain-name peers and
+  the existing gateway are not compatible until their mapping is updated.
+- `broker_routes_red_20260906` -> `broker_routes_green_20260906` changed all
+  twelve routing cases from failure to pass. `broker_routes_final_20260906`
+  passed all sixteen cases, including stale sessions and 1024 port incarnations.
+  Commit `6506992` provides only the in-memory routing core; control-message
+  serialization, handshake and executable broker integration are still pending.
+- `broker_ipc_red_20260906` -> `broker_ipc_green_20260906` changed all fifteen
+  framing/real AF_UNIX socketpair cases from failure to pass. Additional fd
+  reuse/protocol-error cases and the final run are in progress. There is still
+  no production Unix listener/client or multi-process RMW acceptance.
+- Commit `9b7cf95` adds executable oracles for twelve metadata CLI cases.
+  Its host tests pass; real-board CLI execution/evidence collection is pending.
 
-Further known graph gaps to address after ownership: internal service endpoints
-are exposed by topic queries, duplicate-node cardinality is collapsed, large
-ANNOUNCE frames exceed small physical Bytes MTUs, and `announce_now()` does not
-wake the announcement wait predicate. Each needs its own RED/GREEN feature.
+Remaining gates include duplicate-node cardinality, large ANNOUNCE delivery
+over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,
+multi-process broker integration, and the full 98-case CLI/graph/transport
+matrix. Internal service-topic separation and announcement wakeup have been
+fixed as individual features; those fixes do not certify the remaining gates.

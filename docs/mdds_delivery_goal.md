@@ -158,8 +158,39 @@ evidence categories. Only terminate processes owned by the current test run.
 - The local broker ROS probe retains real reliable acknowledgment assertions.
   Source review found `rmw_publisher_wait_for_all_acked` still returns
   UNSUPPORTED for RELIABLE publishers despite MDDS retaining per-association
-  ACK watermarks. A separate TDD feature will implement and validate that API;
-  application receipt alone will not be reported as an ACK-wait pass.
+  ACK watermarks. The new API passed the sixteen MDDS regressions and eight
+  RMW adapter tests; the final fake suite passed 53 cases in
+  `ack_ordered_fake_final2_20260906`. MDDS commit `fec6e62` and RMW commit
+  `5cac4fa` implement the wait. Rebuild all affected C++ Writer consumers.
+- `ordered_publish_red_20260906` reproduced four ordering/reentry failures;
+  the ordered comparison passed four. Review then exposed notification loss
+  after a later send exception. `ordered_exception_red_20260906` reproduced
+  the exact queued-but-unnotified sample; `ordered_exception_green_20260906`
+  passed all five cases after cleanup was repaired. The actual participant
+  core passed 91 cases in `ordered_ack_core_green_20260906`. Commit `55de10d`
+  contains this prerequisite separately from ACK waiting and old reorder work.
+- Broker actor capacity and owned daemon cleanup passed 18 and 8 cases.
+  Commit `1d15c55` contains that local-only implementation. The independent
+  physical-link control codec passed 8 cases (`81da5a5`); its LinkSession
+  state machine passed 17 (`fd1e438`). Directional reassembly retirement passed
+  7 new cases and the original 12 codec cases (`1a4b97d`). These are component
+  results; the Server remote adapter and physical SDK connection are pending.
+- Actual local broker teardown exposed a separate rclpy defect: its default
+  type-description service did not call `rcl_service_fini`, leaving two MDDS
+  endpoints after node deletion. The resulting owner-less announcement was
+  correctly rejected by the immutable-owner ledger and froze the old graph.
+  `td_lifetime_red_20260906_01` reproduced both ownership failures;
+  `td_lifetime_green_20260906_01` passed both with the Context and observer
+  still alive and with retained native implementation copies handled safely.
+  The rclpy fix is commit `e4c7d49`; temporary diagnostics were removed.
+- `bl_fixed_rclpy_20260906_01` passed the complete local broker gate: two
+  Contexts exchanged five exact samples each way and completed ACK waits;
+  alpha retirement removed its graph state; beta communicated with a fresh
+  gamma Context. Two distinct worker processes passed exact data, explicit
+  completion barriers and peer removal. All ROS children and the daemon
+  exited 0, package/library mapping and hashes matched, and cleanup passed.
+  The native rclpy extension was loaded from a private package. Every result
+  explicitly records `physical_dsoftbus_proven=false`; CLI remains 12/98.
 
 Remaining gates include duplicate-node cardinality, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

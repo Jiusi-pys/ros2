@@ -227,6 +227,20 @@ def controlled_stop_marker(run_id, case_id, execution):
     return 'MDDS_CLI_CONTROLLED_STOP '+json.dumps(body,sort_keys=True,separators=(',',':'))
 
 
+def validate_parameter_absence(execution, earlier, log):
+    argv=execution.get('argv',[])
+    if execution.get('expected_failure')!='parameter_not_set' or execution.get('returncode')!=1 or len(argv)!=5 or argv[:3]!=['ros2','param','get']:
+        raise ValueError('not a parameter-absence query')
+    if not any(item.get('board_serial')==execution['board_serial'] and item.get('returncode')==0 and item.get('argv')==['ros2','param','delete']+argv[3:] for item in earlier):
+        raise ValueError('no earlier successful deletion of this parameter on this board')
+    try:
+        stdout=log.split('MDDS_CLI_STDOUT_BEGIN\n',1)[1].split('\nMDDS_CLI_STDOUT_END',1)[0]
+        stderr=log.split('MDDS_CLI_STDERR_BEGIN\n',1)[1].split('\nMDDS_CLI_STDERR_END',1)[0]
+    except IndexError:raise ValueError('missing parameter-absence output')
+    errors=[line.strip() for line in stderr.splitlines() if line.strip() and not line.startswith('[INFO] [rmw_mdds]: mdds transports active: dsoftbus(')]
+    if stdout.strip() or errors!=['Parameter not set']:raise ValueError('unexpected parameter-absence output')
+
+
 def read_artifact(reference, root):
     if not isinstance(reference, dict) or set(reference) != {'path', 'sha256'}:
         raise ValueError('evidence reference must have exactly path and sha256')
@@ -263,7 +277,7 @@ def validate_receipt(case, reference, manifest, root):
     if not isinstance(executions, list) or not executions:
         raise ValueError('functional receipt has no command executions')
     logs, matched_command, execution_boards = [], False, set()
-    for execution in executions:
+    for execution_index,execution in enumerate(executions):
         if not isinstance(execution, dict):
             raise ValueError('execution must be an object')
         board_serial = execution.get('board_serial')
@@ -277,7 +291,9 @@ def validate_receipt(case, reference, manifest, root):
             raise ValueError('help output is not functional evidence')
         code=execution.get('returncode')
         controlled=case['id']=='cli:service/echo'
-        if type(code) is not int or code not in ((0,2) if controlled else (0,)):
+        absent=case['id']=='cli:param/delete' and execution.get('expected_failure')=='parameter_not_set'
+        if 'expected_failure' in execution and not absent:raise ValueError('unsupported expected failure')
+        if type(code) is not int or code not in ((1,) if absent else ((0,2) if controlled else (0,))):
             raise ValueError('functional command did not terminate successfully')
         if not controlled and 'controlled_stop' in execution:
             raise ValueError('controlled stop is not supported for this case')
@@ -285,6 +301,7 @@ def validate_receipt(case, reference, manifest, root):
         if not required or argv[:len(required)] == required:
             matched_command = True
         log = read_artifact(execution['log'], root).decode('utf-8')
+        if absent:validate_parameter_absence(execution,executions[:execution_index],log)
         if controlled:
             start=execution.get('child_start');pid=execution.get('child_pid')
             if type(pid) is not int or pid<=0 or not isinstance(start,str) or not start.isdecimal():

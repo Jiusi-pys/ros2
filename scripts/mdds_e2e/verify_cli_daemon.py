@@ -9,6 +9,8 @@ from cli_daemon import node_names, oracle, batch_recipe
 from cli_action import goal_id, FEEDBACK, RESULT
 from cli_service_events import events_match
 from cli_parameters import values as parameter_values,typed_equal
+from cli_parameter_changes import loaded_values,expected_events
+import yaml
 from cli_daemon_guard import owned
 from cli_service_graph import recipe as service_recipe
 from cli_node_info import recipe as node_info_recipe
@@ -54,9 +56,13 @@ def validate_report(value, root, run, board, nonce):
         else:expected='The daemon is running' if label=='status_running' else 'The daemon is not running';expected_case='cli:daemon/status';argv=['ros2','daemon','status']
         if case!=expected_case or execution['argv']!=argv or result['expected']!=expected or not result['passed']:
             raise ValueError('wrong CLI lifecycle recipe')
-        if execution['returncode'] not in ((0,2) if case=='cli:service/echo' else (0,)) or execution['board_serial']!=board or execution['child_pid']<=0 or not str(execution['child_start']).isdecimal():raise ValueError('CLI child identity/exit failed')
+        absent=case=='cli:param/delete' and expected.get('kind')=='absent'
+        if execution['returncode'] not in ((1,) if absent else ((0,2) if case=='cli:service/echo' else (0,))) or execution['board_serial']!=board or execution['child_pid']<=0 or not str(execution['child_start']).isdecimal():raise ValueError('CLI child identity/exit failed')
         log_ref={**execution['log'],'path':board+'.'+execution['log']['path']}
         raw=acceptance.read_artifact(log_ref,root).decode()
+        if absent:
+            index=value['results'].index(result)
+            acceptance.validate_parameter_absence(execution,[r['execution'] for r in value['results'][:index]],raw)
         stdout=raw.split('MDDS_CLI_STDOUT_BEGIN\n',1)[1].split('\nMDDS_CLI_STDOUT_END',1)[0]
         if case=='cli:service/echo':
             record=json.loads((root/(board+'.introspection.result.json')).read_text())
@@ -78,6 +84,18 @@ def validate_report(value, root, run, board, nonce):
             wanted={'run_id':run,'nonce':nonce,'board':peer_board,'node':'/ros_broker_'+run+'/alpha_'+peer_role,'values':parameter_values(nonce,peer_role)}
             if not typed_equal(state,wanted):raise ValueError('peer parameter state differs from fixture contract')
             if case=='cli:param/dump' and (root/(board+'.parameters_dump.yaml')).read_text()!=stdout:raise ValueError('dump file differs from actual CLI output')
+            if case in ('cli:param/set','cli:param/load','cli:param/delete'):
+                final_values={**parameter_values(nonce,peer_role),**loaded_values(nonce,peer_role)};final_values.pop('ephemeral')
+                final=json.loads((root/(peer_board+'.parameter_final.json')).read_text())
+                if not typed_equal(final,{**wanted,'values':final_values}):raise ValueError('peer final parameter state differs')
+                if (root/(peer_board+'.ros.log')).read_text().splitlines().count('CLI_PARAMETER_FINAL '+json.dumps(final))!=1:raise ValueError('final parameter state log missing')
+                events=json.loads((root/(board+'.parameter_events.json')).read_text())
+                required_events=expected_events('/ros_broker_'+run,peer_role,nonce)
+                if not typed_equal(events,{'run_id':run,'nonce':nonce,'board':board,'events':required_events}):raise ValueError('parameter events differ from set/restore/load/delete sequence')
+                source_log=(root/(board+'.ros.log')).read_text().splitlines()
+                if any(source_log.count('CLI_PARAMETER_EVENT '+json.dumps(event))!=1 for event in events['events']):raise ValueError('raw parameter event missing or duplicated')
+                expected_yaml={wanted['node']:{'ros__parameters':loaded_values(nonce,peer_role)}}
+                if not typed_equal(yaml.safe_load((root/(board+'.parameter_load.yaml')).read_text()),expected_yaml):raise ValueError('parameter load file differs')
         if case=='cli:action/send_goal':
             peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
             received=json.loads((root/(peer_board+'.action_goal.json')).read_text())
@@ -130,6 +148,8 @@ def main():
         if case['id'].startswith('cli:param/'):
             receipt['peer_parameter_state']=[{'path':board+'.parameter_state.json','sha256':acceptance.digest((root/(board+'.parameter_state.json')).read_bytes())} for board in reports]
             if case['id']=='cli:param/dump':receipt['dump_files']=[{'path':board+'.parameters_dump.yaml','sha256':acceptance.digest((root/(board+'.parameters_dump.yaml')).read_bytes())} for board in reports]
+            if case['id'] in ('cli:param/set','cli:param/load','cli:param/delete'):
+                receipt['mutation_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('parameter_final.json','parameter_events.json','parameter_load.yaml')]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

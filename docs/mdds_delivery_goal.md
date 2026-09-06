@@ -400,7 +400,14 @@ scalar/array types, exact names, range/read-only constraints, and run-owned
 typed YAML dumps match the peer's actual seed state. Eight output-oracle tests,
 six receipt mutation tests and eleven surrounding ROS receipt tests pass.
 
-There are still only 46 independently validated CLI operations out of 98, without
+`cli_param_write_20260907_02` adds set/load/delete. Set is read back and restored;
+four YAML changes are each read back; the dynamic parameter disappears and its
+subsequent get returns the expected real code 1. Seven remote parameter events,
+final peer state, YAML and raw callbacks all match. Eight output-oracle, nine
+absence-contract, nine mutation-receipt, seventeen acceptance and eleven ROS
+receipt tests pass.
+
+There are still only 49 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

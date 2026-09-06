@@ -305,6 +305,20 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
+    if (root/'cli_batch').read_text().strip() == 'parameter_write':
+        from rcl_interfaces.msg import ParameterEvent
+        from rclpy.parameter import parameter_value_to_python
+        parameter_events=[]
+        def on_parameter_event(message):
+            if message.node!=ns+'/alpha_'+other or not (message.changed_parameters or message.deleted_parameters):return
+            def fields(parameters):
+                return [{'name':p.name,'type':p.value.type,'value':parameter_value_to_python(p.value)} for p in parameters]
+            assert not message.new_parameters
+            record={'node':message.node,'changed':fields(message.changed_parameters),'deleted':fields(message.deleted_parameters)}
+            parameter_events.append(record)
+            (root/'parameter_events.json').write_text(json.dumps({'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'events':parameter_events})+'\n')
+            print('CLI_PARAMETER_EVENT '+json.dumps(record),flush=True)
+        parameter_event_sub=records[1]['node'].create_subscription(ParameterEvent,'/parameter_events',on_parameter_event,QoSProfile(depth=32,reliability=ReliabilityPolicy.RELIABLE))
     if (root/'cli_batch').read_text().strip() == 'daemon':
         from rclpy.action import ActionClient, ActionServer
         from example_interfaces.action import Fibonacci
@@ -358,6 +372,14 @@ try:
     cli_fixture()
     (root / 'phase1.done').write_text(a.nonce + '\n')
     wait(lambda: (root / 'phase2.go').is_file() and (root / 'phase2.go').read_text().strip() == a.nonce)
+    if (root/'cli_batch').read_text().strip() == 'parameter_write':
+        node=records[0]['node'];observed={}
+        for key in node.list_parameters([],0).names:
+            value=node.get_parameter(key).value
+            observed[key]=[v[0] for v in value] if key=='octets' else value
+        final={'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'node':ns+'/alpha_'+a.role,'values':observed}
+        (root/'parameter_final.json').write_text(json.dumps(final)+'\n')
+        print('CLI_PARAMETER_FINAL '+json.dumps(final),flush=True)
     beta = records[1]
     introspection = None
     for key in ('action_client','action_server'):

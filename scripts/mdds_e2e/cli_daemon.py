@@ -17,9 +17,11 @@ from cli_node_info import oracle as node_info_oracle, recipe as node_info_recipe
 from cli_action import oracle as action_oracle, recipe as action_recipe
 from cli_service_echo import recipe as echo_recipe, execute as execute_echo
 from cli_parameters import recipe as parameter_recipe,oracle as parameter_oracle
+from cli_parameter_changes import recipe as parameter_change_recipe,oracle as parameter_change_oracle,loaded_values
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='parameter_write':return parameter_change_recipe(ns,peer,nonce)
     if mode=='parameter_read':return parameter_recipe(ns,peer,nonce)
     if mode=='introspection':return echo_recipe(ns,peer,nonce)
     if mode=='action':return action_recipe(ns,peer)
@@ -32,6 +34,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case in ('cli:param/set','cli:param/load','cli:param/delete'):return parameter_change_oracle(stdout,expected)
     if case.startswith('cli:param/'):return parameter_oracle(case,stdout,expected)
     if case.startswith('cli:action/'):return action_oracle(case,stdout,expected)
     if case=='cli:node/info':return node_info_oracle(stdout,expected)
@@ -59,7 +62,11 @@ def execute(argv, directory, run, board, case, label, expected):
         finally:
             for s,handler in previous.items(): signal.signal(s,handler)
         stdout, stderr = stdout.decode(), stderr.decode()
-        passed = child.returncode == 0 and oracle(case,stdout,expected)
+        absent=case=='cli:param/delete' and expected.get('kind')=='absent'
+        passed = child.returncode == (1 if absent else 0) and oracle(case,stdout,expected)
+        if absent:
+            errors=[line.strip() for line in stderr.splitlines() if line.strip() and not line.startswith('[INFO] [rmw_mdds]: mdds transports active: dsoftbus(')]
+            passed=passed and errors==['Parameter not set']
         if case == 'cli:node/list':
             passed = passed and 'nodes in the graph that share an exact name' in stderr
         if case == 'cli:node/info' and expected['duplicate']:
@@ -75,9 +82,11 @@ def execute(argv, directory, run, board, case, label, expected):
         log.write_text(text,encoding='utf-8')
         if case=='cli:param/dump' and passed:
             (directory/'parameters_dump.yaml').write_text(stdout,encoding='utf-8')
-        return {'case_id':case,'label':label,'expected':expected,'passed':passed,'execution':{
+        value={'case_id':case,'label':label,'expected':expected,'passed':passed,'execution':{
             'argv':argv,'actual_argv':actual,'child_pid':child.pid,'child_start':start,'board_serial':board,
             'returncode':child.returncode,'log':{'path':log.name,'sha256':acceptance.digest(log.read_bytes())}}}
+        if absent:value['execution']['expected_failure']='parameter_not_set'
+        return value
 
 
 def inspect_daemon(root):
@@ -135,6 +144,9 @@ def main():
         command('cli:node/list','nodes_cached',['node','list'],expected)
         command('cli:node/list','nodes_direct',['node','list','--no-daemon','--spin-time','3'],expected)
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
+        if (root/'cli_batch').read_text().strip()=='parameter_write':
+            import yaml
+            (output/'parameter_load.yaml').write_text(yaml.safe_dump({'/ros_broker_'+run+'/alpha_'+peer_role:{'ros__parameters':loaded_values(nonce,peer_role)}}))
         for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce):
             command(case,label,argv,wanted)
         report['daemon_after_queries']=inspect_daemon(root)

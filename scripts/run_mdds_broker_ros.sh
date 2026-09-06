@@ -132,7 +132,12 @@ for board in "$BOARD_A" "$BOARD_B"; do
   if [[ "$cli_batch" == basic ]]; then
     graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli.status.json" "$LOGDIR/$board.cli.status.json"
     graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli_graph/results.json" "$LOGDIR/$board.cli.results.json"
-    for name in cli_topic_type cli_topic_find cli_service_call; do
+    graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli_fixture.json" "$LOGDIR/$board.cli.fixture.json"
+    present=$(shell "$board" "if test -f '$MDDS_OWNED_REMOTE_DIR/cli_received.json'; then printf CLI_RECEIVED; fi" | tr -d '\r')
+    if [[ "$present" == CLI_RECEIVED ]]; then
+      graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli_received.json" "$LOGDIR/$board.cli.received.json"
+    fi
+    for name in cli_topic_type cli_topic_find cli_service_call cli_topic_info cli_topic_pub cli_topic_echo; do
       graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli_graph/$name.log" "$LOGDIR/$board.$name.log"
     done
   fi

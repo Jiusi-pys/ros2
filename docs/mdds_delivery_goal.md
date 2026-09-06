@@ -338,7 +338,14 @@ evidence categories. Only terminate processes owned by the current test run.
   The surrounding data/graph/retirement fixture also passed. The full set of
   existing per-case receipts was revalidated: 24 unique CLI operations now pass.
 
-There are still only 24 independently validated CLI operations out of 98, without
+- `cli_topic_data_20260907_03` adds complete dual-board `topic info --verbose`,
+  `topic pub --once` and `topic echo --once` receipts. It checks all endpoint
+  fields and QoS, exact peer callbacks, and field/filter output. The surrounding
+  ROS/DSoftBus fixture and eleven receipt-negative tests passed. Revalidation
+  across all four batches yields 27 unique operations; failed fixture attempts
+  are retained and excluded.
+
+There are still only 27 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

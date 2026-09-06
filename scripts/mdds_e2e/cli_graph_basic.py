@@ -1,4 +1,4 @@
-"""Three actual cross-board CLI cases while the ROS broker fixture is held live."""
+"""Six actual cross-board CLI cases while the ROS broker fixture is held live."""
 import json
 import os
 from pathlib import Path
@@ -19,6 +19,33 @@ def oracle(case, stdout, expected):
     if case == 'cli:service/call':
         matches = re.findall(r'response:\s*example_interfaces\.srv\.AddTwoInts_Response\(sum=(-?\d+)\)', stdout)
         return matches == [str(expected)]
+    if case == 'cli:topic/pub':
+        matches = re.findall(r'publishing #(\d+): std_msgs\.msg\.Int32\(data=(-?\d+)\)', stdout)
+        return matches == [('1', str(expected))]
+    if case == 'cli:topic/echo':
+        return [line for line in lines if line not in ('---', '...')] == [str(expected)]
+    if case == 'cli:topic/info':
+        summary, blocks, current = {}, [], None
+        for line in lines:
+            key, separator, value = line.partition(':')
+            if not separator: return False
+            value = value.strip()
+            if key == 'Node name':
+                current = {}; blocks.append(current)
+            if key in ('Type', 'Publisher count', 'Subscription count'):
+                if key in summary: return False
+                summary[key] = value; current = None
+            elif key == 'QoS profile':
+                continue
+            elif current is not None:
+                if key in current: return False
+                current[key] = value
+            else:
+                return False
+        if summary != {'Type':'std_msgs/msg/String','Publisher count':'1','Subscription count':'1'} or len(blocks) != 2:
+            return False
+        actual = {v.get('Endpoint type'): v for v in blocks}
+        return actual == {'PUBLISHER':expected['publisher'],'SUBSCRIPTION':expected['subscription']}
     return False
 
 
@@ -70,6 +97,15 @@ def main():
         ('cli:topic/find', ['ros2','topic','find','std_msgs/msg/String','--no-daemon','--spin-time','3'],
          sorted(namespace+'/'+role+'/'+name+'/out' for role in ('A','B') for name in ('alpha','beta'))),
         ('cli:service/call', ['ros2','service','call',service,'example_interfaces/srv/AddTwoInts',json.dumps({'a':operand,'b':17})], operand+17),
+    ]
+    context = json.loads((root / 'cli_fixture.json').read_text())
+    base = int(nonce[:7], 16) + (200 if peer_role == 'B' else 100)
+    topic = namespace+'/'+peer_role+'/alpha/out'
+    cases += [
+        ('cli:topic/info', ['ros2','topic','info',topic,'--verbose','--no-daemon','--spin-time','3'], context['topics'][topic]),
+        ('cli:topic/pub', ['ros2','topic','pub',namespace+'/'+peer_role+'/cli_sink','std_msgs/msg/Int32',json.dumps({'data':base+2}),'--once','--keep-alive','0.5','--qos-reliability','reliable'], base+2),
+        # Jazzy applies --field before --filter: m is the selected integer.
+        ('cli:topic/echo', ['ros2','topic','echo',namespace+'/'+peer_role+'/cli_source','std_msgs/msg/Int32','--once','--field','data','--filter',f'm == {base+1}','--qos-reliability','reliable','--qos-durability','volatile','--timeout','10'], base+1),
     ]
     output = root / 'cli_graph'; output.mkdir(mode=0o700)
     results = [execute(argv, output, run, board, case, expected) for case, argv, expected in cases]

@@ -69,7 +69,7 @@ frozen old RMW in `ros_hash_red_20260907_02`; `ros_hash_green_20260907` passed a
 generated hash checks and ten negative receipt tests. The first hash run stopped
 before launching ROS because a host path needed Windows conversion.
 The optional live CLI batch is documented in `CLI_GRAPH_BASIC.md`; its complete
-dual-board receipts increase current CLI coverage to 24/98.
+dual-board receipts, including the topic data extension, bring CLI coverage to 27/98.
 
 `ros_no_profile_20260907` passed the full current subset in implicit policy mode,
 including all eleven negative receipt checks. This proves no-profile startup

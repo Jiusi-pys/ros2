@@ -13,6 +13,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.signals import SignalHandlerOptions
 from rclpy.utilities import get_rmw_implementation_identifier
 from std_msgs.msg import String
+from std_msgs.msg import Int32
 from example_interfaces.srv import AddTwoInts
 from broker_local_ros_probe import provenance
 p = argparse.ArgumentParser()
@@ -46,6 +47,32 @@ def spin():
     if any((r['bad'] for r in records)):
         raise RuntimeError('unexpected ROS payload')
     time.sleep(0.002)
+
+
+def cli_fixture():
+    observer = records[0]['node']
+    topics = {}
+    for role in ('A', 'B'):
+        topic = path(role, 'alpha') + '/out'
+        item = {}
+        for kind, getter in [('publisher', observer.get_publishers_info_by_topic), ('subscription', observer.get_subscriptions_info_by_topic)]:
+            entries = getter(topic)
+            assert len(entries) == 1
+            ep = entries[0]
+            q = ep.qos_profile
+            assert q.depth == 32 and q.history.name == 'KEEP_LAST' and q.reliability.name == 'RELIABLE'
+            assert q.durability.name == 'VOLATILE' and q.liveliness.name == 'AUTOMATIC'
+            assert q.lifespan.nanoseconds == 9223372036854775807 and q.deadline.nanoseconds == 9223372036854775807 and q.liveliness_lease_duration.nanoseconds == 9223372036854775807
+            gid = list(ep.endpoint_gid)
+            # This Jazzy workspace defines RMW_GID_STORAGE_SIZE as 16.
+            assert len(gid) == 16 and any(gid)
+            item[kind] = {'Node name':ep.node_name,'Node namespace':ep.node_namespace,'Topic type':ep.topic_type,
+                'Topic type hash':str(ep.topic_type_hash),'Endpoint type':kind.upper(),'GID':'.'.join(format(v,'02x') for v in gid),
+                'Reliability':'RELIABLE','History (Depth)':'KEEP_LAST (32)','Durability':'VOLATILE',
+                'Lifespan':'Infinite','Deadline':'Infinite','Liveliness':'AUTOMATIC','Liveliness lease duration':'Infinite'}
+        assert item['publisher']['GID'] != item['subscription']['GID']
+        topics[topic] = item
+    (root / 'cli_fixture.json').write_text(json.dumps({'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'topics':topics},indent=2)+'\n')
 
 def wait(predicate, seconds=65):
     deadline = time.monotonic() + seconds
@@ -213,8 +240,23 @@ try:
         all_nodes.append(n)
         dups.append(n)
         executors[0].add_node(n)
+    cli_value_base = int(a.nonce[:7], 16) + (100 if a.role == 'A' else 200)
+    cli_received = []
+    cli_pub = records[0]['node'].create_publisher(Int32, ns+'/'+a.role+'/cli_source', qos)
+    def publish_cli_source():
+        message = Int32(); message.data = cli_value_base + 1; cli_pub.publish(message)
+    cli_timer = records[0]['node'].create_timer(0.1, publish_cli_source)
+    def receive_cli_payload(message):
+        assert message.data == cli_value_base + 2
+        cli_received.append(message.data)
+        assert len(cli_received) == 1
+        value = {'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'data':message.data,'count':len(cli_received)}
+        (root / 'cli_received.json').write_text(json.dumps(value)+'\n')
+        print('CLI_PUB_RX '+json.dumps(value),flush=True)
+    cli_sub = records[0]['node'].create_subscription(Int32, ns+'/'+a.role+'/cli_sink', receive_cli_payload, qos)
     snapshot(1)
     exchange(records, 1, True)
+    cli_fixture()
     (root / 'phase1.done').write_text(a.nonce + '\n')
     wait(lambda: (root / 'phase2.go').is_file() and (root / 'phase2.go').read_text().strip() == a.nonce)
     beta = records[1]

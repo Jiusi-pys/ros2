@@ -11,6 +11,7 @@ support=json.loads((root/'host_report.json').read_text())
 if not support['passed']:raise ValueError('supporting production ROS/DSoftBus fixture failed')
 manifest=json.loads((root/'cli_acceptance_manifest.json').read_text());manifest['run_id']=run
 reports={}
+contexts={}
 for board in acceptance.TARGET['board_serials']:
     value=json.loads((root/(board+'.cli.results.json')).read_text())
     status=json.loads((root/(board+'.cli.status.json')).read_text())
@@ -19,9 +20,11 @@ for board in acceptance.TARGET['board_serials']:
     record=(root/(board+'.cli.child.pid')).read_text().strip()
     if record!=f"MDDS_OWNED_PROCESS RUN_ID={run} TAG=cli_child PID={status['child_pid']} START={status['child_start']}":raise ValueError('CLI batch ownership mismatch')
     reports[board]={r['case_id']:r for r in value['results']}
+    contexts[board]=json.loads((root/(board+'.cli.fixture.json')).read_text())
+    if contexts[board]['run_id']!=run or contexts[board]['nonce']!=nonce or contexts[board]['board']!=board:raise ValueError('fixture context mismatch')
 passed=[]
 for case in manifest['cases']:
-    if case['id'] not in ('cli:topic/type','cli:topic/find','cli:service/call'):continue
+    if case['id'] not in ('cli:topic/type','cli:topic/find','cli:service/call','cli:topic/info','cli:topic/pub','cli:topic/echo'):continue
     executions=[]
     for board in acceptance.TARGET['board_serials']:
         result=reports[board][case['id']];execution=copy.deepcopy(result['execution'])
@@ -30,9 +33,30 @@ for case in manifest['cases']:
         stdout=raw.split('MDDS_CLI_STDOUT_BEGIN\n',1)[1].split('\nMDDS_CLI_STDOUT_END',1)[0]
         peer='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
         namespace='/ros_broker_'+run
+        base=int(nonce[:7],16)+(200 if peer=='B' else 100)
         expected={'cli:topic/type':'std_msgs/msg/String',
                   'cli:topic/find':sorted(namespace+'/'+role+'/'+name+'/out' for role in ('A','B') for name in ('alpha','beta')),
-                  'cli:service/call':int(nonce[:7],16)+(1 if peer=='B' else 2)+17}[case['id']]
+                  'cli:service/call':int(nonce[:7],16)+(1 if peer=='B' else 2)+17,
+                  'cli:topic/info':contexts[board]['topics'][namespace+'/'+peer+'/alpha/out'],
+                  'cli:topic/pub':base+2,'cli:topic/echo':base+1}[case['id']]
+        if case['id']=='cli:topic/info':
+            local_role='A' if peer=='B' else 'B'
+            required={'Node namespace':namespace,'Topic type':'std_msgs/msg/String',
+                      'Topic type hash':json.loads((root/'type_hashes.json').read_text())['hashes']['std_msgs/msg/String'],
+                      'Reliability':'RELIABLE','History (Depth)':'KEEP_LAST (32)','Durability':'VOLATILE',
+                      'Lifespan':'Infinite','Deadline':'Infinite','Liveliness':'AUTOMATIC','Liveliness lease duration':'Infinite'}
+            for kind,owner in [('publisher',peer),('subscription',local_role)]:
+                row=expected[kind]
+                if row['Node name']!='alpha_'+owner or row['Endpoint type']!=kind.upper() or any(row.get(k)!=v for k,v in required.items()):raise ValueError('fixture endpoint fields violate requested contract')
+                parts=row['GID'].split('.')
+                if len(parts)!=16 or not any(int(v,16) for v in parts):raise ValueError('invalid fixture GID')
+        if case['id']=='cli:topic/pub':
+            peer_board=next(v for v in acceptance.TARGET['board_serials'] if v!=board)
+            received=json.loads((root/(peer_board+'.cli.received.json')).read_text())
+            if received!={'run_id':run,'nonce':nonce,'board':peer_board,'data':expected,'count':1}:raise ValueError('peer did not receive exact once-only CLI payload')
+            peer_log=(root/(peer_board+'.ros.log')).read_text()
+            marker='CLI_PUB_RX '+json.dumps(received)
+            if peer_log.splitlines().count(marker)!=1:raise ValueError('peer callback evidence missing')
         if result['expected']!=expected or not result['passed'] or not oracle(case['id'],stdout,expected):raise ValueError('functional CLI oracle failed')
         if 'mdds transports active: dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('CLI did not report production broker selection')
         if not str(execution['child_start']).isdecimal() or execution['child_pid']<=0:raise ValueError('missing actual CLI child identity')
@@ -42,6 +66,8 @@ for case in manifest['cases']:
              'board_serials':acceptance.TARGET['board_serials'],'rmw_implementation':'rmw_mdds','transport':'dsoftbus',
              'executions':executions,'assertions':[{'id':'functional_result','passed':True,'execution':0,'pattern':marker}],
              'supporting_fixture':{'path':'host_report.json','sha256':acceptance.digest((root/'host_report.json').read_bytes())}}
+    if case['id']=='cli:topic/pub':
+        receipt['peer_callbacks']=[{'path':board+'.cli.received.json','sha256':acceptance.digest((root/(board+'.cli.received.json')).read_bytes())} for board in acceptance.TARGET['board_serials']]
     path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
     ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
     case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

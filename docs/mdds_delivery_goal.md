@@ -359,7 +359,14 @@ verifier rejects the prior receipts; the replacement batch passes all eight
 cases, with seven ownership and nine CLI receipt tests. Unique coverage remains
 29/98. The earlier payload observations are retained as historical evidence.
 
-There are still only 29 independently validated CLI operations out of 98, without
+`cli_daemon_20260907_01` then passed real daemon start/status/stop and node-list
+commands on both boards. Cached and direct queries preserve all eight fixture
+node rows, including duplicate multiplicity. Process identity, frozen RMW/MDDS
+libraries, absence of UDP, exact loopback listener ownership, daemon exit and
+successful direct queries after stopping are required. Eight output-oracle
+tests, ten daemon receipt tests and eleven surrounding ROS receipt checks pass.
+
+There are still only 33 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

@@ -69,7 +69,11 @@ frozen old RMW in `ros_hash_red_20260907_02`; `ros_hash_green_20260907` passed a
 generated hash checks and ten negative receipt tests. The first hash run stopped
 before launching ROS because a host path needed Windows conversion.
 The optional live CLI batch is documented in `CLI_GRAPH_BASIC.md`; its complete
-dual-board receipts, including topic data and visibility comparisons, bring CLI coverage to 29/98.
+dual-board receipts, including topic data and visibility comparisons, cover eight
+live CLI cases. The separate `MDDS_ROS_CLI_BATCH=daemon` batch and its ownership
+requirements are documented in `CLI_DAEMON.md`. With its four new operations,
+current deduplicated CLI coverage is 33/98. Earlier expanded basic receipts were
+superseded by the daemon-isolated run described in `CLI_GRAPH_BASIC.md`.
 
 `ros_no_profile_20260907` passed the full current subset in implicit policy mode,
 including all eleven negative receipt checks. This proves no-profile startup

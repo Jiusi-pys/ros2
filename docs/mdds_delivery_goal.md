@@ -35,9 +35,10 @@ evidence for the tested versions, platforms, and configurations.
 - Both were reachable by HDC on 2026-09-06. Source checkouts contain existing
   uncommitted work in MDDS and RMW/gateway; starting diffs were preserved under
   `../verification_evidence/goal1_20260906/`.
-- `rmw_mdds/src/graph.cpp` assigns every remote endpoint to the first node of
-  its participant. Fix endpoint ownership with codec and RMW regression tests
-  plus a real cross-board multi-node graph test.
+- Remote endpoint ownership, native topic/service separation, announcement
+  wakeup, and startup callback ordering have individual fixes with regression
+  evidence below. Duplicate-node cardinality and complete graph metadata still
+  require additional acceptance work.
 - DSoftBus currently reserves one fixed session per board/domain and one
   engine per process. Complete CLI requires multiple participants/processes;
   fix that constraint without introducing UDP.
@@ -108,11 +109,57 @@ evidence categories. Only terminate processes owned by the current test run.
   Commit `6506992` provides only the in-memory routing core; control-message
   serialization, handshake and executable broker integration are still pending.
 - `broker_ipc_red_20260906` -> `broker_ipc_green_20260906` changed all fifteen
-  framing/real AF_UNIX socketpair cases from failure to pass. Additional fd
-  reuse/protocol-error cases and the final run are in progress. There is still
-  no production Unix listener/client or multi-process RMW acceptance.
+  framing/real AF_UNIX socketpair cases from failure to pass.
+  `broker_ipc_final_20260906` passed seventeen cases, including fd reuse and
+  protocol errors. Commit `4fd8253` contains the bounded IPC implementation.
 - Commit `9b7cf95` adds executable oracles for twelve metadata CLI cases.
-  Its host tests pass; real-board CLI execution/evidence collection is pending.
+  `cli_metadata_20260906_01` executed all twelve on board A with real child
+  status, raw output and hash-verified evidence. The partial manifest records
+  12 PASS and 86 NOT_RUN; the gateway gate remains closed. Commit `dd24c72`
+  contains the board harness and provenance checks.
+- `mdds_components_full_20260906` passed fourteen native CTest programs:
+  276 GTest cases plus two token probes, no skips. This is component evidence;
+  the suite includes UDP component tests and does not establish a DSoftBus-only
+  end-to-end deployment.
+- `participant_startup_red_20260906` recorded three failures in four cases;
+  `participant_startup_green_20260906` passed four. The participant core
+  regression passed 90 cases and the fake Socket/Bytes regression passed 34.
+  `graph_startup_overlay_20260906_01` passed on both real boards. Commit
+  `a68258a` publishes stable transport slots before callbacks can run.
+- `broker_local_protocol_red_20260906` recorded six failures in eight cases;
+  `broker_local_protocol_green_20260906` passed eight. Commit `139cafc`
+  supplies the bounded local handshake and routing-message codec.
+- `broker_client_red2_20260906` recorded seven failures in eight cases;
+  `broker_client_green_20260906` passed eight. Commit `3444d58` supplies the
+  concurrent local broker client, including callback-driven stop and teardown.
+  It remains a test-only transport factory with no physical DSoftBus proof.
+- `broker_local_server_red_20260906` recorded fifteen failures; both
+  `broker_local_server_green_20260906` and
+  `broker_local_server_green2_20260906` passed fifteen socketpair cases.
+  `broker_server_capacity_red2_20260906` then exposed the default receive
+  budget rejecting an eighth client (one failure in eighteen cases).
+  The first capacity run aborted during artifact transfer and is not a
+  runtime result. `broker_daemon_red_20260906` recorded two failures in six
+  fork/exec cases against the deliberate daemon stub. Fixes are in progress.
+- `node_multiplicity_red2_20260906` recorded seven graph failures in 35 cases;
+  `node_multiplicity_green_20260906` passed 35 after preserving each RMW node
+  registration and removing only one equal-name registration on destruction.
+  `mdds_node_multiplicity_red_20260906` exposed the announcement-side count
+  defect; `mdds_node_multiplicity_green_20260906` then passed all 37 fake
+  Socket/Bytes cases. The actual DSoftBus run
+  `graph_duplicate_red_20260906_01` observed only one of two same-name nodes;
+  `graph_duplicate_green_20260906_01` passed after the fix, with both child
+  exits zero and verified private libraries. MDDS commit `b61d31f` and RMW
+  commit `bbc1c57` contain this feature; enclave values remain unsupported.
+- `broker_server_capacity_green_20260906` passed all eighteen actor cases
+  after correcting the bounded default receive budget. The daemon review
+  regression `broker_daemon_symlink_red_20260906` exposed a path-based chmod
+  following a replacement symlink; its one failing case is being repaired.
+- The local broker ROS probe retains real reliable acknowledgment assertions.
+  Source review found `rmw_publisher_wait_for_all_acked` still returns
+  UNSUPPORTED for RELIABLE publishers despite MDDS retaining per-association
+  ACK watermarks. A separate TDD feature will implement and validate that API;
+  application receipt alone will not be reported as an ACK-wait pass.
 
 Remaining gates include duplicate-node cardinality, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

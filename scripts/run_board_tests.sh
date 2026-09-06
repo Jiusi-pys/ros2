@@ -214,7 +214,9 @@ safe_package_name() {
 }
 
 safe_relative_path() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*$ ]]
+  # C++ runtime libraries legitimately contain '+'. Components still start
+  # with an alphanumeric character and cannot introduce traversal or shell text.
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.+-]*(/[A-Za-z0-9][A-Za-z0-9_.+-]*)*$ ]]
 }
 
 valid_sha256() {
@@ -499,7 +501,7 @@ verify_remote_ready_and_create() { # <package-root> <package> <manifest> <ready>
   # one shell predicate per file on the host.  That keeps large packages below
   # HDC command-length limits while still re-hashing every driver/exe/lib/
   # fixture entry before a READY record can exist.
-  remote_cmd="valid=1; entries=0; if test -f '$manifest' && test ! -L '$manifest' && test \"\$(sha256sum '$manifest' 2>/dev/null | cut -d ' ' -f1)\" = '$READY_MANIFEST_SHA256' && exec 3< '$manifest'; then IFS= read -r manifest_header <&3 || valid=0; test \"\$manifest_header\" = '$header' || valid=0; while IFS= read -r manifest_entry <&3; do case \"\$manifest_entry\" in SHA256=*' PATH='*) manifest_sha=\${manifest_entry#SHA256=}; manifest_sha=\${manifest_sha%% PATH=*}; manifest_path=\${manifest_entry#* PATH=} ;; *) valid=0; break ;; esac; case \"\$manifest_sha\" in ''|*[!0-9a-f]*) valid=0 ;; esac; test \${#manifest_sha} -eq 64 || valid=0; case \"\$manifest_path\" in ''|/*|*'//'*|.|..|./*|../*|*/.|*/..|*/./*|*/../*|*[!A-Za-z0-9._/-]*) valid=0 ;; esac; if test \"\$valid\" = 1 && test -f '$package_root/'\"\$manifest_path\" && test ! -L '$package_root/'\"\$manifest_path\" && test \"\$(sha256sum '$package_root/'\"\$manifest_path\" 2>/dev/null | cut -d ' ' -f1)\" = \"\$manifest_sha\"; then entries=\$((entries + 1)); else valid=0; fi; done; exec 3<&-; if test \"\$valid\" = 1 && test \"\$entries\" -gt 0; then if (umask 077; set -C; printf '%s\\n' '$ready_line' > '$ready') 2>/dev/null && test -f '$ready' && test ! -L '$ready' && test \"\$(sha256sum '$ready' 2>/dev/null | cut -d ' ' -f1)\" = '$ready_line_sha'; then printf MDDS_BOARDTEST_READY_OK; else printf MDDS_BOARDTEST_READY_WRITE_FAILED; fi; else printf MDDS_BOARDTEST_READY_INPUT_HASH_BAD; fi; else printf MDDS_BOARDTEST_READY_MANIFEST_HASH_BAD; fi"
+  remote_cmd="valid=1; entries=0; if test -f '$manifest' && test ! -L '$manifest' && test \"\$(sha256sum '$manifest' 2>/dev/null | cut -d ' ' -f1)\" = '$READY_MANIFEST_SHA256' && exec 3< '$manifest'; then IFS= read -r manifest_header <&3 || valid=0; test \"\$manifest_header\" = '$header' || valid=0; while IFS= read -r manifest_entry <&3; do case \"\$manifest_entry\" in SHA256=*' PATH='*) manifest_sha=\${manifest_entry#SHA256=}; manifest_sha=\${manifest_sha%% PATH=*}; manifest_path=\${manifest_entry#* PATH=} ;; *) valid=0; break ;; esac; case \"\$manifest_sha\" in ''|*[!0-9a-f]*) valid=0 ;; esac; test \${#manifest_sha} -eq 64 || valid=0; case \"\$manifest_path\" in ''|/*|*'//'*|.|..|./*|../*|*/.|*/..|*/./*|*/../*|*[!A-Za-z0-9._/+-]*) valid=0 ;; esac; if test \"\$valid\" = 1 && test -f '$package_root/'\"\$manifest_path\" && test ! -L '$package_root/'\"\$manifest_path\" && test \"\$(sha256sum '$package_root/'\"\$manifest_path\" 2>/dev/null | cut -d ' ' -f1)\" = \"\$manifest_sha\"; then entries=\$((entries + 1)); else valid=0; fi; done; exec 3<&-; if test \"\$valid\" = 1 && test \"\$entries\" -gt 0; then if (umask 077; set -C; printf '%s\\n' '$ready_line' > '$ready') 2>/dev/null && test -f '$ready' && test ! -L '$ready' && test \"\$(sha256sum '$ready' 2>/dev/null | cut -d ' ' -f1)\" = '$ready_line_sha'; then printf MDDS_BOARDTEST_READY_OK; else printf MDDS_BOARDTEST_READY_WRITE_FAILED; fi; else printf MDDS_BOARDTEST_READY_INPUT_HASH_BAD; fi; else printf MDDS_BOARDTEST_READY_MANIFEST_HASH_BAD; fi"
   out="$(shell "$remote_cmd" | tr -d '\r\n')"
   printf 'BOARDTEST_READY_REMOTE package=%s manifest_sha256=%s result=%s\n' \
     "$pkg" "$READY_MANIFEST_SHA256" "${out:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"

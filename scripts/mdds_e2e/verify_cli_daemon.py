@@ -6,8 +6,9 @@ import sys
 import cli_acceptance as acceptance
 from cli_daemon import node_names, oracle
 from cli_daemon_guard import owned
+from cli_service_graph import recipe as service_recipe
 
-LABELS=['status_before','start','status_running','nodes_cached','nodes_direct','stop','status_after','nodes_after_stop']
+LABELS=['status_before','start','status_running','nodes_cached','nodes_direct']+[r[1] for r in service_recipe('/fixture','B')]+['stop','status_after','nodes_after_stop']
 ABSENT={'domain':175,'daemons':[],'port_bindable':True}
 
 
@@ -25,9 +26,13 @@ def validate_report(value, root, run, board, nonce):
         if record['pid']!=daemon['pid'] or record['start']!=daemon['start']:raise ValueError('daemon replaced during graph queries')
     if value['daemon_exited']!={'pid':daemon['pid'],'start':daemon['start'],'terminated':True}:raise ValueError('daemon exit not tied to owned process')
     if [r['label'] for r in value['results']]!=LABELS:raise ValueError('missing or reordered lifecycle command')
+    peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
+    services={label:(case,['ros2']+argv,expected) for case,label,argv,expected in service_recipe('/ros_broker_'+run,peer_role)}
     for result in value['results']:
         label=result['label'];execution=result['execution'];case=result['case_id']
-        if label.startswith('nodes_'):
+        if label in services:
+            expected_case,argv,expected=services[label]
+        elif label.startswith('nodes_'):
             expected=node_names('/ros_broker_'+run);expected_case='cli:node/list'
             argv=['ros2','node','list']+([] if label=='nodes_cached' else ['--no-daemon','--spin-time','3'])
         elif label=='start':expected='The daemon has been started';expected_case='cli:daemon/start';argv=['ros2','daemon','start']
@@ -42,7 +47,7 @@ def validate_report(value, root, run, board, nonce):
         if not oracle(case,stdout,expected):raise ValueError('CLI functional output differs')
         if case=='cli:node/list':
             if 'nodes in the graph that share an exact name' not in raw:raise ValueError('duplicate-node warning missing')
-            if label!='nodes_cached' and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if '--no-daemon' in argv and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
 
 
 def main():
@@ -60,7 +65,7 @@ def main():
         reports[board]=value
     manifest=json.loads((root/'cli_acceptance_manifest.json').read_text());manifest['run_id']=run;passed=[]
     for case in manifest['cases']:
-        if case['id'] not in ('cli:daemon/start','cli:daemon/status','cli:daemon/stop','cli:node/list'):continue
+        if case['id'] not in ('cli:daemon/start','cli:daemon/status','cli:daemon/stop','cli:node/list','cli:service/type','cli:service/find','cli:service/info'):continue
         executions=[]
         for board,value in reports.items():
             for result in value['results']:

@@ -9,7 +9,8 @@ Each board runs the actual installed ROS CLI, with the production rmw_mdds
 library and a private native DSoftBus broker, against the opposite board's
 live ROS fixture. The batch starts with no domain-175 ROS CLI daemon and a
 bindable loopback CLI port. It executes status, start, running status, cached
-node list, direct node list, stop, stopped status and a final direct node list.
+node list, direct node list, service graph queries, stop, stopped status and a
+final direct node list.
 
 The two graph query modes must return the same eight node rows, including
 both instances of each duplicate name and both nodes in each board's distinct
@@ -51,3 +52,17 @@ missing exit evidence, a replaced daemon, wrong library hashes, owned UDP,
 foreign broker roots, missing cached queries, direct queries substituted for
 cached queries, emergency cleanup, and a daemon left running. Revalidation of
 the active per-case batches now yields 33 unique CLI operations out of 98.
+
+The service graph extension queries the opposite board's isolated alpha
+service type, finds exactly four visible AddTwoInts services and six when
+including hidden services, and checks the hidden-inclusive count. Service info
+must return one client, one server and the correct type through both cached
+and direct queries. Type/find do not expose a no-daemon option in this Jazzy
+CLI; their queries run within the proven owned daemon lifecycle.
+
+`cli_service_graph_20260907_01` passed all seven cases on both boards, with
+14 actual commands per board and eleven surrounding ROS receipt tests. Ten
+service output-oracle tests went from four failures to zero. Thirteen daemon
+receipt tests also pass, including rejection of a missing hidden query,
+incorrect service counts and cached queries substituted for direct queries.
+Deduplicated coverage is now 36/98.

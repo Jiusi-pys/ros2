@@ -72,7 +72,7 @@ The optional live CLI batch is documented in `CLI_GRAPH_BASIC.md`; its complete
 dual-board receipts, including topic data and visibility comparisons, cover eight
 live CLI cases. The separate `MDDS_ROS_CLI_BATCH=daemon` batch and its ownership
 requirements are documented in `CLI_DAEMON.md`. With its four new operations,
-current deduplicated CLI coverage is 33/98. Earlier expanded basic receipts were
+current deduplicated CLI coverage, including service type/find/info, is 36/98. Earlier expanded basic receipts were
 superseded by the daemon-isolated run described in `CLI_GRAPH_BASIC.md`.
 
 `ros_no_profile_20260907` passed the full current subset in implicit policy mode,

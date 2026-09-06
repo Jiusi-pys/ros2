@@ -366,7 +366,12 @@ libraries, absence of UDP, exact loopback listener ownership, daemon exit and
 successful direct queries after stopping are required. Eight output-oracle
 tests, ten daemon receipt tests and eleven surrounding ROS receipt checks pass.
 
-There are still only 33 independently validated CLI operations out of 98, without
+`cli_service_graph_20260907_01` adds service type/find/info: four visible versus
+six hidden-inclusive services, exact type, and one client/server in cached and
+direct modes. Both boards pass all seven batch cases, ten service-oracle tests,
+thirteen daemon receipt tests and eleven ROS receipt checks.
+
+There are still only 36 independently validated CLI operations out of 98, without
 a complete single-release acceptance receipt. Remaining gates include
 broader duplicate-node/cardinality scenarios, large ANNOUNCE delivery
 over small physical Bytes MTUs, complete endpoint metadata/lifetime coverage,

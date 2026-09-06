@@ -12,6 +12,7 @@ import time
 import cli_acceptance as acceptance
 from board_graph_ownership import process_start
 from cli_daemon_guard import assert_absent, domain_daemons, observe, owned, retire
+from cli_service_graph import oracle as service_oracle, recipe as service_recipe
 
 
 def node_names(namespace):
@@ -19,6 +20,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case.startswith('cli:service/'):return service_oracle(case,stdout,expected)
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if case == 'cli:node/list': return Counter(lines) == Counter(expected)
     if case in ('cli:daemon/start','cli:daemon/status','cli:daemon/stop'): return lines == [expected]
@@ -45,8 +47,8 @@ def execute(argv, directory, run, board, case, label, expected):
         passed = child.returncode == 0 and oracle(case,stdout,expected)
         if case == 'cli:node/list':
             passed = passed and 'nodes in the graph that share an exact name' in stderr
-            if '--no-daemon' in argv:
-                passed = passed and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' in stderr
+        if '--no-daemon' in argv:
+            passed = passed and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' in stderr
         marker = 'MDDS_CLI_FUNCTIONAL CASE='+case+' RESULT=PASS'
         log = directory / (label+'.log')
         text = ('MDDS_CLI_ACTUAL_ARGV '+json.dumps(actual)+'\nMDDS_CLI_STDOUT_BEGIN\n'+stdout+
@@ -108,6 +110,9 @@ def main():
         expected=node_names('/ros_broker_'+run)
         command('cli:node/list','nodes_cached',['node','list'],expected)
         command('cli:node/list','nodes_direct',['node','list','--no-daemon','--spin-time','3'],expected)
+        peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
+        for case,label,argv,wanted in service_recipe('/ros_broker_'+run,peer_role):
+            command(case,label,argv,wanted)
         report['daemon_after_queries']=inspect_daemon(root)
         if report['daemon_after_queries']['pid']!=report['daemon']['pid'] or report['daemon_after_queries']['start']!=report['daemon']['start']:
             raise ValueError('daemon replaced during graph comparison')

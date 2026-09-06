@@ -35,6 +35,12 @@ class DaemonReceipt(unittest.TestCase):
         self.value['emergency_cleanup']={'terminated':True};self.reject()
     def test_daemon_remains(self):
         self.value['after']['daemons']=[{'pid':123}];self.reject()
+    def test_missing_hidden_services(self):
+        self.value['results']=[r for r in self.value['results'] if r['label']!='service_find_hidden'];self.reject()
+    def test_wrong_service_count(self):
+        next(r for r in self.value['results'] if r['label']=='service_info_cached')['expected']['Clients count']='0';self.reject()
+    def test_cached_substituted_for_direct_service_info(self):
+        next(r for r in self.value['results'] if r['label']=='service_info_direct')['execution']['argv'].remove('--no-daemon');self.reject()
 
 
 if __name__=='__main__':unittest.main()

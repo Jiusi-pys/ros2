@@ -26,6 +26,9 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='diagnostics':
+        from cli_doctor import recipe
+        return recipe(ns,peer,nonce)
     if mode=='process_test':
         from cli_process import recipe
         return recipe(ns,peer,mode='test')
@@ -61,6 +64,9 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case in ('cli:doctor','cli:wtf'):
+        from cli_doctor import oracle as doctor_oracle
+        return doctor_oracle(stdout,expected)
     if case in ('cli:topic/hz','cli:topic/bw','cli:topic/delay'):return True  # Independently checked against peer fixture records.
     if case=='cli:bag/burst':return True  # Exact peer proof and controlled player exit are mandatory.
     if case in ('cli:bag/convert','cli:bag/reindex'):return True  # Mandatory native and independent file checks follow.

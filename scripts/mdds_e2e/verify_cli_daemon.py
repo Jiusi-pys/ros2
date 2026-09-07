@@ -33,6 +33,9 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
+    if (root/'cli_batch').read_text().strip()=='diagnostics':
+        from verify_doctor import validate
+        validate(value,root,run,board)
     if (root/'cli_batch').read_text().strip() in ('process_run','process_launch','process_test') and value.get('process_start_nonce')!=nonce:raise ValueError('process start barrier missing')
     if (root/'cli_batch').read_text().strip()=='statistics':
         from verify_topic_statistics import validate
@@ -221,6 +224,9 @@ def main():
             verb=case['id'].split('/')[-1]
             names=[board+'.stats_'+verb+suffix for board in reports for suffix in ('_sent.json','_received.json','.go')]
             receipt['statistics_artifacts']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
+        if case['id'] in ('cli:doctor','cli:wtf'):
+            names=['doctor_manifest.json','doctor_environment.env','doctor_reference/index-v4.yaml','doctor_reference/jazzy/distribution.yaml']+[board+'.doctor_runtime.json' for board in reports]
+            receipt['diagnostic_inputs']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

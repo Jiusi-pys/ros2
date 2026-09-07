@@ -1,0 +1,17 @@
+{
+  "commit": "888f5d3a3f8a33fa8a7cf8deb86bdf8bccc3a1c1",
+  "files": [
+    {
+      "path": "index-v4.yaml",
+      "url": "https://raw.githubusercontent.com/ros/rosdistro/888f5d3a3f8a33fa8a7cf8deb86bdf8bccc3a1c1/index-v4.yaml",
+      "sha256": "d515c14da215282a0b6ed456e6f6267633bbc8f6cf6abe379c0f2a25aeb6453f",
+      "size": 4857
+    },
+    {
+      "path": "jazzy/distribution.yaml",
+      "url": "https://raw.githubusercontent.com/ros/rosdistro/888f5d3a3f8a33fa8a7cf8deb86bdf8bccc3a1c1/jazzy/distribution.yaml",
+      "sha256": "56a7b59a8e845e8ee50180194977780294111426a6251586c2622e9527e3222c",
+      "size": 394829
+    }
+  ]
+}

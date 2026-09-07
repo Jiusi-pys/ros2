@@ -26,6 +26,7 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='service_qos':return []
     if mode=='trace_probe':
         from trace_contract import recipe
         return recipe(ns.removeprefix('/ros_broker_'),nonce)
@@ -249,6 +250,12 @@ def main():
             if (root/'process.start').read_text().strip()!=nonce:raise ValueError('process start barrier differs')
             report['process_start_nonce']=nonce
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
+        if (root/'cli_batch').read_text().strip()=='service_qos':
+            from service_qos_contract import validate
+            path=root/'service_qos.json';deadline=time.monotonic()+20
+            while not path.exists() and time.monotonic()<deadline:time.sleep(.1)
+            report['service_qos']=json.loads(path.read_bytes())
+            validate(report['service_qos'],run,nonce,'A' if peer_role=='B' else 'B')
         if (root/'cli_batch').read_text().strip()=='trace_probe':
             from board_trace_probe import execute as trace_execute
             report['trace_probe']=trace_execute(root,run,'A' if peer_role=='B' else 'B',nonce)

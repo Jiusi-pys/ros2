@@ -259,6 +259,8 @@ def main():
             receipt['diagnostic_multicast_barriers']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
         if case['id'].startswith('cli:trace'):
             names=['trace_runtime.json']+[board+'.'+suffix for board in reports for suffix in ('trace_report.json','trace_probe.tar.gz','trace_received.json','trace_decoded/verification.json','trace_decoded/lifecycle.decoded.log','trace_decoded/interactive.decoded.log')]
+            from verify_trace import uses_owned_supervisor
+            names += [board+'.trace_supervisor.json' for board in reports if uses_owned_supervisor(root,board)]
             receipt['tracing_evidence']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
         if (root/'ros2cli_overlay.json').exists():
             names=['ros2cli_overlay.json','ros2cli_overlay.zip']+[board+'.ros2cli_overlay_ready.json' for board in reports]

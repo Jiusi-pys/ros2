@@ -5,9 +5,32 @@ import cli_acceptance as a
 from trace_contract import validate_report, validate_events, recipe, PHASES
 
 
+def uses_owned_supervisor(root, board):
+    return any(line.endswith('  owned_trace_namespace.py')
+               for line in (root / ('inputs_' + board + '.sha256')).read_text().splitlines())
+
+
 def validate(value, root, run, board, nonce):
     role = 'A' if board == a.TARGET['board_serials'][0] else 'B'
     report = value['trace_probe']
+    if uses_owned_supervisor(root, board):
+        path = root / (board + '.trace_supervisor.json')
+        if not path.is_file(): raise ValueError('trace namespace supervisor receipt missing')
+        supervisor = json.loads(path.read_bytes())
+        for key, expected in {'released': True, 'completed': True, 'timed_out': False, 'signal': None,
+                              'returncode': 0, 'cleanup_initial': [], 'cleanup_signaled': [], 'cleanup_remaining': [],
+                              'system_namespace': report['system_namespace']}.items():
+            if supervisor.get(key) != expected: raise ValueError('trace supervisor did not complete cleanly')
+        owner = supervisor.get('owner', {})
+        if owner.get('namespace') != report['namespace'] or owner.get('pid') != supervisor.get('child_pid') or not str(owner.get('start')).isdecimal():
+            raise ValueError('trace pinned namespace owner differs')
+        remote = '/data/local/tmp/ros2/.mdds-owned-runs/' + run
+        python = '/data/python312-rk3588a/usr/bin/python3.12'
+        actual = ['unshare', '-m', '--', python, '-I', '-B', remote + '/trace_mount_namespace.py',
+                  python, '-u', '-B', remote + '/board_trace_probe.py', 'worker', remote, run, role, nonce]
+        if supervisor.get('argv') != actual: raise ValueError('trace namespace launched a different workload')
+        if (root / (board + '.cli.log')).read_text().splitlines().count('TRACE_NAMESPACE_RESULT ' + json.dumps(supervisor)) != 1:
+            raise ValueError('trace namespace receipt lacks raw supervisor evidence')
     manifest_path = root / 'trace_runtime.json'
     manifest = json.loads(manifest_path.read_bytes())
     validate_report(report, run, nonce, role, a.digest(manifest_path.read_bytes()))

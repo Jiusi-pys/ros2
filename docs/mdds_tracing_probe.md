@@ -2,8 +2,10 @@
 
 Status at this feature commit: five tracing inventory cases have passed the
 formal CLI receipt gate on both boards. Overall case-receipt coverage is
-82/98. This is not a full graph, full CLI, or unified release claim: existing
-CLI recipe scope still requires audit. Gateway remains outside this goal.
+80/98 after withdrawing the incomplete `run` and `launch` coverage claims.
+This is not a full graph, full CLI, or unified release claim. Gateway remains
+outside this goal. The historical tracing batch added five valid case receipts;
+the later scope audit independently removed two earlier overbroad claims.
 
 Run from Git Bash in the ROS workspace:
 
@@ -91,12 +93,58 @@ the five case receipts only after these checks. The decoder itself retains
 
 ## Remaining release work
 
-The abnormal outer-worker timeout path currently kills the worker alone.
-Its descendant cleanup needs hardening and native fault injection before the
-final release; this is distinct from the verified normal cleanup above.
-The prior `cli:run` evidence needs comparison with the recipe's C++ **and**
-Python requirement, and `cli:launch` with its multiple-node requirement.
-Do not infer complete CLI requirement coverage from the 82 case receipts.
-The remaining 16 graph/transport cases and single-release provenance gate are
-also incomplete. Only `ros2:rcl_node_init` is selected here; these results do
-not prove that every available tracepoint is implemented.
+The `cli:run` receipt contains only a C++ talker although its recipe requires
+C++ **and** Python demos. The `cli:launch` receipt contains one launched node
+although its recipe requires multiple nodes. These were verified directly
+against both boards' stored actual argv and the launch definition; the old
+artifacts remain intact as narrower evidence, while the current coverage
+ledger excludes both cases until the missing tests are implemented.
+The remaining 16 graph/transport cases and single-release provenance gate
+are also incomplete. Only `ros2:rcl_node_init` is selected here; these results
+do not prove that every available tracepoint is implemented.
+
+## Namespace failure cleanup
+
+`owned_trace_namespace.py` supervises the private workload. The mount helper
+writes PID/start/namespace identity through an inherited pipe, then waits.
+The supervisor validates that identity, opens a namespace descriptor to keep
+the namespace identity alive, and only then releases the workload. Cleanup
+rechecks PID/start/namespace before signalling and rescans after termination
+to include late-forked descendants. It rejects the system and supervisor's
+mount namespaces. A successful worker with surviving descendants is a failed
+test, even when the supervisor subsequently cleans them up.
+
+Native RK3588A TDD evidence:
+
+- RED: four cases, three failures. Worker failure and timeout leaked a child;
+  successful worker exit with a leak was incorrectly accepted.
+- GREEN: six cases on **each** board, zero failures. Cases cover timeout,
+  failure, successful exit with leak, normal completion, supervisor SIGINT
+  and supervisor SIGTERM. All cases retain a separate system-namespace
+  sentinel and assert that it remains alive.
+- RED archive SHA-256:
+  `5e2f88ddabc6aaca611defb93ea61707ea9930409ae9e960a7e8add2d000d827`.
+- Final tested input archive SHA-256:
+  `85c2916d697e6da96e0c50116738ec7262ee805ae1e04ae0ba5f5151aab103df`.
+- RED log SHA-256:
+  `bb11544383063e3b2db4b7f9d6ff6a926aef935b0a190d1b12826ffca7c4e13e`.
+- Final A/B logs:
+  `b9fb3a0fb9169c081b6858c302664cee11ec396f8171e2f18fffa510ba7be2dc`,
+  `7cb0d0db6356e7a3c8d8c42f5fb706904fe333e08ccb225d20109e96dfcfe891`.
+
+Logs and archives live in the workspace-level
+`verification_evidence/goal1_20260906/trace_cleanup_*` files. RED teardown
+removed only fixture-recorded PID/start identities from their private
+namespace. Supervisor SIGKILL/power loss cannot execute in-process cleanup
+and is outside these six fault-injection claims.
+
+The repaired supervisor also passed the full normal two-board run
+`cli_trace_cleanup_20260907_01`: DSoftBus data/services/graph baseline, five
+tracing CLI cases, decoded CTF identities, and both normal supervisor receipts
+showing `completed: true`, return code 0, and no initial/residual cleanup
+members. Its CLI manifest SHA-256 is
+`45fb4b69ce12a9b9301c7b797ec98739fa047f36a0437125020b866d79ea37c1`.
+All 17 real-receipt adversaries pass, including missing supervisor receipt,
+nonempty cleanup and wrong launched workload. The frozen board input inventory
+determines whether the new supervisor receipt is mandatory; removing a source
+copy from a receipt-checking directory cannot disable that check.

@@ -208,14 +208,11 @@ def worker(root, run, role, nonce):
 
 
 def execute(root, run, role, nonce):
+    from owned_trace_namespace import run as run_namespace
     actual = ['unshare', '-m', '--', sys.executable, '-I', '-B', str(root / 'trace_mount_namespace.py'),
               sys.executable, '-u', '-B', str(root / 'board_trace_probe.py'), 'worker', str(root), run, role, nonce]
-    # Inherit the CLI process group so the outer owned-process supervisor can
-    # terminate every child if HDC execution is interrupted.
-    with subprocess.Popen(actual) as child:
-        try: child.wait(timeout=180)
-        except subprocess.TimeoutExpired: child.kill(); child.wait(); raise
-    if child.returncode != 0: raise RuntimeError('private tracing probe failed')
+    proof = run_namespace(actual, root / 'trace_supervisor.json', timeout=180)
+    print('TRACE_NAMESPACE_RESULT ' + json.dumps(proof), flush=True)
     return json.loads((root / 'trace_probe/report.json').read_text())
 
 

@@ -24,6 +24,18 @@ class TraceReceiptTest(unittest.TestCase):
     def reject(self):
         with self.assertRaises((ValueError, AssertionError)): self.check()
     def test_original(self): self.check()
+    def test_missing_supervisor_receipt(self):
+        p = self.root / (A + '.trace_supervisor.json')
+        if not p.exists(): self.skipTest('historical run before namespace supervisor')
+        p.unlink(); self.reject()
+    def test_supervisor_claims_cleanup(self):
+        p = self.root / (A + '.trace_supervisor.json')
+        if not p.exists(): self.skipTest('historical run before namespace supervisor')
+        v = json.loads(p.read_bytes()); v['cleanup_initial'] = [{'pid': 123}]; p.write_text(json.dumps(v)); self.reject()
+    def test_supervisor_wrong_workload(self):
+        p = self.root / (A + '.trace_supervisor.json')
+        if not p.exists(): self.skipTest('historical run before namespace supervisor')
+        v = json.loads(p.read_bytes()); v['argv'][-1] = 'wrong'; p.write_text(json.dumps(v)); self.reject()
     def test_runtime_changed(self): self.value['trace_probe']['runtime_after']['manifest_sha256'] = '0' * 64; self.reject()
     def test_global_namespace(self): self.value['trace_probe']['namespace'] = self.value['trace_probe']['system_namespace']; self.reject()
     def test_command_failed(self): self.value['trace_probe']['commands'][1]['returncode'] = 1; self.reject()

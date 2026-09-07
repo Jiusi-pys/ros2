@@ -26,7 +26,9 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
-    if mode=='trace_probe':return []  # Tracing remains unaccepted until CTF is independently decoded.
+    if mode=='trace_probe':
+        from trace_contract import recipe
+        return recipe(ns.removeprefix('/ros_broker_'),nonce)
     if mode=='multicast':
         from cli_multicast import recipe
         return recipe(ns,peer,nonce)
@@ -250,6 +252,7 @@ def main():
         if (root/'cli_batch').read_text().strip()=='trace_probe':
             from board_trace_probe import execute as trace_execute
             report['trace_probe']=trace_execute(root,run,'A' if peer_role=='B' else 'B',nonce)
+            report['results'].extend(report['trace_probe']['results'])
         if (root/'cli_batch').read_text().strip() in ('bags','bag_transform','bag_burst'):
             (root/'bags').mkdir()
             (root/'mcap_config.yaml').write_text('noChunking: true\n')
@@ -257,6 +260,7 @@ def main():
             import yaml
             (output/'parameter_load.yaml').write_text(yaml.safe_dump({'/ros_broker_'+run+'/alpha_'+peer_role:{'ros__parameters':loaded_values(nonce,peer_role)}}))
         recipes=batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce)
+        if (root/'cli_batch').read_text().strip()=='trace_probe':recipes=[]
         if (root/'cli_batch').read_text().strip()=='multicast':
             from cli_multicast import run_pair
             values=run_pair(output,run,board,peer_role,nonce);report['results'].extend(values)

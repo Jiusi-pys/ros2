@@ -1,14 +1,14 @@
 # MDDS tracing lifecycle probe
 
-Status at this feature commit: the two-board probe and independent CTF event
-checks pass. The five tracing inventory cases are **not yet accepted** by the
-formal CLI receipt gate. Overall coverage remains 77/98. This is not a full
-graph, full CLI, or unified release claim. Gateway remains outside this goal.
+Status at this feature commit: five tracing inventory cases have passed the
+formal CLI receipt gate on both boards. Overall case-receipt coverage is
+82/98. This is not a full graph, full CLI, or unified release claim: existing
+CLI recipe scope still requires audit. Gateway remains outside this goal.
 
 Run from Git Bash in the ROS workspace:
 
 ```bash
-MDDS_RUN_ID=cli_trace_probe_20260907_01 \
+MDDS_RUN_ID=cli_trace_formal_20260907_01 \
 MDDS_ROS_PROFILE_MODE=implicit MDDS_ROS_CLI_BATCH=trace_probe \
 bash scripts/run_mdds_broker_ros.sh
 ```
@@ -25,9 +25,13 @@ The probe executes the actual installed `ros2 trace start`, `pause`, `resume`,
 `stop` and interactive `ros2 trace` entry points. The interactive subprocess
 receives each newline only after its corresponding prompt is observed.
 Every active, paused, resumed, stopped and interactive actor creates a real
-rclpy node and calls the other board's AddTwoInts service with a run-specific
-request. Process PID/start, node identity, service response, loaded private
-MDDS/RMW paths and actual command return codes are retained.
+rclpy node, calls the other board's AddTwoInts service with a run-specific
+request, publishes its exact run/nonce/role/phase payload once and waits for
+the peer callback acknowledgement. Process PID/start, node identity, service
+response, loaded private MDDS/RMW paths and actual return codes are retained.
+The source fixture independently records all five ordered peer publications.
+The 94 tracing Python/native files are compared with a frozen host manifest
+before and after tracing. Actors also record their actual tracing mappings.
 
 The host fetches both the report and compressed trace archive with the
 existing HDC hash checks. `decode_trace_probe.py RUN_DIRECTORY BOARD_SERIAL`
@@ -60,11 +64,39 @@ including per-board archives, reports and `*.trace_decoded/verification.json`.
 The host run log is in the workspace-level
 `verification_evidence/goal1_20260906/trace_probe_01.host.log`.
 
-## Remaining acceptance work
+## Formal receipt run on 2026-09-07
 
-Bind every tracing command to the standard per-case terminal/log receipts,
-freeze tracing package/native runtime provenance, validate namespace cleanup
-and failure paths as part of the machine gate, and add receipt mutation tests
-before admitting the five tracing cases. The current decoder deliberately
-records `cli_acceptance_advanced: false`. Only `ros2:rcl_node_init` is selected
-here; this does not prove that every available tracepoint is implemented.
+Run `cli_trace_formal_20260907_01` completed normally through HDC, including
+the enclosing cross-board DSoftBus broker/graph baseline. Both boards executed
+all five real CLI operations, received all five peer publications, produced
+the expected CTF event identities, and reported no remaining private tracing
+processes after normal cleanup. The system namespace is explicitly excluded.
+
+- Formal manifest SHA-256:
+  `e9c2960d18f8f9942c54d10091a7cf6e5d62100ac36703f413d89a7a78d45c16`.
+- Frozen tracing runtime manifest (94 files):
+  `5c318d987876e2323fb018a6c16bdb1c17a56cca9dc1234d761cce9307e270c7`.
+- A trace archive:
+  `8eb8a98ee59daa397e3bfa538501c0f695b9ec538c40e73e645458e211414eb8`.
+- B trace archive:
+  `657c0fcb00fcc52f6e82d131ba5a3d26da8c9a03ce5eb1fb3317636c3309e031`.
+- Validation: 7 event tests, 13 structured report tests, 14 real-receipt
+  adversaries, 18 general CLI gate tests, and 11 broker receipt adversaries.
+
+`verify_trace.py` binds actual argv/PID/start/terminal markers, archived output,
+private namespace, runtime manifest, normal cleanup, independently recorded
+peer publications and decoded event identities. `verify_cli_daemon.py` adds
+the five case receipts only after these checks. The decoder itself retains
+`cli_acceptance_advanced: false`; decoding alone does not issue acceptance.
+
+## Remaining release work
+
+The abnormal outer-worker timeout path currently kills the worker alone.
+Its descendant cleanup needs hardening and native fault injection before the
+final release; this is distinct from the verified normal cleanup above.
+The prior `cli:run` evidence needs comparison with the recipe's C++ **and**
+Python requirement, and `cli:launch` with its multiple-node requirement.
+Do not infer complete CLI requirement coverage from the 82 case receipts.
+The remaining 16 graph/transport cases and single-release provenance gate are
+also incomplete. Only `ros2:rcl_node_init` is selected here; these results do
+not prove that every available tracepoint is implemented.

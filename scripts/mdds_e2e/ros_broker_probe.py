@@ -311,7 +311,10 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
-    if (root/'cli_batch').read_text().strip()=='hello':
+    if (root/'cli_batch').read_text().strip()=='trace_probe':
+        from board_trace_receiver import TraceReceiver
+        component_probe=TraceReceiver(root,a.run_id,a.nonce,a.self_serial,other,records[0]['node'])
+    elif (root/'cli_batch').read_text().strip()=='hello':
         from board_hello_probe import HelloProbe
         component_probe=HelloProbe(root,a.run_id,a.nonce,a.self_serial,other,records[1]['node'])
     elif (root/'cli_batch').read_text().strip() in ('process_run','process_launch','process_test'):

@@ -38,6 +38,9 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
+    if (root/'cli_batch').read_text().strip()=='trace_probe':
+        from verify_trace import validate
+        validate(value,root,run,board,nonce)
     if (root/'cli_batch').read_text().strip()=='multicast':
         from verify_multicast import validate
         validate(value,root,run,board,nonce)
@@ -110,6 +113,7 @@ def validate_report(value, root, run, board, nonce):
             server=json.loads((root/(peer_board+'.introspection.server.json')).read_text())
             if server!={**expected,'run_id':run,'nonce':nonce,'board':peer_board,'count':1}:raise ValueError('peer service callback differs')
             if (root/(peer_board+'.ros.log')).read_text().splitlines().count('CLI_INTROSPECTION_SERVER '+json.dumps(server))!=1:raise ValueError('peer service callback missing')
+        elif case.startswith('cli:trace'):pass  # Independently decoded events, peer publications and lifecycle checked above.
         elif case=='cli:bag/record':pass  # Native storage and exact byte-level samples checked above.
         elif case=='cli:security/generate_policy':
             from cli_policy import expected_policy,validate_policy
@@ -253,6 +257,9 @@ def main():
         if case['id'].startswith('cli:multicast/'):
             names=[board+'.multicast.'+stage for board in reports for stage in ('ready','send')]
             receipt['diagnostic_multicast_barriers']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
+        if case['id'].startswith('cli:trace'):
+            names=['trace_runtime.json']+[board+'.'+suffix for board in reports for suffix in ('trace_report.json','trace_probe.tar.gz','trace_received.json','trace_decoded/verification.json','trace_decoded/lifecycle.decoded.log','trace_decoded/interactive.decoded.log')]
+            receipt['tracing_evidence']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
         if (root/'ros2cli_overlay.json').exists():
             names=['ros2cli_overlay.json','ros2cli_overlay.zip']+[board+'.ros2cli_overlay_ready.json' for board in reports]
             receipt['cli_source_overlay']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]

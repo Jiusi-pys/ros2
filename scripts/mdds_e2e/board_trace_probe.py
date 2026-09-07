@@ -9,11 +9,17 @@ import sys
 import tarfile
 import time
 from board_graph_ownership import process_start, loaded_overlay
+from trace_runtime import verify as verify_runtime, mapped
+from trace_contract import recipe
+from board_trace_receiver import payload
+import cli_acceptance as acceptance
 
 
 def actor(root, run, role, phase, nonce):
     import rclpy
     from example_interfaces.srv import AddTwoInts
+    from std_msgs.msg import String
+    from rclpy.qos import QoSProfile, ReliabilityPolicy
     name = 'trace_' + phase + '_' + role
     rclpy.init(args=[])
     node = rclpy.create_node(name)
@@ -31,9 +37,26 @@ def actor(root, run, role, phase, nonce):
         rclpy.spin_until_future_complete(node, future, timeout_sec=10)
         if not future.done() or future.result().sum != request.a + request.b:
             raise RuntimeError('trace actor cross-board response differs')
+        qos = QoSProfile(depth=16, reliability=ReliabilityPolicy.RELIABLE)
+        text = payload(run, nonce, role, phase)
+        acks = []
+        def acknowledge(message):
+            if message.data != text or acks: raise ValueError('trace peer acknowledgement differs')
+            acks.append(message.data)
+        subscription = node.create_subscription(String, '/trace_' + run + '/' + role + '/ack', acknowledge, qos)
+        publisher = node.create_publisher(String, '/trace_' + run + '/' + role + '/out', qos)
+        deadline = time.monotonic() + 10
+        while publisher.get_subscription_count() != 1 or node.count_publishers('/trace_' + run + '/' + role + '/ack') != 1:
+            if time.monotonic() >= deadline: raise RuntimeError('trace peer endpoints not ready')
+            rclpy.spin_once(node, timeout_sec=.05)
+        message = String(); message.data = text; publisher.publish(message)
+        while not acks:
+            if time.monotonic() >= deadline: raise RuntimeError('trace peer publication not acknowledged')
+            rclpy.spin_once(node, timeout_sec=.05)
         value = {'node': name, 'pid': os.getpid(), 'start': process_start(os.getpid()),
                  'service': service, 'a': request.a, 'b': request.b, 'sum': future.result().sum,
-                 'mount_namespace': os.readlink('/proc/self/ns/mnt')}
+                 'mount_namespace': os.readlink('/proc/self/ns/mnt'), 'payload': text, 'peer_ack': True,
+                 'trace_mappings': mapped(os.getpid(), root)}
         print('TRACE_ACTOR ' + json.dumps(value), flush=True)
         return value
     finally:
@@ -51,8 +74,28 @@ def worker(root, run, role, nonce):
     Path(os.environ['LTTNG_HOME']).mkdir()
     prefix = Path(os.environ['ROS2_HOME'])
     report = {'run_id': run, 'nonce': nonce, 'role': role, 'namespace': namespace,
-              'commands': [], 'actors': {}, 'passed': False}
+              'system_namespace': os.readlink('/proc/1/ns/mnt'),
+              'runtime_before': verify_runtime(root), 'commands': [], 'actors': {}, 'passed': False}
     cli = [sys.executable, '-u', '-B', '-c', 'from ros2cli.cli import main; raise SystemExit(main())']
+
+    def save_command(value):
+        label = value['label']
+        case, receipt_label, args, expected = next(row for row in recipe(run, nonce) if row[1] == 'trace_' + label)
+        board = acceptance.TARGET['board_serials'][0 if role == 'A' else 1]
+        argv = ['ros2'] + args
+        stdout = (folder / (label + '.stdout')).read_text()
+        stderr = (folder / (label + '.stderr')).read_text()
+        raw = ('MDDS_CLI_ACTUAL_ARGV ' + json.dumps(value['argv']) + '\nMDDS_CLI_STDOUT_BEGIN\n' + stdout
+               + '\nMDDS_CLI_STDOUT_END\nMDDS_CLI_STDERR_BEGIN\n' + stderr + '\nMDDS_CLI_STDERR_END\n'
+               + acceptance.terminal_marker(run, case, value['returncode'], argv, board) + '\n')
+        if value['returncode'] == 0: raw += 'MDDS_CLI_FUNCTIONAL CASE=' + case + ' RESULT=PASS\n'
+        log = root / 'cli_daemon' / (receipt_label + '.log'); log.write_text(raw)
+        execution = {'argv': argv, 'actual_argv': value['argv'], 'child_pid': value['pid'], 'child_start': value['start'],
+                     'board_serial': board, 'returncode': value['returncode'], 'log': {'path': log.name, 'sha256': acceptance.digest(log.read_bytes())}}
+        report.setdefault('results', []).append({'case_id': case, 'label': receipt_label, 'expected': expected,
+                                                'passed': value['returncode'] == 0, 'execution': execution})
+        report['commands'].append(value)
+        print('TRACE_COMMAND ' + json.dumps(value), flush=True)
 
     def command(label, args):
         actual = cli + args
@@ -64,8 +107,7 @@ def worker(root, run, role, nonce):
                 except subprocess.TimeoutExpired:
                     child.kill(); child.wait(); raise
         value = {'label': label, 'argv': actual, 'pid': child.pid, 'start': start, 'returncode': child.returncode}
-        report['commands'].append(value)
-        print('TRACE_COMMAND ' + json.dumps(value), flush=True)
+        save_command(value)
         if child.returncode:
             raise RuntimeError('trace command failed: ' + label)
 
@@ -123,10 +165,10 @@ def worker(root, run, role, nonce):
                     finally:
                         if child.poll() is None: child.kill(); child.wait()
             value = {'label': 'interactive', 'argv': args, 'pid': child.pid, 'start': start, 'returncode': child.returncode}
-            report['commands'].append(value)
-            print('TRACE_COMMAND ' + json.dumps(value), flush=True)
+            save_command(value)
             if child.returncode != 0: raise RuntimeError('interactive trace failed')
             report['sessions'] = sessions
+            report['runtime_after'] = verify_runtime(root)
             report['passed'] = True
         finally:
             # Scan only this newly created namespace. PID/start identity is rechecked
@@ -139,7 +181,9 @@ def worker(root, run, role, nonce):
                         owned.append((int(proc.name), process_start(int(proc.name))))
                 except FileNotFoundError: pass
             for pid, start in owned:
-                if process_start(pid) == start: os.kill(pid, signal.SIGTERM)
+                if process_start(pid) == start:
+                    try: os.kill(pid, signal.SIGTERM)
+                    except ProcessLookupError: pass
             try: daemon.wait(timeout=3)
             except subprocess.TimeoutExpired: pass
             for pid, start in owned:
@@ -148,6 +192,14 @@ def worker(root, run, role, nonce):
                     except ProcessLookupError: pass
             daemon.wait(timeout=5)
             report['namespace_cleanup'] = [{'pid': p, 'start': s} for p, s in owned]
+            deadline = time.monotonic() + 5
+            remaining = owned
+            while remaining and time.monotonic() < deadline:
+                remaining = [(p, s) for p, s in remaining if process_start(p) == s and
+                             Path(f'/proc/{p}/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z']
+                if remaining: time.sleep(.05)
+            report['cleanup_remaining'] = [{'pid': p, 'start': s} for p, s in remaining]
+            if remaining: report['passed'] = False
             (folder / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     with tarfile.open(root / 'trace_probe.tar.gz', 'w:gz') as archive:
         archive.add(folder, arcname='trace_probe')

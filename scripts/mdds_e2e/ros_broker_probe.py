@@ -28,7 +28,7 @@ expected_type_hashes = json.loads((root / 'type_hashes.json').read_text())['hash
 assert a.role in ('A', 'B') and a.self_serial != a.peer_serial
 assert os.environ['MDDS_BROKER_ROOT'] == str(root / 'brokers')
 policy_mode = (root / 'policy_mode').read_text().strip()
-assert policy_mode in ('explicit', 'implicit') and 'MDDS_TRANSPORT' not in os.environ
+assert policy_mode in ('explicit', 'implicit','selector') and os.environ.get('MDDS_TRANSPORT')==('dsoftbus' if policy_mode=='selector' else None)
 assert os.environ.get('MDDS_DEPLOYMENT_PROFILE') == ('ohos_dsoftbus' if policy_mode == 'explicit' else None)
 records = []
 dups = []
@@ -123,6 +123,9 @@ def snapshot(stage):
     value = provenance(str(root / 'lib/libmdds.so'), str(root / 'python'), str(root / 'rclpy_package.json'), a.manifest_sha)
     value.update(stage=stage, role=a.role)
     value['transport_policy'] = {'mode': policy_mode, 'profile': os.environ.get('MDDS_DEPLOYMENT_PROFILE'), 'selector': os.environ.get('MDDS_TRANSPORT'), 'discovery_range': os.environ.get('ROS_AUTOMATIC_DISCOVERY_RANGE')}
+    if (root/'no_udp.enabled').exists():
+        from socket_audit import observe
+        value['socket_audit']=observe(root/'lib/libmdds_test_socket_audit.so')
     print('ROS_BROKER_PROVENANCE ' + json.dumps(value, sort_keys=True), flush=True)
 
 def endpoint_hashes():
@@ -526,3 +529,4 @@ finally:
     for c in contexts:
         rclpy.try_shutdown(context=c)
         c.destroy()
+    if (root/'no_udp.enabled').exists():print('NO_UDP_ROS_STOPPED '+json.dumps({'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'pid':os.getpid()}),flush=True)

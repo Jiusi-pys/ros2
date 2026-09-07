@@ -28,4 +28,5 @@ class AuditProbe(unittest.TestCase):
     def test_process_start_required(self):self.result_change(A,'zero',lambda v:v.update(start='1'));self.reject()
     def test_missing_control_required(self):self.log_change(B,'missing','SOCKET_AUDIT_MISSING ','REMOVED ');self.reject()
     def test_native_terminal_required(self):self.log_change(A,'zero','GRAPH_PROCESS_EXIT ','REMOVED ');self.reject()
+    def test_runtime_preload_must_be_preserved(self):self.result_change(A,'positive',lambda v:v.update(numpy_control=[0,0],preload=[]));self.reject()
 if __name__=='__main__':unittest.main(argv=[sys.argv[0]])

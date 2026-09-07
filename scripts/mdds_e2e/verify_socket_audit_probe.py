@@ -6,8 +6,9 @@ import sys
 from cli_acceptance import TARGET
 from socket_audit_lifetime import validate_lifetime
 
-def check(root):
+def check(root,*,require_runtime=False):
     run=root.name;nonce=(root/'nonce').read_text().strip();sha=hashlib.sha256((root/'libmdds_test_socket_audit.so').read_bytes()).hexdigest()
+    runtime_controls=[]
     for board in TARGET['board_serials']:
         for mode in ('missing','positive','zero'):
             stem=board+'.'+mode;status=json.loads((root/(stem+'.status.json')).read_bytes());lines=(root/(stem+'.log')).read_text().splitlines()
@@ -22,6 +23,10 @@ def check(root):
                 if lines.count(expected)!=1 or any(v.startswith('MDDS_SOCKET_AUDIT_') for v in lines):raise ValueError('missing audit control was not exercised')
                 continue
             value=json.loads((root/(stem+'.result.json')).read_bytes())
+            runtime='numpy_control' in value or 'preload' in value
+            if require_runtime and not runtime:raise ValueError('audit lacks native Python/NumPy runtime control')
+            if runtime and (value.get('numpy_control')!=[0,0] or value.get('preload')!=['/data/python312-rk3588a/usr/lib/libpython3.12.so.1.0',f'/data/local/tmp/ros2/.mdds-owned-runs/{run}/libmdds_test_socket_audit.so']):raise ValueError('audit displaced the original Python runtime preload')
+            runtime_controls.append(runtime)
             if lines.count('SOCKET_AUDIT_PROBE '+json.dumps(value))!=1:raise ValueError('native audit probe missing')
             identity={'run_id':run,'nonce':nonce,'board':board,'mode':mode,'pid':status['child_pid'],'start':status['child_start'],'library':f'/data/local/tmp/ros2/.mdds-owned-runs/{run}/libmdds_test_socket_audit.so','library_sha256':sha,'argv':command[0]['argv']}
             if any(value.get(k)!=v for k,v in identity.items()):raise ValueError('wrong probe process or library')
@@ -32,7 +37,9 @@ def check(root):
             if mode=='positive':before.update(total_calls=1,ipv4_datagram_calls=1,datagram_successes=1)
             if value['after']!=expected or value['before']!=before or (value['failed_result'],value['failed_errno'])!=(-1,97):raise ValueError('audit counters or errno differ')
             validate_lifetime(lines,status['child_pid'],value['argv'][0],expected)
-    return {'run_id':run,'passed':True,'boards':TARGET['board_serials'],'library_sha256':sha,'scope':'real libc socket audit positive/zero/missing controls; not the no-UDP-fallback case'}
+    result={'run_id':run,'passed':True,'boards':TARGET['board_serials'],'library_sha256':sha,'scope':'real libc socket audit positive/zero/missing controls; not the no-UDP-fallback case'}
+    if all(runtime_controls):result['runtime_preload_verified']=True
+    return result
 
 if __name__=='__main__':
     root=Path(sys.argv[1]);value=check(root);(root/'report.json').write_text(json.dumps(value,indent=2)+'\n');print('SOCKET_AUDIT_CONTROLS_PASS '+json.dumps(value))

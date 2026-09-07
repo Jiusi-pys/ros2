@@ -19,7 +19,7 @@ for board in "$BOARD_A" "$BOARD_B"; do
     printf '%s  %s\n' "$hash" "$name" >> "$LOGDIR/inputs_$board.sha256"
   done
   for mode in missing positive zero; do
-    mdds_owned_launch "$board" ". '$DEVICE_DIR/env.sh' || exit 70; unset LD_PRELOAD MDDS_TOKEN_EXEC; export PYTHONDONTWRITEBYTECODE=1;" \
+    mdds_owned_launch "$board" ". '$DEVICE_DIR/env.sh' || exit 70; unset MDDS_TOKEN_EXEC; export PYTHONDONTWRITEBYTECODE=1;" \
       "python3.12 '$MDDS_OWNED_REMOTE_DIR/board_socket_audit_probe.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' '$nonce' '$board' '$mode'" "$mode.log"
     graph_wait_status "$board" "$mode"
     for suffix in log status.json child.pid; do graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$mode.$suffix" "$LOGDIR/$board.$mode.$suffix"; done

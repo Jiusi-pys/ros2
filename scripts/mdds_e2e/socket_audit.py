@@ -14,3 +14,10 @@ def snapshot():
     result={name:getattr(value,name) for name in FIELDS}
     if result['abi']!=1 or result['pid']!=os.getpid() or result['instrumentation_errors']:raise ValueError('wrong native socket audit ABI or failure')
     return result
+
+def observe(library):
+    from pathlib import Path
+    import hashlib
+    paths={v.split(None,5)[5] for v in Path('/proc/self/maps').read_text().splitlines() if len(v.split(None,5))==6 and 'libmdds_test_socket_audit.so' in v}
+    if paths!={str(library)}:raise ValueError('audit mapping escaped frozen run')
+    return {'mapped':{str(library):hashlib.sha256(Path(library).read_bytes()).hexdigest()},'snapshot':snapshot()}

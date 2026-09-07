@@ -54,3 +54,13 @@ loss, disconnected graph/services, retained local communication, audited zero
 datagrams and restored cross-board ROS traffic. Inventory remains 97/98 across
 historical builds; advanced API work, unified release and pre-push review remain
 open. Gateway is outside the active goal.
+
+The combined no-fallback fixture exposed an integration failure: replacing
+the board's existing CPython `LD_PRELOAD` broke NumPy symbol resolution. The
+runner now preserves that preload and appends the audit DSO. New physical
+controls `audit_runtime_20260908_01` add a real NumPy `[0, 0]` allocation and
+verify the exact preload list on both boards; all socket counts remain exact.
+Eleven control receipt tests passed. The no-fallback verifier requires these
+runtime controls; old controls remain valid only for their original scope.
+See `mdds_no_udp_fallback.md` for the subsequently completed combined case
+and the remaining full-delivery requirements.

@@ -142,7 +142,11 @@ if role in ('inspect','inspect_domain'):
                 if cols[9] in inodes:
                     udp.append(line)
     report = {'run_id': run, 'pid': pid, 'start': process_start(pid), 'binary_sha256': hashlib.sha256((proc / 'exe').read_bytes()).hexdigest(), 'sdk': {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in sdk}, 'owned_udp': udp}
-    if role=='domain_daemon' or (root/'sdk_trace.enabled').exists():report['argv']=(proc/'cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
+    if role=='domain_daemon' or (root/'sdk_trace.enabled').exists() or (root/'no_udp.enabled').exists():report['argv']=(proc/'cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
+    if (root/'no_udp.enabled').exists():
+        audit_paths={v.split(None,5)[5] for v in (proc/'maps').read_text().splitlines() if len(v.split(None,5))==6 and 'libmdds_test_socket_audit.so' in v}
+        if audit_paths!={str(root/'lib/libmdds_test_socket_audit.so')}:raise ValueError('wrong native audit mapping')
+        report['socket_audit']={p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in audit_paths}
     with (root / (role+'.inspect.json')).open('x') as f:
         json.dump(report, f)
     print('INSPECT_READY')
@@ -171,7 +175,15 @@ elif role == 'cli':
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')
+if (root/'no_udp.enabled').exists():
+    if (root/'no_udp.enabled').read_text().strip()!=nonce or role not in ('ros','daemon'):raise ValueError('wrong no-UDP ownership/role')
+    if role=='ros':os.environ['LD_PRELOAD']=' '.join(filter(None,[os.environ.get('LD_PRELOAD'),str(root/'lib/libmdds_test_socket_audit.so')]))
 returncode=supervise_command(command, root / (role + '.status.json'), run, role, '/ros_broker_' + run, root / (role + '.child.pid'))
+if (root/'no_udp.enabled').exists():
+    from cli_acceptance import terminal_marker
+    actual=command if role=='ros' else json.loads((root/'daemon.inspect.json').read_bytes())['argv']
+    print('MDDS_GRAPH_ACTUAL_ARGV '+json.dumps(actual),flush=True)
+    print(terminal_marker(run,'transport:no_udp_fallback',returncode,actual,self),flush=True)
 if role=='ros' and (root/'graph_case').is_file():
     from cli_acceptance import terminal_marker
     case=(root/'graph_case').read_text().strip()

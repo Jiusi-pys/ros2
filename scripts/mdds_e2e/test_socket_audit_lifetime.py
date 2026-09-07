@@ -20,4 +20,9 @@ class Lifetime(unittest.TestCase):
     def test_wrong_exec_target(self):self.lines[2]+='_other';self.reject()
     def test_failed_exec(self):self.lines.insert(3,'MDDS_SOCKET_AUDIT_EXEC_FAILED pid=42');self.reject()
     def test_missing_final(self):self.lines.pop();self.reject()
+    def test_native_single_image(self):validate_lifetime([self.lines[0],self.lines[-1]],self.pid,self.program,self.final,bootstrap_exec=False)
+    def test_native_unclosed_reset(self):
+        with self.assertRaises(ValueError):validate_lifetime(self.lines,self.pid,self.program,self.final,bootstrap_exec=False)
+    def test_native_missing_final(self):
+        with self.assertRaises(ValueError):validate_lifetime([self.lines[0]],self.pid,self.program,self.final,bootstrap_exec=False)
 if __name__=='__main__':unittest.main()

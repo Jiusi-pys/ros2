@@ -17,6 +17,7 @@
 import re
 import shlex
 import sys
+from pathlib import Path
 
 ROS2_HOME = "/data/local/tmp/ros2"
 TIMEOUT = "180"
@@ -124,17 +125,68 @@ def emit_verdict(name: str, status: str) -> None:
     print("printf '%s\\n' \"$line\"")
 
 
-text = open(ctest_file, encoding="utf-8").read()
+def ctest_documents(entry):
+    """Read only bounded, regular CTest files below this package build root."""
+    root = Path(entry).absolute().parent.resolve()
+    visited = set()
+    documents = []
+    total = 0
+
+    def visit(path, depth):
+        nonlocal total
+        if depth > 32 or len(visited) >= 256:
+            raise ValueError("CTest directory traversal exceeds its bound")
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root) or path.is_symlink() or not path.is_file():
+            raise ValueError(f"missing, linked or outside-package CTest file: {path}")
+        if resolved in visited:
+            raise ValueError(f"repeated CTest directory: {path}")
+        visited.add(resolved)
+        size = path.stat().st_size
+        total += size
+        if size > 4 * 1024 * 1024 or total > 16 * 1024 * 1024:
+            raise ValueError("CTest input exceeds its byte bound")
+        text = path.read_text(encoding="utf-8")
+        documents.append(text)
+        for match in re.finditer(r"(?m)^\s*subdirs\((.*?)\)\s*$", text):
+            directories = shlex.split(match.group(1))
+            if not directories:
+                raise ValueError("empty CTest subdirectory declaration")
+            for directory in directories:
+                components = directory.replace("\\", "/").split("/")
+                if any(not re.fullmatch(r"[A-Za-z0-9_.-]+", c) for c in components):
+                    raise ValueError(f"unsafe CTest subdirectory: {directory}")
+                child = path.parent
+                for component in components:
+                    child /= component
+                    if child.is_symlink() or not child.resolve().is_relative_to(root):
+                        raise ValueError(f"linked or outside-package CTest subdirectory: {child}")
+                visit(child / "CTestTestfile.cmake", depth + 1)
+
+    visit(Path(entry).absolute(), 0)
+    return documents
+
+
+def find_tests(text):
+    tests = list(re.finditer(r"add_test\(\[=\[(.+?)\]=\]\s*(.+?)\)\r?\n", text, re.S))
+    tests += [m for m in re.finditer(
+        r"add_test\(NAME\s+(\S+)\s+COMMAND\s+(.+?)\)\r?\n", text, re.S)
+        if not any(t.group(1) == m.group(1) for t in tests)]
+    tests += [m for m in re.finditer(
+        r'add_test\((?:\[=\[)?"?([\w.-]+)"?(?:\]=\])?\s+(.+?)\)\r?\n', text, re.S)
+        if not any(t.group(1) == m.group(1) for t in tests)]
+    return tests
+
+
+try:
+    tests = [test for document in ctest_documents(ctest_file) for test in find_tests(document)]
+    names = [test.group(1) for test in tests]
+    if len(names) != len(set(names)):
+        raise ValueError("duplicate CTest names cannot have unique board artifacts")
+except (OSError, UnicodeError, ValueError) as exc:
+    print(f"ERROR: {exc}", file=sys.stderr)
+    sys.exit(2)
 seen = set()
-tests = list(re.finditer(r"add_test\(\[=\[(.+?)\]=\]\s*(.+?)\)\r?\n", text, re.S))
-# plain add_test(NAME x COMMAND exe) form (no run_test.py wrapper)
-tests += [m for m in re.finditer(
-    r"add_test\(NAME\s+(\S+)\s+COMMAND\s+(.+?)\)\r?\n", text, re.S)
-    if not any(t.group(1) == m.group(1) for t in tests)]
-# plain add_test(name ...) form (quoted name, no NAME/COMMAND keywords)
-tests += [m for m in re.finditer(
-    r'add_test\((?:\[=\[)?"?([\w.-]+)"?(?:\]=\])?\s+(.+?)\)\r?\n', text, re.S)
-    if not any(t.group(1) == m.group(1) for t in tests)]
 
 if only_test is not None and not any(m.group(1) == only_test for m in tests):
     print(

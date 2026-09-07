@@ -6,6 +6,57 @@ from pathlib import Path
 SCRIPT = Path(__file__).with_name("_parse_ctest_env.py")
 
 
+def test_recursive_subdirectory_selector_and_complete_plan(tmp_path):
+    nested = tmp_path / "test" / "rclcpp"
+    nested.mkdir(parents=True)
+    (tmp_path / "test" / "CTestTestfile.cmake").write_text('subdirs("rclcpp")\n')
+    (nested / "CTestTestfile.cmake").write_text(wrapped_test(
+        "test_signal_chaining", "C:/workspace/ros2/build_ohos/demo_pkg/test/rclcpp/test_signal_chaining"))
+    root = wrapped_test("top", "C:/workspace/ros2/build_ohos/demo_pkg/top") + 'subdirs("test")\n'
+    selected = run_parser(tmp_path, root, "--only-test", "test_signal_chaining")
+    assert selected.returncode == 0, selected.stderr
+    assert selected.stdout.count("# BOARDTEST_EXPECTED ") == 1
+    assert "./test/rclcpp/test_signal_chaining" in selected.stdout
+    full = run_parser(tmp_path, root)
+    assert full.returncode == 0, full.stderr
+    assert full.stdout.count("# BOARDTEST_EXPECTED ") == 2
+
+
+def test_missing_nested_ctest_file_is_not_silently_ignored(tmp_path):
+    result = run_parser(tmp_path, 'subdirs("missing")\n')
+    assert result.returncode == 2
+    assert not result.stdout
+
+
+def test_nested_ctest_cannot_escape_package(tmp_path):
+    result = run_parser(tmp_path, 'subdirs("../outside")\n')
+    assert result.returncode == 2
+    assert not result.stdout
+
+
+def test_nested_relative_parent_stays_within_package(tmp_path):
+    nested = tmp_path / "test" / "rclcpp"
+    nested.mkdir(parents=True)
+    (tmp_path / "test" / "CTestTestfile.cmake").write_text('subdirs("rclcpp")\n')
+    (nested / "CTestTestfile.cmake").write_text('subdirs("../../gtest")\n')
+    (tmp_path / "gtest").mkdir()
+    (tmp_path / "gtest" / "CTestTestfile.cmake").write_text(wrapped_test(
+        "helper", "C:/workspace/ros2/build_ohos/demo_pkg/gtest/helper"))
+    result = run_parser(tmp_path, 'subdirs("test")\n', "--only-test", "helper")
+    assert result.returncode == 0, result.stderr
+    assert "# BOARDTEST_EXPECTED helper" in result.stdout
+
+
+def test_duplicate_nested_test_names_are_rejected(tmp_path):
+    nested = tmp_path / "child"
+    nested.mkdir()
+    case = wrapped_test("duplicate", "C:/workspace/ros2/build_ohos/demo_pkg/exe")
+    (nested / "CTestTestfile.cmake").write_text(case)
+    result = run_parser(tmp_path, case + 'subdirs("child")\n')
+    assert result.returncode == 2
+    assert not result.stdout
+
+
 def run_parser(tmp_path: Path, ctest_text: str, *extra: str):
     ctest_file = tmp_path / "CTestTestfile.cmake"
     ctest_file.write_text(ctest_text, encoding="utf-8", newline="\n")

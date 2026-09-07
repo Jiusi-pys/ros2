@@ -45,3 +45,51 @@ This adds the `cli:run` case, bringing the aggregate CLI/graph/transport ledger
 to 68/98. Launch/test, remaining commands, the full graph matrix, historical
 stress observations and final single-release acceptance remain unfinished.
 No gateway acceptance or push is implied.
+
+## ros2 launch
+
+Mode `MDDS_ROS_CLI_BATCH=process_launch` runs the staged
+`process_talker.launch.py` through the actual CLI, with declared launch
+arguments for node name, namespace and output topic. It uses the same
+cross-board data/start/stop/withdrawal contract as run. The supervisor signals
+only the launch CLI, so the launcher must forward SIGINT and collect its child.
+Acceptance requires the launch start, forwarding and native exit events,
+the exact native child and library hashes, and a native exit code of zero.
+A launcher exit code of zero alone is insufficient.
+
+This test exposed two real OHOS shutdown failures before acceptance:
+
+- `cli_process_launch_20260907_01`: native talker SIGSEGV (-11) inside FFRT,
+  called through rclcpp's incorrect single-argument signal-handler ABI.
+- `cli_launch_signal_fix_20260907`: after correcting the ABI, FFRT's old
+  dispatcher requeued SIGINT and the native process exited -2.
+
+The rclcpp fix selects sigaction on OHOS, distinguishes restored dispositions
+from chainable callbacks, and retains the system FFRT dispatcher for uninstall
+without calling it again for a ROS-handled SIGINT/SIGTERM. Ordinary user
+handlers and their saved masks remain covered by native regression tests.
+See the rclcpp package's `OHOS_SIGNAL_HANDLING.md` for native RED/GREEN evidence.
+
+`cli_launch_ffrt_fix_20260907` passed on both boards with exact private rclcpp
+SHA-256 `cde55d5d806eb738c98fbb5c0d34d7e7cb8b5b7b4c41b7141d8507972fa1cd55`.
+Both launcher and native child exited zero, peer data matched native publishing
+logs, and graph withdrawal completed. Partial manifest SHA-256:
+`0f5d03fbcf2276eec116f5be4fde97e82ccbecba60ac3c93876d31ac6de15559`.
+The matching run regression `cli_run_ffrt_fix_20260907` also passed; manifest
+`da912da1e6f7e966067aff26509a35b4401081f0d19ef5bf59806d1f00ea88c2`.
+
+Five launch/startup tests and five native-exit parser tests pass, including a
+pre-exec child window, PID reuse, missing/conflicting exit events and native
+crash despite a successful launcher exit. Fifteen actual launch-receipt
+adversaries and eleven run-receipt adversaries pass. The verifier rejects
+changed launch definitions, missing forwarding, malformed stdout boundaries,
+wrong processes, missing peer messages and surviving graph entities.
+
+```bash
+python scripts/mdds_e2e/check_cli_launch_receipt.py \
+  ohos_test_logs/ros_broker/cli_launch_ffrt_fix_20260907
+```
+
+Launch adds one unique case, taking the aggregate ledger to 69/98. The tests
+use private libraries; board-wide deployment and the full graph/single-release
+gates remain unfinished.

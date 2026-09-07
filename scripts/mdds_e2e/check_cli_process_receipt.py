@@ -16,12 +16,14 @@ class ProcessReceipt(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='process_receipt_');self.root=Path(self.temp.name)/SOURCE.name
         shutil.copytree(SOURCE,self.root,ignore=shutil.ignore_patterns('*.tar','*.py','mdds_broker_daemon','mdds_token_exec'))
+        definition=SOURCE/'process_talker.launch.py'
+        if definition.is_file():shutil.copy2(definition,self.root/definition.name)
         self.value=json.loads((self.root/(A+'.cli.results.json')).read_text());self.nonce=(self.root/'nonce').read_text().strip()
     def tearDown(self):self.temp.cleanup()
     def check(self):validate_report(self.value,self.root,SOURCE.name,A,self.nonce)
     def reject(self):
         with self.assertRaises((ValueError,AssertionError)):self.check()
-    def execution(self):return next(r for r in self.value['results'] if r['case_id']=='cli:run')['execution']
+    def execution(self):return next(r for r in self.value['results'] if r['case_id'] in ('cli:run','cli:launch'))['execution']
     def alter_peer_proof(self,stage,change):
         p=self.root/(B+'.process_'+stage+'.json');value=json.loads(p.read_text());old=json.dumps(value);change(value);p.write_text(json.dumps(value)+'\n')
         log=self.root/(B+'.ros.log');raw=log.read_text();self.assertIn('CLI_PROCESS_PROOF '+old,raw);log.write_text(raw.replace('CLI_PROCESS_PROOF '+old,'CLI_PROCESS_PROOF '+json.dumps(value)))

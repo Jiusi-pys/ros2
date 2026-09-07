@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -12,10 +13,14 @@ from bag_record import inspect_process
 from board_graph_ownership import process_start
 
 
-def recipe(ns,peer):
+def recipe(ns,peer,mode='run'):
+    if mode not in ('run','launch'):raise ValueError('unknown process CLI mode')
     role='A' if peer=='B' else 'B';run=ns.removeprefix('/ros_broker_');space='/process_'+run
-    expected={'role':role,'namespace':space,'node':'run_'+role,'topic':space+'/'+role+'/out'}
+    expected={'role':role,'namespace':space,'node':mode+'_'+role,'topic':space+'/'+role+'/out'}
     expected['native_args']=['--ros-args','-r','__node:='+expected['node'],'-r','__ns:='+space,'-r','chatter:='+expected['topic']]
+    if mode=='launch':
+        path='/data/local/tmp/ros2/.mdds-owned-runs/'+run+'/process_talker.launch.py';expected['launch_file']=path
+        return [('cli:launch','process_launch',['launch','--noninteractive',path,'node_name:='+expected['node'],'node_namespace:='+space,'output_topic:='+expected['topic']],expected)]
     return [('cli:run','process_run',['run','demo_nodes_cpp','talker']+expected['native_args'],expected)]
 
 
@@ -26,13 +31,34 @@ def native_matches(record,root,cli_pid,expected):
             and record.get('executable')==exe and record.get('argv')==[exe]+expected['native_args'])
 
 
+def native_exit_code(raw,pid):
+    outcomes=[0 for _ in re.finditer(r'(?m)^\[INFO\] \[talker-1\]: process has finished cleanly \[pid '+str(pid)+r'\]$',raw)]
+    outcomes += [int(m.group(1)) for m in re.finditer(r'(?m)^\[ERROR\] \[talker-1\]: process has died \[pid '+str(pid)+r', exit code (-?[0-9]+), cmd ',raw)]
+    return outcomes[0] if len(outcomes)==1 else None
+
+
+def wait_executable(pid,expected,start):
+    deadline=time.monotonic()+5
+    while time.monotonic()<deadline:
+        if process_start(pid)!=start:raise ValueError('process changed before exec')
+        if os.readlink(Path('/proc')/str(pid)/'exe')==expected:return
+        time.sleep(.05)
+    raise ValueError('expected child executable never became ready')
+
+
+def native_libraries(root):
+    result={str(root/'lib'/name) for name in ('libmdds.so','librmw_mdds.so','libtalker_library.so')}
+    if (root/'lib/librclcpp.so').is_file():result.add(str(root/'lib/librclcpp.so'))
+    return result
+
+
 def inspect(root,run,pid):
     proc=Path('/proc')/str(pid);start=process_start(pid);exe=str(root/'execution_prefix/lib/demo_nodes_cpp/talker')
-    if os.readlink(proc/'exe')!=exe:raise ValueError('unexpected ros2 run child executable')
-    library=str(root/'lib/libtalker_library.so');deadline=time.monotonic()+5
-    wanted={str(root/'lib/libmdds.so'),str(root/'lib/librmw_mdds.so'),library}
+    wait_executable(pid,exe,start)
+    deadline=time.monotonic()+5
+    wanted=native_libraries(root);names={Path(p).name for p in wanted}
     while time.monotonic()<deadline:
-        paths={line.split(None,5)[5] for line in (proc/'maps').read_text().splitlines() if len(line.split(None,5))==6 and Path(line.split(None,5)[5]).name in ('libmdds.so','librmw_mdds.so','libtalker_library.so')}
+        paths={line.split(None,5)[5] for line in (proc/'maps').read_text().splitlines() if len(line.split(None,5))==6 and Path(line.split(None,5)[5]).name in names}
         if paths-wanted:raise ValueError('ros2 run loaded a foreign library')
         if paths==wanted:break
         time.sleep(.05)
@@ -40,7 +66,7 @@ def inspect(root,run,pid):
     native=inspect_process(pid,root,None);stat=(proc/'stat').read_text().rsplit(')',1)[1].split()
     if process_start(pid)!=start:raise ValueError('ros2 run child reused during inspection')
     native.update(run_id=run,parent_pid=int(stat[1]),process_group=int(stat[2]),executable=exe,argv=(proc/'cmdline').read_bytes().rstrip(b'\0').decode().split('\0'))
-    native['hashes'].update({p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in (exe,library)})
+    native['hashes'].update({p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in wanted|{exe}})
     return native
 
 
@@ -70,7 +96,10 @@ def execute(argv,output,run,board,case,label,expected,nonce):
                 if native and (root/'process.stop').exists():
                     if (root/'process.stop').read_text().strip()!=nonce or process_start(child.pid)!=start or process_start(native['pid'])!=native['start']:raise ValueError('ros2 run stop identity differs')
                     shutdown={'signal':2,'cli_pid':child.pid,'cli_start':start,'native_pid':native['pid'],'native_start':native['start'],'barrier_nonce':nonce}
-                    os.killpg(child.pid,signal.SIGINT);break
+                    if case=='cli:launch':
+                        shutdown['recipient']='cli';child.send_signal(signal.SIGINT)
+                    else:os.killpg(child.pid,signal.SIGINT)
+                    break
                 time.sleep(.1)
             try:child.wait(timeout=8)
             except subprocess.TimeoutExpired:emergency=True;os.killpg(child.pid,signal.SIGKILL);child.wait()
@@ -87,6 +116,9 @@ def execute(argv,output,run,board,case,label,expected,nonce):
         if process_start(native['pid'])==native['start']:os.kill(native['pid'],signal.SIGKILL)
     stdout=outpath.read_text();stderr=errpath.read_text();passed=child.returncode==0 and native is not None and shutdown is not None and gone and not emergency
     detail={'native':native,'shutdown':shutdown,'native_gone':gone,'emergency_cleanup':emergency}
+    if case=='cli:launch':
+        detail['native_returncode']=native_exit_code(stdout+'\n'+stderr,native['pid']) if native else None
+        passed=passed and detail['native_returncode']==0
     execution={'argv':argv,'actual_argv':actual,'board_serial':board,'child_pid':child.pid,'child_start':start,'returncode':child.returncode,'process':detail}
     raw='MDDS_CLI_ACTUAL_ARGV '+json.dumps(actual)+'\nMDDS_CLI_STDOUT_BEGIN\n'+stdout+'\nMDDS_CLI_STDOUT_END\nMDDS_CLI_STDERR_BEGIN\n'+stderr+'\nMDDS_CLI_STDERR_END\nMDDS_CLI_PROCESS '+json.dumps(detail)+'\n'+a.terminal_marker(run,case,child.returncode,argv,board)+'\n'
     if passed:raw+='MDDS_CLI_FUNCTIONAL CASE='+case+' RESULT=PASS\n'

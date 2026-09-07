@@ -84,6 +84,6 @@ each; eight incompatible pairs and the expired pair receive none. Eight contract
 tests, 24 receipt adversaries and 18 generic tests passed. Exact native hashes
 and the final manifest are recorded in [Nanosecond QoS](mdds_qos_nanoseconds.md).
 
-Coverage remains 93/98. Complete liveliness expiry/assertion/recovery behavior,
+Coverage remains 94/98. Complete liveliness expiry/assertion/recovery behavior,
 remaining graph/failure/isolation and advanced APIs, and a unified release
 remain open. Gateway is out of scope.

@@ -59,6 +59,6 @@ harness and evidence; the existing native MDDS/RMW implementation passed it.
 - Abrupt-exit receipt SHA-256:
   `c7e45e649981df0aa7e04ea6925e0f04a240b203839c26fb938e0276d7f2f9e7`.
 
-Aggregate coverage is 93/98 across frozen runs. Isolation,
+Aggregate coverage is 94/98 across frozen runs. Isolation,
 transport negatives, remaining advanced functionality and a unified release
 remain open. Gateway stays outside the current goal.

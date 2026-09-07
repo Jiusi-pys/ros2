@@ -155,6 +155,6 @@ native case-specific terminal markers are required before issuing acceptance.
 - Reconnect receipt: `9b6119249143ddcc4c13be8780f3c24467e02b141457584dc882fd5ec5a6a664`.
 - Full cycle report: `cf6cf597f5a7a5f8f8fa21695b41cdbd9cfa80e87fce6e784e3f71d3e2898bb5`.
 
-Coverage is 93/98 across frozen runs. Domain/discovery isolation, dedicated
+Coverage is 94/98 across frozen runs. Domain isolation, dedicated
 transport negatives, advanced API/liveliness work and a unified release remain
 open. Gateway stays outside the current goal.

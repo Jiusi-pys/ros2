@@ -21,6 +21,10 @@ def emit(root,manifest,reports,run,nonce):
         from verify_abrupt_graph import validate as checker
         key='abrupt_graph';prefix='ABRUPT_GRAPH_RESULT '
         suffixes=('abrupt_graph.json','abrupt_before.json','abrupt_after.json','abrupt_after.ready','abrupt_armed.json','peer_armed.json','victim.ready.json','victim.status.json','victim.log','victim_kill.go','hidden_source.json','hidden_source.go','hidden_cli.go','hidden_source.stop','hidden_source.done','hidden_cli.ready','hidden_cli.done')
+    elif case_name=='graph:discovery_off' and mode=='graph_off':
+        from verify_discovery_off import validate as checker
+        key='discovery_off';prefix='DISCOVERY_OFF_RESULT '
+        suffixes=('discovery_off.json','discovery_off.sent','discovery_off.observe','hidden_source.go','hidden_cli.go','hidden_cli.ready','hidden_cli.done','hidden_source.stop','hidden_source.done')
     elif case_name=='graph:reconnect' and mode=='none':
         from verify_peer_restart import validate_complete as checker
         key='peer_restart';prefix='PEER_GRAPH_FINAL '

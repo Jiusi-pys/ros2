@@ -38,6 +38,9 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
+    if (root/'cli_batch').read_text().strip()=='multicast':
+        from verify_multicast import validate
+        validate(value,root,run,board,nonce)
     if (root/'cli_batch').read_text().strip()=='hello':
         from verify_hello import validate
         validate(value,root,run,board,nonce)
@@ -247,6 +250,9 @@ def main():
         if case['id']=='cli:security/generate_policy':
             names=[board+'.policy_'+mode+'.xml' for board in reports for mode in ('cached','direct')]
             receipt['policy_artifacts']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
+        if case['id'].startswith('cli:multicast/'):
+            names=[board+'.multicast.'+stage for board in reports for stage in ('ready','send')]
+            receipt['diagnostic_multicast_barriers']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
         if (root/'ros2cli_overlay.json').exists():
             names=['ros2cli_overlay.json','ros2cli_overlay.zip']+[board+'.ros2cli_overlay_ready.json' for board in reports]
             receipt['cli_source_overlay']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]

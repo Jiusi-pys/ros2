@@ -31,6 +31,9 @@ if role in ('hello_start_doctor','hello_stop_doctor','hello_start_wtf','hello_st
     _,operation,command=role.split('_')
     with (root/('hello_'+command+'.'+operation)).open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
+if role=='multicast_send':
+    with (root/'multicast.send').open('x') as f:f.write(nonce+'\n')
+    raise SystemExit(0)
 if role in ('process_start','process_stop'):
     name='process.start' if role=='process_start' else 'process.stop'
     with (root/name).open('x') as f:f.write(nonce+'\n')
@@ -87,7 +90,7 @@ elif role == 'container':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [str(root/'component_prefix/lib/rclcpp_components/component_container'),'--ros-args','-r','__node:=container_'+label,'-r','__ns:=/components_'+run]
 elif role == 'cli':
-    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy') else 'cli_graph_basic.py'
+    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast') else 'cli_graph_basic.py'
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')

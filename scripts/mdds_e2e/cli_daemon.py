@@ -26,6 +26,9 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='multicast':
+        from cli_multicast import recipe
+        return recipe(ns,peer,nonce)
     if mode=='policy':
         from cli_policy import recipe
         return recipe(ns,peer,nonce)
@@ -70,6 +73,10 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case=='cli:multicast/send':return stdout.strip()=='Sending one UDP multicast datagram...'
+    if case=='cli:multicast/receive':
+        from cli_multicast import received_packet
+        return received_packet(stdout,expected['peer_ip']) is not None
     if case=='cli:security/generate_policy':return True  # Exact policy artifact verification is mandatory.
     if case in ('cli:doctor/hello','cli:wtf/hello'):
         from cli_hello import summary
@@ -245,7 +252,13 @@ def main():
         if (root/'cli_batch').read_text().strip()=='parameter_write':
             import yaml
             (output/'parameter_load.yaml').write_text(yaml.safe_dump({'/ros_broker_'+run+'/alpha_'+peer_role:{'ros__parameters':loaded_values(nonce,peer_role)}}))
-        for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce):
+        recipes=batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce)
+        if (root/'cli_batch').read_text().strip()=='multicast':
+            from cli_multicast import run_pair
+            values=run_pair(output,run,board,peer_role,nonce);report['results'].extend(values)
+            if len(values)!=2 or not all(v['passed'] for v in values):raise RuntimeError('multicast pair failed')
+            recipes=[]
+        for case,label,argv,wanted in recipes:
             command(case,label,argv,wanted)
             if case in ('cli:doctor/hello','cli:wtf/hello'):
                 marker=root/(label+'_gone.json');deadline=time.monotonic()+12

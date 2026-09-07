@@ -317,7 +317,7 @@ try:
     elif (root/'cli_batch').read_text().strip()=='standalone':
         from board_standalone_probe import StandaloneProbe
         component_probe=StandaloneProbe(root,a.run_id,a.nonce,a.self_serial,other,records[1]['node'])
-    elif (root/'cli_batch').read_text().strip() in ('bags','bag_transform'):
+    elif (root/'cli_batch').read_text().strip() in ('bags','bag_transform','bag_burst'):
         from board_bag_probe import BagProbe
         component_probe=BagProbe(root,a.run_id,a.nonce,a.self_serial,a.peer_serial,a.role,records[0]['node'])
     if (root/'cli_batch').read_text().strip() == 'lifecycle':

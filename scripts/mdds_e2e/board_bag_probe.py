@@ -7,11 +7,12 @@ from bag_contract import FORMATS,topic,payloads
 class BagProbe:
     def __init__(self,root,run,nonce,board,peer_board,role,node):
         from std_msgs.msg import String
-        from rclpy.qos import QoSProfile,ReliabilityPolicy
+        from rclpy.qos import QoSProfile,ReliabilityPolicy,DurabilityPolicy
         self.root,self.run,self.nonce,self.board,self.peer_board,self.role,self.node=root,run,nonce,board,peer_board,role,node
         self.peer='B' if role=='A' else 'A';self.publishers={};self.subs=[];self.sent={s:0 for s in FORMATS};self.next_send={s:0 for s in FORMATS}
         self.received={s:{k:[] for k in ('main','noise')} for s in FORMATS};self.playback={s:[] for s in FORMATS};self.String=String
         self.last_matches={}
+        self.bursts={s:[] for s in FORMATS}
         qos=QoSProfile(depth=32,reliability=ReliabilityPolicy.RELIABLE)
         for storage in FORMATS:
             for kind in ('main','noise'):
@@ -26,6 +27,13 @@ class BagProbe:
                 values=self.playback[storage];assert len(values)<5 and message.data==expected[len(values)];values.append(message.data)
                 if len(values)==5:self.save('played',storage,received=values)
             self.subs.append(node.create_subscription(String,topic(run,self.peer,storage,'play'),replay,qos))
+            if (root/'cli_batch').read_text().strip()=='bag_burst':
+                burst_qos=QoSProfile(depth=32,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
+                expected=payloads(run,nonce,board,storage,'main')[:3]
+                def receive_burst(message,storage=storage,expected=expected):
+                    values=self.bursts[storage];assert len(values)<3 and message.data==expected[len(values)];values.append(message.data)
+                    if len(values)==3:self.save('burst',storage,received=values)
+                self.subs.append(node.create_subscription(String,topic(run,self.peer,storage,'burst'),receive_burst,burst_qos))
     def save(self,stage,storage,**data):
         value={'run_id':self.run,'nonce':self.nonce,'board':self.board,'storage':storage,'stage':stage,**data}
         (self.root/('bag_'+storage+'_'+stage+'.json')).write_text(json.dumps(value)+'\n')

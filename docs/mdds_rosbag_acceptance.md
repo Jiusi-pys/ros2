@@ -92,3 +92,34 @@ This adds convert and reindex, bringing the deduplicated acceptance ledger to
 63/98. Burst, the remaining CLI/graph cases and final single-release acceptance
 remain unfinished. This recovered functional evidence does not turn the
 initial interrupted orchestration into a successful harness execution.
+
+## Exact paused-player burst
+
+Mode `MDDS_ROS_CLI_BATCH=bag_burst` records and replays both formats, then
+invokes the actual paused CLI player with `--num-messages 3`. An explicit
+reliable transient-local QoS override retains the three samples if discovery
+finishes after the burst. The peer fixture subscribes with the matching QoS
+and rejects a fourth, missing, reordered or wrong-nonce sample. After both
+boards have exact receiver proofs, the host writes nonce-bound stop markers;
+the command supervisor sends SIGTERM only to its owned player and requires
+exit zero without emergency cleanup. The player remains alive until this
+two-board barrier; its native library paths, hashes and owned UDP sockets are
+inspected before stopping.
+
+Run `cli_bag_burst_20260907_01` passed with the ordinary harness exit zero.
+All four burst executions reported exactly three messages and delivered the
+matching ordered callbacks. Five burst-proof unit tests and 15 adversarial
+receipt tests passed. The new rehashed-log adversary initially exposed that
+the checker accepted a player-reported count of four alongside three peer
+callbacks; the checker now requires exactly one native count of three and
+the explicit DSoftBus selection log. Partial manifest SHA-256:
+`eba2ccce310db6b4fe903089fc264a6bc896053ea3ee973c01a94d73551ed6cd`.
+
+```bash
+python scripts/mdds_e2e/check_bag_burst_receipt.py \
+  ohos_test_logs/ros_broker/cli_bag_burst_20260907_01
+```
+
+All seven installed `ros2 bag` verbs now have functional receipts within their
+documented test scopes. The aggregate CLI/graph/transport ledger is 64/98;
+the remaining 34 cases and final single-release gate are still incomplete.

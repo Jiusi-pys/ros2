@@ -37,12 +37,15 @@ def validate_report(value, root, run, board, nonce):
     if (root/'cli_batch').read_text().strip()=='components':
         from verify_components import validate
         validate(value,root,run,board,nonce)
-    if (root/'cli_batch').read_text().strip() in ('bags','bag_transform'):
+    if (root/'cli_batch').read_text().strip() in ('bags','bag_transform','bag_burst'):
         from verify_bags import validate
         validate(value,root,run,board,nonce)
         if (root/'cli_batch').read_text().strip()=='bag_transform':
             from verify_bag_transform import validate
             validate(value,root,run,board)
+        if (root/'cli_batch').read_text().strip()=='bag_burst':
+            from verify_bag_burst import validate
+            validate(value,root,run,board,nonce)
     daemon=value['daemon']
     for record in (daemon,value['daemon_after_queries']):
         if not owned(record,remote) or record['owned_udp'] or record['listeners']!=[{'table':'tcp','local':f'0100007F:{11511+175:04X}'}]:
@@ -185,6 +188,9 @@ def main():
             receipt['component_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in suffixes]
         if case['id'].startswith('cli:bag/'):
             receipt['bag_artifacts']=[{'path':board+'.'+item['path'].replace('/','_'),'sha256':item['sha256']} for board,value in reports.items() for item in value['bag_files']]
+            if case['id']=='cli:bag/burst':
+                names=[board+'.'+name for board in reports for storage in ('sqlite3','mcap') for name in ('bag_'+storage+'_burst.json','bag_'+storage+'.burst_stop','bag_burst_'+storage+'.yaml')]
+                receipt['burst_artifacts']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
             if case['id'] in ('cli:bag/convert','cli:bag/reindex'):
                 artifacts=[]
                 for board,value in reports.items():

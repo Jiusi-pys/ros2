@@ -26,6 +26,9 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='bag_burst':
+        from bag_burst import recipe
+        return recipe(ns,peer,nonce)
     if mode=='bag_transform':
         from bag_transform import recipe
         return recipe(ns,peer,nonce)
@@ -46,6 +49,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case=='cli:bag/burst':return True  # Exact peer proof and controlled player exit are mandatory.
     if case in ('cli:bag/convert','cli:bag/reindex'):return True  # Mandatory native and independent file checks follow.
     if case.startswith('cli:bag/'):return bag_oracle(case,stdout,expected)
     if case.startswith('cli:component/'):return component_oracle(stdout,expected)
@@ -147,6 +151,9 @@ def main():
         if case=='cli:service/echo':value=execute_echo(['ros2']+args,output,run,board,case,label,expected,nonce)
         elif case=='cli:component/standalone':value=execute_standalone(['ros2']+args,output,run,board,case,label,expected,nonce)
         elif case=='cli:bag/record':value=execute_record(['ros2']+args,output,run,board,case,label,expected,nonce)
+        elif case=='cli:bag/burst':
+            from bag_burst import execute as execute_burst
+            value=execute_burst(['ros2']+args,output,run,board,case,label,expected,nonce)
         else:value=execute(['ros2']+args,output,run,board,case,label,expected)
         if preparation is not None:
             value['transform_preparation']=preparation
@@ -178,7 +185,7 @@ def main():
             if (root/'standalone.start').read_text().strip()!=nonce:raise ValueError('standalone start barrier mismatch')
             report['standalone_start_nonce']=nonce
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
-        if (root/'cli_batch').read_text().strip() in ('bags','bag_transform'):
+        if (root/'cli_batch').read_text().strip() in ('bags','bag_transform','bag_burst'):
             (root/'bags').mkdir()
             (root/'mcap_config.yaml').write_text('noChunking: true\n')
         if (root/'cli_batch').read_text().strip()=='parameter_write':
@@ -205,7 +212,7 @@ def main():
                     if stage=='loaded':
                         from component_process import inspect
                         report['container']=inspect(root,run)
-        if (root/'cli_batch').read_text().strip() in ('bags','bag_transform'):report['bag_files']=freeze_bag_files(root)
+        if (root/'cli_batch').read_text().strip() in ('bags','bag_transform','bag_burst'):report['bag_files']=freeze_bag_files(root)
         report['daemon_after_queries']=inspect_daemon(root)
         if report['daemon_after_queries']['pid']!=report['daemon']['pid'] or report['daemon_after_queries']['start']!=report['daemon']['start']:
             raise ValueError('daemon replaced during graph comparison')

@@ -321,7 +321,10 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
-    if (root/'cli_batch').read_text().strip()=='graph_off':
+    if (root/'cli_batch').read_text().strip()=='graph_domain':
+        from board_domain_isolation import DomainIsolationProbe
+        component_probe=DomainIsolationProbe(root,a.run_id,a.nonce,a.role,records[0]['node'])
+    elif (root/'cli_batch').read_text().strip()=='graph_off':
         from board_discovery_off import DiscoveryOffProbe
         component_probe=DiscoveryOffProbe(root,a.run_id,a.nonce,a.role,records[0]['node'])
     elif (root/'cli_batch').read_text().strip()=='graph_abrupt':

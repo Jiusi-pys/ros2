@@ -28,6 +28,9 @@ def validate_native_link(raw):
 
 
 def validate_report(value, root, run, board, nonce):
+    if (root/'cli_batch').read_text().strip()=='graph_domain':
+        from verify_domain_isolation import validate
+        validate(value,root,run,board,nonce)
     if (root/'cli_batch').read_text().strip()=='graph_off':
         from verify_discovery_off import validate
         validate(value,root,run,board,nonce)

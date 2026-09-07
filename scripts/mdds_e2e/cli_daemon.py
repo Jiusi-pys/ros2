@@ -26,7 +26,7 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
-    if mode in ('graph_hidden','graph_duplicate','graph_churn','graph_abrupt','graph_off'):return []
+    if mode in ('graph_hidden','graph_duplicate','graph_churn','graph_abrupt','graph_off','graph_domain'):return []
     if mode=='endpoint_qos':return []
     if mode=='graph_late':return []
     if mode in ('graph_waiters','graph_remote'):return []
@@ -257,6 +257,11 @@ def main():
             if (root/'process.start').read_text().strip()!=nonce:raise ValueError('process start barrier differs')
             report['process_start_nonce']=nonce
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
+        if (root/'cli_batch').read_text().strip()=='graph_domain':
+            from cli_late_graph import wait_marker
+            (root/'hidden_cli.ready').write_text(nonce+'\n')
+            wait_marker(root,'hidden_source.done',nonce,90)
+            report['domain_isolation']=json.loads((root/'domain_isolation.json').read_bytes())
         if (root/'cli_batch').read_text().strip()=='graph_off':
             from cli_late_graph import wait_marker
             (root/'hidden_cli.ready').write_text(nonce+'\n')

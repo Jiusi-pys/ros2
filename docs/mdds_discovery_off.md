@@ -40,6 +40,6 @@ were normal. Package source/RED/GREEN details are in
 - Manifest: `4635ce3125e2a648c19e6f0b8bd95b9b629834b36b7de7f1a7be886f26c501c4`.
 - Receipt: `7300f2945ff6722fb0ad3c6311f734249e40b03f1c70ea9487ad1f69ef573092`.
 
-Coverage is 94/98 across frozen runs. Domain isolation, dedicated transport
+Coverage is 95/98 across frozen runs. Dedicated transport
 cases, advanced APIs/liveliness and a unified release remain open. Gateway is
 outside the current goal.

@@ -47,6 +47,9 @@ if role in ('cycle_pause','cycle_resume'):
     if (root/name).exists():raise ValueError('remote-cycle command already exists')
     (root/(name+'.pending')).replace(root/name)
     raise SystemExit(0)
+if role=='domain_observe':
+    with (root/'domain_isolation.observe').open('x') as f:f.write(nonce+'\n')
+    raise SystemExit(0)
 if role=='off_observe':
     with (root/'discovery_off.observe').open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
@@ -105,10 +108,10 @@ if role in ('advance', 'finish', 'withdraw','standalone_stop','standalone_start'
     with (root / name).open('x') as f:
         f.write(nonce + '\n')
     raise SystemExit(0)
-if role == 'inspect':
-    role = 'daemon'
+if role in ('inspect','inspect_domain'):
+    role = 'domain_daemon' if role=='inspect_domain' else 'daemon'
     record = (root / (role + '.child.pid')).read_text().strip()
-    m = re.fullmatch('MDDS_OWNED_PROCESS RUN_ID=' + re.escape(run) + ' TAG=daemon_child PID=(\\d+) START=(\\d+)', record)
+    m = re.fullmatch('MDDS_OWNED_PROCESS RUN_ID=' + re.escape(run) + ' TAG=' + re.escape(role) + '_child PID=(\\d+) START=(\\d+)', record)
     if not m or process_start(int(m[1])) != m[2]:
         raise ValueError('wrong owned daemon identity')
     pid = int(m[1])
@@ -139,7 +142,8 @@ if role == 'inspect':
                 if cols[9] in inodes:
                     udp.append(line)
     report = {'run_id': run, 'pid': pid, 'start': process_start(pid), 'binary_sha256': hashlib.sha256((proc / 'exe').read_bytes()).hexdigest(), 'sdk': {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in sdk}, 'owned_udp': udp}
-    with (root / 'daemon.inspect.json').open('x') as f:
+    if role=='domain_daemon':report['argv']=(proc/'cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
+    with (root / (role+'.inspect.json')).open('x') as f:
         json.dump(report, f)
     print('INSPECT_READY')
     raise SystemExit(0)
@@ -148,6 +152,8 @@ if role == 'daemon':
         if (root/'reconnect.enabled').read_text().strip()!=nonce:raise ValueError('remote-cycle identity differs')
         os.environ.update(MDDS_RECONNECT_CONTROL_ROOT=str(root),MDDS_RECONNECT_RUN=run,MDDS_RECONNECT_NONCE=nonce)
     command = [sys.executable, str(root / 'mdds_broker_service.py'), '--root', str(root / 'brokers'), '--domain', '175', '--daemon', str(root / 'mdds_broker_daemon'), '--token-exec', str(root / 'mdds_token_exec')]
+elif role == 'domain_daemon':
+    command = [sys.executable,str(root/'mdds_broker_service.py'),'--root',str(root/'brokers'),'--domain','176','--daemon',str(root/'mdds_broker_daemon'),'--token-exec',str(root/'mdds_token_exec')]
 elif role == 'peer_worker':
     label='A' if self=='3e01ff55454d202020104033bf453b00' else 'B'
     command=[sys.executable,str(root/'peer_restart_worker.py'),str(root),run,label,nonce]
@@ -158,7 +164,7 @@ elif role == 'container':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [str(root/'component_prefix/lib/rclcpp_components/component_container'),'--ros-args','-r','__node:=container_'+label,'-r','__ns:=/components_'+run]
 elif role == 'cli':
-    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters','graph_remote','graph_late','endpoint_qos','daemon_abort','graph_off','graph_abrupt','graph_churn','graph_duplicate','graph_hidden') else 'cli_graph_basic.py'
+    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters','graph_remote','graph_late','endpoint_qos','daemon_abort','graph_domain','graph_off','graph_abrupt','graph_churn','graph_duplicate','graph_hidden') else 'cli_graph_basic.py'
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')
@@ -166,7 +172,7 @@ returncode=supervise_command(command, root / (role + '.status.json'), run, role,
 if role=='ros' and (root/'graph_case').is_file():
     from cli_acceptance import terminal_marker
     case=(root/'graph_case').read_text().strip()
-    if case not in ('graph:service_client_ownership','graph:endpoint_metadata','graph:duplicate_node_names','graph:churn','graph:abrupt_exit','graph:reconnect','graph:discovery_off'):raise ValueError('unsupported graph case')
+    if case not in ('graph:service_client_ownership','graph:endpoint_metadata','graph:duplicate_node_names','graph:churn','graph:abrupt_exit','graph:reconnect','graph:discovery_off','graph:domain_isolation'):raise ValueError('unsupported graph case')
     print('MDDS_GRAPH_ACTUAL_ARGV '+json.dumps(command),flush=True)
     print(terminal_marker(run,case,returncode,command,self),flush=True)
 raise SystemExit(returncode)

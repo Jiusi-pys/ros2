@@ -55,6 +55,6 @@ test harness and evidence gate.
 - Churn receipt SHA-256:
   `587c77f7d656843cf2593d5445c7e148962fcd128a8a1728c490fc9b7c709d89`.
 
-Aggregate coverage is 94/98 across frozen runs. Reconnection,
+Aggregate coverage is 95/98 across frozen runs. Reconnection,
 isolation, transport negatives, advanced functionality and a unified release
 remain open. Gateway is outside the current goal.

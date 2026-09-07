@@ -2,7 +2,8 @@
 
 Status at this feature commit: five tracing inventory cases have passed the
 formal CLI receipt gate on both boards. Overall case-receipt coverage is
-80/98 after withdrawing the incomplete `run` and `launch` coverage claims.
+81/98 after completing both C++ and Python `run` coverage; the incomplete
+multi-node `launch` claim remains withdrawn.
 This is not a full graph, full CLI, or unified release claim. Gateway remains
 outside this goal. The historical tracing batch added five valid case receipts;
 the later scope audit independently removed two earlier overbroad claims.
@@ -93,12 +94,14 @@ the five case receipts only after these checks. The decoder itself retains
 
 ## Remaining release work
 
-The `cli:run` receipt contains only a C++ talker although its recipe requires
-C++ **and** Python demos. The `cli:launch` receipt contains one launched node
+The original `cli:run` receipt contained only a C++ talker. That gap is now
+resolved by `cli_run_languages_20260907_03`, which verifies both languages on
+both boards; see [process CLI acceptance](mdds_process_cli_acceptance.md).
+The `cli:launch` receipt contains one launched node
 although its recipe requires multiple nodes. These were verified directly
 against both boards' stored actual argv and the launch definition; the old
 artifacts remain intact as narrower evidence, while the current coverage
-ledger excludes both cases until the missing tests are implemented.
+ledger still excludes `cli:launch` until its missing tests are implemented.
 The remaining 16 graph/transport cases and single-release provenance gate
 are also incomplete. Only `ros2:rcl_node_init` is selected here; these results
 do not prove that every available tracepoint is implemented.

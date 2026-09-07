@@ -1,6 +1,58 @@
 # CLI-created native ROS processes
 
-## ros2 run
+## Complete C++ and Python ros2 run coverage
+
+Current status: `cli:run` is verified on both RK3588A boards by
+`cli_run_languages_20260907_03`. Coverage is 81/98 after restoring this case;
+multi-node `cli:launch`, the remaining graph/transport matrix and final unified
+release remain incomplete. Gateway is outside the current goal.
+
+Design: execute the installed C++ talker, prove peer reception and retirement,
+then execute the installed Python talker with a distinct node/topic and stop
+barrier. Keep actual `ros2 run` invocations, private executable/package
+provenance, exact child PID/start/parent/group, DSoftBus selection and absence
+of owned UDP sockets. Each peer receipt identifies `run` or `run_python` so
+retirement evidence cannot be reused between languages. The generic CLI gate
+requires both demo packages on each required board; the old C++-only receipt
+is now explicitly rejected rather than relabelled as complete.
+
+Tests were written before these implementation changes:
+
+- `test_cli_run_languages.py`: the original three language/identity/gate
+  tests failed RED; an additional retirement-identity test then exposed the
+  ambiguous evidence format. All four pass with complete identities.
+- `test_finalize_ohos_install.py`: the real board lacked `/usr/bin/env`.
+  Two header/upgrade tests failed before the installer fix; all three pass.
+  The production finalizer now uses `/bin/env`; see
+  [Python launcher evidence](ohos_python_launchers.md).
+- `check_cli_process_receipt.py`: all 20 actual-receipt tests pass, including
+  missing Python invocation, wrong interpreter/launcher/rclpy DSO, stale
+  Python barrier, changed package, missing peer samples and wrong retirement
+  kind. The six original child identity tests and 18 generic CLI gate tests
+  also pass, as do the 11 enclosing broker receipt adversaries.
+
+Both boards received C++ samples `Hello World: 1` through `3`, then Python
+samples `Hello World: 0` through `2`. Both CLI processes and their children
+completed normally per board. The enclosing actual DSoftBus broker pub/sub,
+service and graph-retirement baseline also passed.
+
+- CLI manifest SHA-256:
+  `02df7caf15524e891f1b003614a59c971c9afeca3f303d44ffb06106ec69778c`.
+- Python package manifest (26 frozen package/metadata files):
+  `f8cb90f139e0072a66d455ffedd229ff0cb926dd01115519f27f97b4f5823f36`.
+- Generated Python executable SHA-256:
+  `64f7af753a0c6a09be75d175ef3a69ea851aeb924de76e1208e0dc53c7fd8a22`.
+
+Failed runs are retained: `_01` failed on the nonexistent shebang interpreter;
+`_02` ran both demos but correctly failed the unique retirement-log check.
+Neither is counted as complete acceptance. Their evidence was not modified
+to match the later implementation.
+
+## Earlier C++-only run evidence
+
+The following section records the earlier subset. Its full-case coverage claim
+was withdrawn during the scope audit and is superseded by the two-language run
+above; the narrower runtime observations remain valid.
 
 ```bash
 MDDS_RUN_ID=<fresh_id> MDDS_ROS_PROFILE_MODE=implicit MDDS_ROS_CLI_BATCH=process_run \

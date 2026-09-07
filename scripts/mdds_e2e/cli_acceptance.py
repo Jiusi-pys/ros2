@@ -319,6 +319,12 @@ def validate_receipt(case, reference, manifest, root):
         logs.append(log)
     if not matched_command:
         raise ValueError('the declared CLI command was not executed; a probe is not a substitute')
+    if case['id'] == 'cli:run':
+        for board in case['execution_boards']:
+            demos = {tuple(e['argv'][2:4]) for e in executions
+                     if e['board_serial'] == board and e['argv'][:2] == ['ros2', 'run']}
+            if not {('demo_nodes_cpp', 'talker'), ('demo_nodes_py', 'talker')} <= demos:
+                raise ValueError('ros2 run requires actual C++ and Python demo executions on each required board')
     if not set(case['execution_boards']) <= execution_boards:
         raise ValueError('functional evidence is missing execution logs from a required board')
     assertions = receipt.get('assertions')

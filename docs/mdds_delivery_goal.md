@@ -10,7 +10,9 @@ older progress entries below remain historical records.
 Complete `rmw_mdds` and MDDS on both KaihongOS RK3588A boards. ROS 2 middleware
 traffic must use actual DSoftBus Socket/Bytes with no UDP fallback. Require
 working local multi-process and cross-board discovery/data, every installed
-ROS 2 CLI command's real operation, and complete graph semantics. Missing,
+ROS 2 CLI command's real operation, and complete graph and other advanced ROS 2
+functionality. The latest user revision reiterates that gateway compatibility
+must not constrain this RK3588A-only core acceptance stage. Missing,
 skipped, substituted or failing cases keep this gate closed. Diagnostic
 commands that explicitly exercise UDP do not substitute for middleware proof.
 
@@ -36,6 +38,10 @@ evidence for the tested versions, platforms, and configurations.
 
 ## Feature workflow
 
+- Before implementation, state the design and provide the test program. Keep
+  the observed failing tests and acceptance scope; do not weaken a test to
+  bypass an implementation difficulty. This was explicitly reinforced in the
+  user's 2026-09-07 objective revision.
 - Write a regression/contract test and preserve its observed RED result.
 - Implement the smallest complete behavior, run the regression to GREEN, then
   related integration, negative-input, lifetime, and concurrency checks.

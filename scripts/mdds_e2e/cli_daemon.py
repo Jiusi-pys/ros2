@@ -273,9 +273,10 @@ def main():
                 while time.monotonic()<deadline and not marker.exists():time.sleep(.05)
                 if json.loads(marker.read_text())['nonce']!=nonce:raise ValueError('hello graph withdrawal differs')
             if case in ('cli:run','cli:launch','cli:test'):
+                gone_path=root/(wanted.get('artifact_prefix','process')+'_gone.json')
                 deadline=time.monotonic()+12
-                while time.monotonic()<deadline and not (root/'process_gone.json').exists():time.sleep(.1)
-                proof=json.loads((root/'process_gone.json').read_text())
+                while time.monotonic()<deadline and not gone_path.exists():time.sleep(.1)
+                proof=json.loads(gone_path.read_text())
                 if proof['run_id']!=run or proof['nonce']!=nonce:raise ValueError('process withdrawal identity differs')
             if case=='cli:bag/play':
                 marker=root/('bag_'+wanted['storage']+'_played.json');deadline=time.monotonic()+12

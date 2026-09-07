@@ -33,3 +33,8 @@ Real-board evidence from 2026-09-07:
 The full multi-language run regression is maintained by the process CLI
 acceptance harness. This launcher fix does not imply a completed unified
 deployment or a complete ROS 2/graph release.
+
+Follow-up: `cli_run_languages_20260907_03` passed the complete two-language
+CLI gate and all 20 process receipt adversaries after retirement identity was
+added. Its manifest SHA-256 is
+`02df7caf15524e891f1b003614a59c971c9afeca3f303d44ffb06106ec69778c`.

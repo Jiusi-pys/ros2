@@ -25,14 +25,22 @@ def recipe(ns,peer,mode='run'):
     if mode=='launch':
         path='/data/local/tmp/ros2/.mdds-owned-runs/'+run+'/process_talker.launch.py';expected['launch_file']=path
         return [('cli:launch','process_launch',['launch','--noninteractive',path,'node_name:='+expected['node'],'node_namespace:='+space,'output_topic:='+expected['topic']],expected)]
-    return [('cli:run','process_run',['run','demo_nodes_cpp','talker']+expected['native_args'],expected)]
+    rows=[('cli:run','process_run',['run','demo_nodes_cpp','talker']+expected['native_args'],expected)]
+    python_expected={**expected,'language':'python','artifact_prefix':'python_process','node':'run_python_'+role,'topic':space+'/'+role+'/python_out'}
+    python_expected['native_args']=['--ros-args','-r','__node:='+python_expected['node'],'-r','__ns:='+space,'-r','chatter:='+python_expected['topic']]
+    rows.append(('cli:run','process_run_python',['run','demo_nodes_py','talker']+python_expected['native_args'],python_expected))
+    return rows
 
 
 def native_matches(record,root,cli_pid,expected):
     exe=str(root)+'/execution_prefix/lib/demo_nodes_cpp/talker'
+    argv=[exe]+expected['native_args']
+    if expected.get('language')=='python':
+        exe='/data/python312-rk3588a/usr/bin/python3.12'
+        argv=['python3.12',str(root)+'/execution_prefix/lib/demo_nodes_py/talker']+expected['native_args']
     return (type(record.get('pid')) is int and record['pid']>0 and str(record.get('start','')).isdecimal()
             and record.get('parent_pid')==cli_pid and record.get('process_group')==cli_pid
-            and record.get('executable')==exe and record.get('argv')==[exe]+expected['native_args'])
+            and record.get('executable')==exe and record.get('argv')==argv)
 
 
 def native_exit_code(raw,pid):
@@ -50,17 +58,20 @@ def wait_executable(pid,expected,start):
     raise ValueError('expected child executable never became ready')
 
 
-def native_libraries(root):
+def native_libraries(root,python=False):
+    if python:
+        return {str(root/'lib'/name) for name in ('libmdds.so','librmw_mdds.so')} | {str(root/'python/rclpy/_rclpy_pybind11.cpython-312-aarch64-linux-ohos.so')}
     result={str(root/'lib'/name) for name in ('libmdds.so','librmw_mdds.so','libtalker_library.so')}
     if (root/'lib/librclcpp.so').is_file():result.add(str(root/'lib/librclcpp.so'))
     return result
 
 
-def inspect(root,run,pid):
+def inspect(root,run,pid,python=False):
     proc=Path('/proc')/str(pid);start=process_start(pid);exe=str(root/'execution_prefix/lib/demo_nodes_cpp/talker')
+    if python:exe='/data/python312-rk3588a/usr/bin/python3.12'
     wait_executable(pid,exe,start)
     deadline=time.monotonic()+5
-    wanted=native_libraries(root);names={Path(p).name for p in wanted}
+    wanted=native_libraries(root,python);names={Path(p).name for p in wanted}
     while time.monotonic()<deadline:
         paths={line.split(None,5)[5] for line in (proc/'maps').read_text().splitlines() if len(line.split(None,5))==6 and Path(line.split(None,5)[5]).name in names}
         if paths-wanted:raise ValueError('ros2 run loaded a foreign library')
@@ -70,12 +81,14 @@ def inspect(root,run,pid):
     native=inspect_process(pid,root,None);stat=(proc/'stat').read_text().rsplit(')',1)[1].split()
     if process_start(pid)!=start:raise ValueError('ros2 run child reused during inspection')
     native.update(run_id=run,parent_pid=int(stat[1]),process_group=int(stat[2]),executable=exe,argv=(proc/'cmdline').read_bytes().rstrip(b'\0').decode().split('\0'))
-    native['hashes'].update({p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in wanted|{exe}})
+    artifact=str(root/'execution_prefix/lib/demo_nodes_py/talker') if python else exe
+    native['hashes'].update({p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in wanted|{artifact}})
     return native
 
 
 def execute(argv,output,run,board,case,label,expected,nonce):
     root=output.parent;native=None;shutdown=None;emergency=False
+    stop_path=root/(expected.get('artifact_prefix','process')+'.stop')
     if case=='cli:test':
         with (root/'process_test_config.json').open('x') as config:
             json.dump({'run_id':run,'nonce':nonce,'board':board,'expected':expected},config)
@@ -96,13 +109,13 @@ def execute(argv,output,run,board,case,label,expected,nonce):
                         try:
                             stat=(proc/'stat').read_text().rsplit(')',1)[1].split()
                             if int(stat[1])!=child.pid or stat[0]=='Z':continue
-                            info=inspect(root,run,int(proc.name))
+                            info=inspect(root,run,int(proc.name),expected.get('language')=='python')
                             if not native_matches(info,root,child.pid,expected):raise ValueError('ros2 run child identity differs')
                             native=info;break
                         except (FileNotFoundError,ProcessLookupError):continue
-                if native and (root/'process.stop').exists():
+                if native and stop_path.exists():
                     if case=='cli:test':break  # The tests consume the barrier and the framework stops its child.
-                    if (root/'process.stop').read_text().strip()!=nonce or process_start(child.pid)!=start or process_start(native['pid'])!=native['start']:raise ValueError('ros2 run stop identity differs')
+                    if stop_path.read_text().strip()!=nonce or process_start(child.pid)!=start or process_start(native['pid'])!=native['start']:raise ValueError('ros2 run stop identity differs')
                     shutdown={'signal':2,'cli_pid':child.pid,'cli_start':start,'native_pid':native['pid'],'native_start':native['start'],'barrier_nonce':nonce}
                     if case=='cli:launch':
                         shutdown['recipient']='cli';child.send_signal(signal.SIGINT)

@@ -34,8 +34,8 @@ if role in ('hello_start_doctor','hello_stop_doctor','hello_start_wtf','hello_st
 if role=='multicast_send':
     with (root/'multicast.send').open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
-if role in ('process_start','process_stop'):
-    name='process.start' if role=='process_start' else 'process.stop'
+if role in ('process_start','process_stop','python_process_stop'):
+    name={'process_start':'process.start','process_stop':'process.stop','python_process_stop':'python_process.stop'}[role]
     with (root/name).open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
 if role in ('advance', 'finish', 'withdraw','standalone_stop','standalone_start'):

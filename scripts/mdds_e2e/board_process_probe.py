@@ -4,21 +4,23 @@ import re
 
 
 class ProcessProbe:
-    def __init__(self,root,run,nonce,board,peer,node):
+    def __init__(self,root,run,nonce,board,peer,node,language='cpp'):
         from std_msgs.msg import String
         from rclpy.qos import QoSProfile,ReliabilityPolicy
         self.root,self.run,self.nonce,self.board,self.peer,self.node=root,run,nonce,board,peer,node
         self.space='/process_'+run;self.topic=self.space+'/'+peer+'/out';self.received=[];self.saved=False;self.gone=False
         self.kind=(root/'cli_batch').read_text().strip().removeprefix('process_')
         assert self.kind in ('run','launch','test')
+        self.prefix='process';self.minimum=1
+        if language=='python':self.kind='run_python';self.topic=self.space+'/'+peer+'/python_out';self.prefix='python_process';self.minimum=0
         def callback(message):
-            match=re.fullmatch('Hello World: ([1-9][0-9]*)',message.data);assert match
+            match=re.fullmatch('Hello World: (0|[1-9][0-9]*)',message.data);assert match and int(match[1])>=self.minimum
             if self.received:assert int(match[1])==int(self.received[-1].split(': ')[1])+1
             self.received.append(message.data);assert len(self.received)<=40
         self.subscription=node.create_subscription(String,self.topic,callback,QoSProfile(depth=32,reliability=ReliabilityPolicy.RELIABLE))
     def save(self,stage,**data):
-        value={'run_id':self.run,'nonce':self.nonce,'board':self.board,'peer_role':self.peer,'stage':stage,**data}
-        path=self.root/('process_'+stage+'.json');tmp=path.with_suffix('.tmp')
+        value={'run_id':self.run,'nonce':self.nonce,'board':self.board,'peer_role':self.peer,'kind':self.kind,'stage':stage,**data}
+        path=self.root/(self.prefix+'_'+stage+'.json');tmp=path.with_suffix('.tmp')
         with tmp.open('x') as out:out.write(json.dumps(value)+'\n')
         tmp.replace(path);print('CLI_PROCESS_PROOF '+json.dumps(value),flush=True)
     def tick(self):
@@ -31,3 +33,9 @@ class ProcessProbe:
             self.saved=True
         elif self.saved and not infos and node not in nodes:
             self.save('gone',node_absent=True,publisher_absent=True);self.gone=True
+
+
+class RunProbes:
+    def __init__(self,*args):self.probes=[ProcessProbe(*args,language=language) for language in ('cpp','python')]
+    def tick(self):
+        for probe in self.probes:probe.tick()

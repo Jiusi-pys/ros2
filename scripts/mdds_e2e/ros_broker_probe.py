@@ -316,7 +316,10 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
-    if (root/'cli_batch').read_text().strip()=='graph_remote':
+    if (root/'cli_batch').read_text().strip()=='graph_late':
+        from board_late_source import LateGraphSource
+        component_probe=LateGraphSource(root,a.run_id,a.nonce,a.role,records[0]['node'],records[0]['executor'])
+    elif (root/'cli_batch').read_text().strip()=='graph_remote':
         from board_remote_graph import RemoteGraphSource
         component_probe=RemoteGraphSource(root,a.run_id,a.nonce,a.role,records[0]['node'])
     elif (root/'cli_batch').read_text().strip()=='service_qos':

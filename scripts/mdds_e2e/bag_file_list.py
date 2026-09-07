@@ -9,7 +9,7 @@ def paths(files):
     result=[]
     for item in files:
         value=item['path']
-        if not re.fullmatch(r'bags/(sqlite3|mcap)/[A-Za-z0-9_.-]+',value) or value.split('/')[-1] in ('.','..') or not re.fullmatch('[0-9a-f]{64}',item['sha256']) or not 0<=item['size']<=16*1024*1024:raise ValueError('invalid bag file manifest')
+        if not re.fullmatch(r'bags/((converted_|reindex_)?(sqlite3|mcap))/[A-Za-z0-9_.-]+',value) or value.split('/')[-1] in ('.','..') or not re.fullmatch('[0-9a-f]{64}',item['sha256']) or not 0<=item['size']<=16*1024*1024:raise ValueError('invalid bag file manifest')
         if value in result:raise ValueError('duplicate bag path')
         result.append(value)
     return result

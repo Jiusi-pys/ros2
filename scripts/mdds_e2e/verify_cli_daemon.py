@@ -37,9 +37,12 @@ def validate_report(value, root, run, board, nonce):
     if (root/'cli_batch').read_text().strip()=='components':
         from verify_components import validate
         validate(value,root,run,board,nonce)
-    if (root/'cli_batch').read_text().strip()=='bags':
+    if (root/'cli_batch').read_text().strip() in ('bags','bag_transform'):
         from verify_bags import validate
         validate(value,root,run,board,nonce)
+        if (root/'cli_batch').read_text().strip()=='bag_transform':
+            from verify_bag_transform import validate
+            validate(value,root,run,board)
     daemon=value['daemon']
     for record in (daemon,value['daemon_after_queries']):
         if not owned(record,remote) or record['owned_udp'] or record['listeners']!=[{'table':'tcp','local':f'0100007F:{11511+175:04X}'}]:
@@ -182,6 +185,16 @@ def main():
             receipt['component_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in suffixes]
         if case['id'].startswith('cli:bag/'):
             receipt['bag_artifacts']=[{'path':board+'.'+item['path'].replace('/','_'),'sha256':item['sha256']} for board,value in reports.items() for item in value['bag_files']]
+            if case['id'] in ('cli:bag/convert','cli:bag/reindex'):
+                artifacts=[]
+                for board,value in reports.items():
+                    for result in value['results']:
+                        if result['case_id']!=case['id']:continue
+                        suffixes=['.inspection.json']+(['.yaml'] if case['id']=='cli:bag/convert' else [])
+                        for suffix in suffixes:
+                            path=board+'.'+result['label']+suffix
+                            artifacts.append({'path':path,'sha256':acceptance.digest((root/path).read_bytes())})
+                receipt['transformation_artifacts']=artifacts
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

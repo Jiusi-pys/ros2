@@ -16,10 +16,18 @@ class InstallFinalizationTests(unittest.TestCase):
             (package / "user-data.txt").write_text("keep")
             self.assertEqual(finalize(root), (1, 0))
             package = root / "Lib" / "demo_nodes_py"
-            self.assertEqual((package / "talker").read_bytes(), b"#!/usr/bin/env python3.12\nprint('run')\n")
+            self.assertEqual((package / "talker").read_bytes(), b"#!/bin/env python3.12\nprint('run')\n")
             self.assertFalse((package / "talker.exe").exists())
             self.assertEqual((package / "user-data.txt").read_text(), "keep")
             self.assertEqual(finalize(root), (1, 0))
+
+    def test_upgrade_prior_generated_env_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);package=root/'Lib/demo_nodes_py';package.mkdir(parents=True)
+            old=b"#!/usr/bin/env python3.12\nprint('run')\n"
+            (package/'talker-script.py').write_bytes(old);(package/'talker').write_bytes(old)
+            self.assertEqual(finalize(root),(1,0))
+            self.assertEqual((package/'talker').read_bytes(),b"#!/bin/env python3.12\nprint('run')\n")
 
     def test_native_executable_collision_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

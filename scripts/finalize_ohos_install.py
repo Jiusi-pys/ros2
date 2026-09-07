@@ -42,9 +42,12 @@ def finalize(root: Path) -> tuple[int, int]:
         lines = source.read_text(encoding="utf-8").splitlines()
         if not lines or not lines[0].startswith("#!"):
             raise RuntimeError(f"unrecognized Python launcher: {source}")
-        payload = ("#!/usr/bin/env python3.12\n" + "\n".join(lines[1:]) + "\n").encode()
+        # KaihongOS supplies toybox env at /bin/env; /usr/bin/env is absent.
+        body = "\n".join(lines[1:]) + "\n"
+        payload = ("#!/bin/env python3.12\n" + body).encode()
+        legacy_payload = ("#!/usr/bin/env python3.12\n" + body).encode()
         target = source.with_name(source.name.removesuffix("-script.py"))
-        if target.exists() and target.read_bytes() != payload:
+        if target.exists() and target.read_bytes() not in (payload, legacy_payload):
             raise RuntimeError(f"native launcher would be overwritten: {target}")
         target.write_bytes(payload)
         source.write_bytes(payload)

@@ -116,13 +116,21 @@ class AcceptanceTest(unittest.TestCase):
         self.assertFalse(result['gateway_unlocked'])
         self.assertFalse(result['gate_pass'])
 
-    def test_complete_functional_receipts_unlock_gateway_start(self):
+    def test_complete_functional_receipts_do_not_unlock_removed_gateway_scope(self):
+        self.pass_all()
+        result = self.validate(phase=1)
+        self.assertTrue(result['phase1_pass'], result['errors'])
+        self.assertFalse(result['gateway_unlocked'])
+        self.assertTrue(result['gate_pass'])
+        self.assertEqual(result['gateway_status'], 'OUT_OF_SCOPE')
+
+    def test_legacy_phase_two_cannot_authorize_gateway_work(self):
         self.pass_all()
         result = self.validate(phase=2)
-        self.assertTrue(result['phase1_pass'], result['errors'])
-        self.assertTrue(result['gateway_unlocked'])
-        self.assertTrue(result['gate_pass'])
-        self.assertEqual(result['gateway_status'], 'NOT_TESTED')
+        self.assertTrue(result['phase1_pass'])
+        self.assertFalse(result['gate_pass'])
+        self.assertFalse(result['gateway_unlocked'])
+        self.assertTrue(any('removed' in error for error in result['errors']))
 
     def test_each_nonpass_and_unknown_status_is_gate_failure(self):
         self.pass_all()

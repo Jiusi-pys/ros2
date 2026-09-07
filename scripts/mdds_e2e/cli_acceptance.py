@@ -400,9 +400,11 @@ def validate_manifest(manifest, inventory, evidence_root, phase=1):
     except (ValueError, KeyError, TypeError, OSError) as exc:
         errors.append(str(exc))
     phase1_pass = not errors and total > 0 and passed == total
+    if phase == 2:
+        errors.append('gateway phase was removed from the active user objective')
     return {'schema_version': 1, 'requested_phase': phase, 'phase1_pass': phase1_pass,
-            'gateway_unlocked': phase1_pass, 'gateway_status': 'NOT_TESTED',
-            'gate_pass': phase1_pass, 'passed_cases': passed, 'required_cases': total,
+            'gateway_unlocked': False, 'gateway_status': 'OUT_OF_SCOPE',
+            'gate_pass': phase1_pass and phase == 1, 'passed_cases': passed, 'required_cases': total,
             'errors': errors}
 
 
@@ -412,7 +414,7 @@ def main(argv=None):
     inventory_parser = commands.add_parser('inventory', help='write a NOT_RUN manifest from installed entry points')
     inventory_parser.add_argument('--prefix', type=Path, required=True)
     inventory_parser.add_argument('--output', type=Path, required=True)
-    verify = commands.add_parser('verify', help='validate phase-1 completion or gateway-start eligibility')
+    verify = commands.add_parser('verify', help='validate the rmw_mdds/MDDS CLI and graph acceptance gate')
     verify.add_argument('--prefix', type=Path, required=True)
     verify.add_argument('--manifest', type=Path, required=True)
     verify.add_argument('--evidence-root', type=Path, required=True)

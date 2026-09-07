@@ -30,6 +30,11 @@ class ControlledStop(unittest.TestCase):
             self.execution['returncode']=value
             with self.subTest(returncode=value),self.assertRaises(ValueError):self.validate(**kwargs)
     def test_requested_sigint(self):self.validate()
+    def test_hello_commands_support_verified_stop(self):
+        for command in ('doctor','wtf'):
+            self.case.update(id='cli:'+command+'/hello',command=['ros2',command,'hello'])
+            self.execution['argv']=['ros2',command,'hello','--topic','/fixture']
+            self.validate()
     def test_statistics_commands_support_requested_sigint(self):
         for verb in ('hz','bw','delay'):
             with self.subTest(verb=verb):

@@ -26,6 +26,9 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='hello':
+        from cli_hello import recipe
+        return recipe(ns,peer,nonce)
     if mode=='diagnostics':
         from cli_doctor import recipe
         return recipe(ns,peer,nonce)
@@ -64,6 +67,9 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case in ('cli:doctor/hello','cli:wtf/hello'):
+        from cli_hello import summary
+        return summary(stdout,expected) is not None
     if case in ('cli:doctor','cli:wtf'):
         from cli_doctor import oracle as doctor_oracle
         return doctor_oracle(stdout,expected)
@@ -167,7 +173,10 @@ def main():
         if case in ('cli:bag/convert','cli:bag/reindex'):
             from bag_transform import prepare
             preparation=prepare(root,expected)
-        if case in ('cli:run','cli:launch','cli:test'):
+        if case in ('cli:doctor/hello','cli:wtf/hello'):
+            from cli_hello import execute as execute_hello
+            value=execute_hello(['ros2']+args,output,run,board,case,label,expected,nonce)
+        elif case in ('cli:run','cli:launch','cli:test'):
             from cli_process import execute as execute_process
             value=execute_process(['ros2']+args,output,run,board,case,label,expected,nonce)
         elif case in ('cli:topic/hz','cli:topic/bw','cli:topic/delay'):
@@ -224,6 +233,10 @@ def main():
             (output/'parameter_load.yaml').write_text(yaml.safe_dump({'/ros_broker_'+run+'/alpha_'+peer_role:{'ros__parameters':loaded_values(nonce,peer_role)}}))
         for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce):
             command(case,label,argv,wanted)
+            if case in ('cli:doctor/hello','cli:wtf/hello'):
+                marker=root/(label+'_gone.json');deadline=time.monotonic()+12
+                while time.monotonic()<deadline and not marker.exists():time.sleep(.05)
+                if json.loads(marker.read_text())['nonce']!=nonce:raise ValueError('hello graph withdrawal differs')
             if case in ('cli:run','cli:launch','cli:test'):
                 deadline=time.monotonic()+12
                 while time.monotonic()<deadline and not (root/'process_gone.json').exists():time.sleep(.1)

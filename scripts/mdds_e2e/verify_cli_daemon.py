@@ -33,6 +33,9 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
+    if (root/'cli_batch').read_text().strip()=='hello':
+        from verify_hello import validate
+        validate(value,root,run,board,nonce)
     if (root/'cli_batch').read_text().strip()=='diagnostics':
         from verify_doctor import validate
         validate(value,root,run,board)
@@ -80,7 +83,7 @@ def validate_report(value, root, run, board, nonce):
         if case!=expected_case or execution['argv']!=argv or result['expected']!=expected or not result['passed']:
             raise ValueError('wrong CLI lifecycle recipe')
         absent=case=='cli:param/delete' and expected.get('kind')=='absent'
-        controlled=case in ('cli:service/echo','cli:topic/hz','cli:topic/bw','cli:topic/delay')
+        controlled=case in ('cli:service/echo','cli:topic/hz','cli:topic/bw','cli:topic/delay','cli:doctor/hello','cli:wtf/hello')
         if execution['returncode'] not in ((1,) if absent else ((0,2) if controlled else (0,))) or execution['board_serial']!=board or execution['child_pid']<=0 or not str(execution['child_start']).isdecimal():raise ValueError('CLI child identity/exit failed')
         log_ref={**execution['log'],'path':board+'.'+execution['log']['path']}
         raw=acceptance.read_artifact(log_ref,root).decode()
@@ -227,6 +230,10 @@ def main():
         if case['id'] in ('cli:doctor','cli:wtf'):
             names=['doctor_manifest.json','doctor_environment.env','doctor_reference/index-v4.yaml','doctor_reference/jazzy/distribution.yaml']+[board+'.doctor_runtime.json' for board in reports]
             receipt['diagnostic_inputs']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
+        if case['id'] in ('cli:doctor/hello','cli:wtf/hello'):
+            command=case['id'].split(':')[1].split('/')[0]
+            names=['doctor_manifest.json','doctor_application.zip']+[board+'.hello_'+command+suffix for board in reports for suffix in ('_received.json','_gone.json','.ready','.start','.observed','.stop')]
+            receipt['hello_evidence']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

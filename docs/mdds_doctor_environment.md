@@ -82,8 +82,37 @@ python scripts/mdds_e2e/check_doctor_receipt.py \
   ohos_test_logs/ros_broker/cli_doctor_20260907_01
 ```
 
-Doctor and wtf add two cases, bringing the aggregate CLI/graph/transport ledger
-to 72/98. Hello remains pending and needs distinct peer identities because both
-boards report hostname localhost. Its intentional diagnostic multicast must
-remain separate from proof that middleware traffic uses DSoftBus. The full
-graph matrix, final deployment and gateway gates remain unfinished.
+Doctor and wtf added two cases, bringing the ledger to 72/98 at that point.
+
+## Doctor hello and wtf hello
+
+Mode `MDDS_ROS_CLI_BATCH=hello` stages the complete source Python doctor package
+with a file/hash inventory. Each command uses a nonce-bound host-id, its own
+run topic, an explicit multicast port and the verified Ethernet interface.
+The source implementation supports repeated hostnames and rejects malformed
+hello payloads without terminating its receive loop.
+
+Acceptance requires nonzero peer ROS and UDP counts in the same summary;
+neither lane substitutes for the other. An independent ROS observer checks
+the exact peer identity/payload, publisher node names bound to actual CLI PIDs,
+type/hash/GID metadata, and node/endpoint withdrawal. Native MDDS/RMW library
+hashes and the DSoftBus broker remain mandatory. The CLI's two intentional
+diagnostic UDP sockets are recorded separately from the broker's no-UDP proof.
+Both boards must observe valid output before the host sends stop markers;
+the actual controlled SIGINT return code is retained and emergency cleanup fails.
+
+`cli_hello_20260907_03` passed both commands on both boards, including daemon
+shutdown/port isolation and the base ROS fixture. Partial manifest SHA-256:
+`156ca135e832bae5d62316fb5529bea38d7597d9981efd79b2e1effcbcf0b41b`.
+Eight source unit tests, five summary tests, twelve controlled-stop contract
+tests and eight actual-receipt adversaries passed. Run 01's transient daemon
+port failure remains an unresolved stability observation; run 02's staging
+failure was recovered only after confirming no test PID records existed.
+
+```bash
+python scripts/mdds_e2e/check_hello_receipt.py \
+  ohos_test_logs/ros_broker/cli_hello_20260907_03
+```
+
+The aggregate CLI/graph/transport ledger is now 74/98. Remaining commands, full
+graph semantics, stability observations and unified deployment are unfinished.

@@ -33,7 +33,7 @@ def extract_wheel(wheel,site,sha):
             with path.open('xb') as out:out.write(archive.read(info))
 
 
-def pack(output):
+def pack(output,hello=False):
     workspace=Path.cwd();lock=workspace/'scripts/python/ohos_python.lock.json'
     wheels=[p for p in json.loads(lock.read_text(encoding='utf-8'))['wheels'] if p['project'] in PROJECTS]
     if {p['project'] for p in wheels}!=PROJECTS:raise ValueError('doctor dependencies are not locked')
@@ -58,6 +58,15 @@ def pack(output):
     env=''.join('export '+key+'='+value[0]+'\n' for key,value in environment.items())
     (output/'doctor_environment.env').write_text(env,encoding='utf-8',newline='\n')
     manifest={'schema_version':1,'python_lock_sha256':digest(lock.read_bytes()),'wheels':wheels,'reference':reference,'environment_sha256':digest(env.encode())}
+    if hello:
+        package=workspace/'src/ros2/ros2cli/ros2doctor/ros2doctor';files=[];archive=output/'doctor_application.zip'
+        with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as zipped:
+            for path in sorted(package.rglob('*.py')):
+                if '__pycache__' in path.parts:continue
+                if path.is_symlink():raise ValueError('linked doctor source')
+                name='ros2doctor/'+path.relative_to(package).as_posix();raw=path.read_bytes()
+                files.append({'path':name,'sha256':digest(raw),'size':len(raw)});zipped.writestr(name,raw)
+        manifest['application']={'archive':'doctor_application.zip','sha256':digest(archive.read_bytes()),'files':files}
     (output/'doctor_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
 
 
@@ -71,6 +80,13 @@ def prepare(root,sha):
     for item in manifest['wheels']:
         if Path(item['filename']).name!=item['filename']:raise ValueError('unsafe doctor wheel filename')
         extract_wheel(root/item['filename'],site,item['sha256'])
+    application=manifest.get('application')
+    if application:
+        if application['archive']!='doctor_application.zip':raise ValueError('wrong doctor application archive')
+        extract_wheel(root/application['archive'],site,application['sha256'])
+        for item in application['files']:
+            path=site/item['path']
+            if not path.resolve().is_relative_to((site/'ros2doctor').resolve()) or digest(path.read_bytes())!=item['sha256']:raise ValueError('doctor application source differs')
     for item in manifest['reference']['files']:
         if item['path'] not in ('index-v4.yaml','jazzy/distribution.yaml'):raise ValueError('unsafe reference filename')
         data=(root/'doctor_reference'/item['path']).read_bytes()
@@ -82,11 +98,12 @@ def prepare(root,sha):
         if not Path(module.__file__).resolve().is_relative_to(site.resolve()) or version!=item['version']:raise ValueError('doctor module provenance differs')
         modules[item['project']]={'version':version,'file':module.__file__}
     value={'run_id':root.name,'manifest_sha256':sha,'modules':modules}
+    if application:value['application_sha256']=application['sha256']
     (root/'doctor_runtime.json').write_text(json.dumps(value)+'\n')
     print('DOCTOR_RUNTIME_READY '+sha,flush=True)
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('operation',choices=('pack','prepare'));parser.add_argument('root',type=Path);parser.add_argument('--sha');args=parser.parse_args()
-    if args.operation=='pack':pack(args.root)
+    parser=argparse.ArgumentParser();parser.add_argument('operation',choices=('pack','prepare'));parser.add_argument('root',type=Path);parser.add_argument('--sha');parser.add_argument('--hello',action='store_true');args=parser.parse_args()
+    if args.operation=='pack':pack(args.root,args.hello)
     else:prepare(args.root,args.sha)

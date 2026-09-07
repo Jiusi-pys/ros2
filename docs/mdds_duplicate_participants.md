@@ -53,6 +53,6 @@ acceptance evidence; the existing native MDDS/RMW implementation passed it.
 - Duplicate-node receipt SHA-256:
   `79e9a7d3a0d2049a2282229937de927a4ec8b6f7dd7bae8cbf7db9e621a04e3b`.
 
-Aggregate coverage is 90/98, across different frozen runs. Churn, abrupt exit,
+Aggregate coverage is 91/98, across different frozen runs. Abrupt exit,
 reconnect, isolation, transport negative cases, advanced functionality and a
 unified release remain open. Gateway remains outside the current goal.

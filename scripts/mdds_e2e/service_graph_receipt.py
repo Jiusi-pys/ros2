@@ -17,6 +17,10 @@ def emit(root,manifest,reports,run,nonce):
         from verify_endpoint_qos import validate as checker
         key='endpoint_qos';prefix='ENDPOINT_QOS_RESULT '
         suffixes=('endpoint_qos.json','endpoint_qos.ready','endpoint_qos.go','endpoint_qos.sent','endpoint_qos.observe_go')
+    elif case_name=='graph:churn' and mode=='graph_churn':
+        from verify_churn_graph import validate as checker
+        key='churn_graph';prefix='CHURN_GRAPH_RESULT '
+        suffixes=('churn_graph.json','hidden_source.json','hidden_source.go','hidden_cli.go','hidden_source.stop','hidden_source.done','hidden_cli.ready','hidden_cli.done')
     elif case_name=='graph:duplicate_node_names' and mode=='graph_duplicate':
         from verify_duplicate_graph import validate as checker
         key='duplicate_graph';prefix='DUPLICATE_GRAPH_RESULT '

@@ -2,7 +2,7 @@
 
 Status: protocol v10 nanosecond migration implemented and verified by native
 tests and the two-board 19-case DSoftBus QoS matrix. Aggregate coverage remains
-90/98; the complete ROS functionality/unified release gate is still open.
+91/98; the complete ROS functionality/unified release gate is still open.
 
 Original defects that the migration addressed:
 

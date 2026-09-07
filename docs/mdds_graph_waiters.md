@@ -115,5 +115,5 @@ baseline and peer RPC controls passed. All 20 remote receipt adversaries,
 Use `MDDS_ROS_CLI_BATCH=graph_remote` with a fresh run ID to repeat. The CMake
 build above produces both native targets; the runner stages the selected one.
 
-Aggregate case coverage is 90/98 including endpoint QoS and hidden graph verification. The remaining graph/transport matrix,
+Aggregate case coverage is 91/98 including endpoint QoS and hidden graph verification. The remaining graph/transport matrix,
 all-CLI-on-one-version validation and unified release remain outstanding.

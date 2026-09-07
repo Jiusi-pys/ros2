@@ -316,7 +316,10 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
-    if (root/'cli_batch').read_text().strip()=='graph_duplicate':
+    if (root/'cli_batch').read_text().strip()=='graph_churn':
+        from board_churn_graph import ChurnGraphSource
+        component_probe=ChurnGraphSource(root,a.run_id,a.nonce,a.role,records[0]['node'],records[0]['executor'])
+    elif (root/'cli_batch').read_text().strip()=='graph_duplicate':
         from board_duplicate_graph import DuplicateGraphSource
         component_probe=DuplicateGraphSource(root,a.run_id,a.nonce,a.role,records[0]['node'])
     elif (root/'cli_batch').read_text().strip()=='graph_hidden':
@@ -434,7 +437,7 @@ try:
     exchange(records, 1, True)
     cli_fixture()
     (root / 'phase1.done').write_text(a.nonce + '\n')
-    wait(lambda: (root / 'phase2.go').is_file() and (root / 'phase2.go').read_text().strip() == a.nonce)
+    wait(lambda: (root / 'phase2.go').is_file() and (root / 'phase2.go').read_text().strip() == a.nonce, seconds=180 if (root/'cli_batch').read_text().strip()=='graph_churn' else 65)
     if (root/'cli_batch').read_text().strip()=='lifecycle':
         state_id,state_label=records[0]['node']._state_machine.current_state
         final={'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'node':ns+'/alpha_'+a.role,'state':{'id':state_id,'label':state_label}}
@@ -487,6 +490,7 @@ try:
         assert withdrew
     print('ROS_BROKER_RESULT PASS role=' + a.role, flush=True)
 finally:
+    if component_probe is not None and hasattr(component_probe,'close'):component_probe.close()
     for r in records:
         for key in ('action_client','action_server'):
             action=r.pop(key,None)

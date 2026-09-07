@@ -311,7 +311,10 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
-    if (root/'cli_batch').read_text().strip()=='statistics':
+    if (root/'cli_batch').read_text().strip()=='process_run':
+        from board_process_probe import ProcessProbe
+        component_probe=ProcessProbe(root,a.run_id,a.nonce,a.self_serial,other,records[1]['node'])
+    elif (root/'cli_batch').read_text().strip()=='statistics':
         from board_topic_statistics import StatisticsProbe
         component_probe=StatisticsProbe(root,a.run_id,a.nonce,a.self_serial,a.peer_serial,a.role,records[0]['node'])
     elif (root/'cli_batch').read_text().strip()=='components':

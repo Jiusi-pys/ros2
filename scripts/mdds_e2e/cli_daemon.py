@@ -26,6 +26,9 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='process_run':
+        from cli_process import recipe
+        return recipe(ns,peer)
     if mode=='statistics':
         from topic_statistics import recipe
         return recipe(ns,peer,nonce)
@@ -152,7 +155,10 @@ def main():
         if case in ('cli:bag/convert','cli:bag/reindex'):
             from bag_transform import prepare
             preparation=prepare(root,expected)
-        if case in ('cli:topic/hz','cli:topic/bw','cli:topic/delay'):
+        if case=='cli:run':
+            from cli_process import execute as execute_process
+            value=execute_process(['ros2']+args,output,run,board,case,label,expected,nonce)
+        elif case in ('cli:topic/hz','cli:topic/bw','cli:topic/delay'):
             from cli_topic_statistics import execute as execute_statistics
             value=execute_statistics(['ros2']+args,output,run,board,case,label,expected,nonce)
         elif case=='cli:service/echo':value=execute_echo(['ros2']+args,output,run,board,case,label,expected,nonce)
@@ -191,6 +197,12 @@ def main():
             while time.monotonic()<deadline and not (root/'standalone.start').exists():time.sleep(.1)
             if (root/'standalone.start').read_text().strip()!=nonce:raise ValueError('standalone start barrier mismatch')
             report['standalone_start_nonce']=nonce
+        if (root/'cli_batch').read_text().strip()=='process_run':
+            with (root/'process.ready').open('x') as marker:marker.write(nonce+'\n')
+            deadline=time.monotonic()+20
+            while time.monotonic()<deadline and not (root/'process.start').exists():time.sleep(.1)
+            if (root/'process.start').read_text().strip()!=nonce:raise ValueError('process start barrier differs')
+            report['process_start_nonce']=nonce
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
         if (root/'cli_batch').read_text().strip() in ('bags','bag_transform','bag_burst'):
             (root/'bags').mkdir()
@@ -200,6 +212,11 @@ def main():
             (output/'parameter_load.yaml').write_text(yaml.safe_dump({'/ros_broker_'+run+'/alpha_'+peer_role:{'ros__parameters':loaded_values(nonce,peer_role)}}))
         for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce):
             command(case,label,argv,wanted)
+            if case=='cli:run':
+                deadline=time.monotonic()+12
+                while time.monotonic()<deadline and not (root/'process_gone.json').exists():time.sleep(.1)
+                proof=json.loads((root/'process_gone.json').read_text())
+                if proof['run_id']!=run or proof['nonce']!=nonce:raise ValueError('process withdrawal identity differs')
             if case=='cli:bag/play':
                 marker=root/('bag_'+wanted['storage']+'_played.json');deadline=time.monotonic()+12
                 while time.monotonic()<deadline and not marker.exists():time.sleep(.1)

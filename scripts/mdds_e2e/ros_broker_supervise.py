@@ -27,6 +27,10 @@ if role in ('burst_stop_sqlite3','burst_stop_mcap'):
     check_proof(json.loads((root/('bag_'+storage+'_burst.json')).read_text()),run,nonce,self,storage)
     with (root/('bag_'+storage+'.burst_stop')).open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
+if role in ('process_start','process_stop'):
+    name='process.start' if role=='process_start' else 'process.stop'
+    with (root/name).open('x') as f:f.write(nonce+'\n')
+    raise SystemExit(0)
 if role in ('advance', 'finish', 'withdraw','standalone_stop','standalone_start'):
     name = {'advance': 'phase2.go', 'finish': 'ros.stop', 'withdraw': 'peer_exit.go','standalone_stop':'standalone.stop','standalone_start':'standalone.start'}[role]
     with (root / name).open('x') as f:
@@ -79,7 +83,7 @@ elif role == 'container':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [str(root/'component_prefix/lib/rclcpp_components/component_container'),'--ros-args','-r','__node:=container_'+label,'-r','__ns:=/components_'+run]
 elif role == 'cli':
-    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics') else 'cli_graph_basic.py'
+    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run') else 'cli_graph_basic.py'
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')

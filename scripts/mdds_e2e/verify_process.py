@@ -1,0 +1,35 @@
+"""Validate actual CLI-created native nodes and their peer graph lifecycle."""
+import json
+import re
+import cli_acceptance as a
+from cli_process import native_matches
+
+
+def validate(execution,expected,raw,root,run,board,nonce):
+    for observed_board in a.TARGET['board_serials']:
+        for stage in ('ready','start','stop'):
+            if (root/(observed_board+'.process.'+stage)).read_text().strip()!=nonce:raise ValueError('process barrier differs')
+    detail=execution['process'];native=detail['native'];remote='/data/local/tmp/ros2/.mdds-owned-runs/'+run
+    if not native_matches(native,remote,execution['child_pid'],expected) or native.get('run_id')!=run or native.get('owned_udp')!=[]:raise ValueError('CLI native child differs')
+    hashes={remote+'/lib/'+name:a.digest((root/name).read_bytes()) for name in ('libmdds.so','librmw_mdds.so','libtalker_library.so')}
+    hashes[remote+'/execution_prefix/lib/demo_nodes_cpp/talker']=a.digest((root/'process_talker').read_bytes())
+    if native['hashes']!=hashes:raise ValueError('CLI native binary hashes differ')
+    shutdown={'signal':2,'cli_pid':execution['child_pid'],'cli_start':execution['child_start'],'native_pid':native['pid'],'native_start':native['start'],'barrier_nonce':nonce}
+    if detail['shutdown']!=shutdown or detail['native_gone'] is not True or detail['emergency_cleanup'] is not False or execution['returncode']!=0:raise ValueError('CLI native process did not stop cleanly')
+    if raw.splitlines().count('MDDS_CLI_PROCESS '+json.dumps(detail))!=1 or 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('CLI process/transport log differs')
+    peer=next(b for b in a.TARGET['board_serials'] if b!=board)
+    received=json.loads((root/(peer+'.process_received.json')).read_text());gone=json.loads((root/(peer+'.process_gone.json')).read_text())
+    for stage,proof in [('received',received),('gone',gone)]:
+        identity={'run_id':run,'nonce':nonce,'board':peer,'peer_role':expected['role'],'stage':stage}
+        if any(proof.get(k)!=v for k,v in identity.items()):raise ValueError('peer process proof identity differs')
+        if (root/(peer+'.ros.log')).read_text().splitlines().count('CLI_PROCESS_PROOF '+json.dumps(proof))!=1:raise ValueError('peer process proof not bound to log')
+    ep=received['endpoint'];gid=ep.get('gid',[]);type_hash=json.loads((root/'type_hashes.json').read_text())['hashes']['std_msgs/msg/String']
+    if ep!={'node':expected['node'],'namespace':expected['namespace'],'type':'std_msgs/msg/String','type_hash':type_hash,'gid':gid} or len(gid)!=16 or not any(gid) or any(type(b) is not int or not 0<=b<=255 for b in gid):raise ValueError('CLI-created endpoint metadata differs')
+    messages=received['received'];numbers=[]
+    if not 3<=len(messages)<=40:raise ValueError('CLI child peer messages missing')
+    for message in messages:
+        match=re.fullmatch('Hello World: ([1-9][0-9]*)',message)
+        if not match or expected['node']+"]: Publishing: '"+message+"'" not in raw:raise ValueError('peer data differs from actual child publication log')
+        numbers.append(int(match[1]))
+    if numbers!=list(range(numbers[0],numbers[0]+len(numbers))):raise ValueError('CLI child sample order differs')
+    if gone.get('node_absent') is not True or gone.get('publisher_absent') is not True:raise ValueError('CLI child graph did not withdraw')

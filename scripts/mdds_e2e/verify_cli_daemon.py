@@ -33,7 +33,7 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
-    if (root/'cli_batch').read_text().strip() in ('process_run','process_launch') and value.get('process_start_nonce')!=nonce:raise ValueError('process start barrier missing')
+    if (root/'cli_batch').read_text().strip() in ('process_run','process_launch','process_test') and value.get('process_start_nonce')!=nonce:raise ValueError('process start barrier missing')
     if (root/'cli_batch').read_text().strip()=='statistics':
         from verify_topic_statistics import validate
         validate(value,root,run,board,nonce)
@@ -97,7 +97,7 @@ def validate_report(value, root, run, board, nonce):
             if server!={**expected,'run_id':run,'nonce':nonce,'board':peer_board,'count':1}:raise ValueError('peer service callback differs')
             if (root/(peer_board+'.ros.log')).read_text().splitlines().count('CLI_INTROSPECTION_SERVER '+json.dumps(server))!=1:raise ValueError('peer service callback missing')
         elif case=='cli:bag/record':pass  # Native storage and exact byte-level samples checked above.
-        elif case in ('cli:run','cli:launch'):
+        elif case in ('cli:run','cli:launch','cli:test'):
             from verify_process import validate
             validate(execution,expected,raw,root,run,board,nonce)
         elif case=='cli:component/standalone':
@@ -196,9 +196,12 @@ def main():
         if case['id'].startswith('cli:component/'):
             suffixes=('standalone_received.json','standalone_gone.json','standalone.ready','standalone.start','standalone.stop') if case['id']=='cli:component/standalone' else ('components_loaded.json','components_retired.json','components_empty.json','container.log','container.status.json')
             receipt['component_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in suffixes]
-        if case['id'] in ('cli:run','cli:launch'):
+        if case['id'] in ('cli:run','cli:launch','cli:test'):
             receipt['process_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('process_received.json','process_gone.json','process.ready','process.start','process.stop')]
             if case['id']=='cli:launch':receipt['launch_definition']={'path':'process_talker.launch.py','sha256':acceptance.digest((root/'process_talker.launch.py').read_bytes())}
+            if case['id']=='cli:test':
+                names=[board+'.'+suffix for board in reports for suffix in ('process_test.junit.xml','process_test_config.json','process_test_assertions.json')]+['peer_talker_test.py','mdds_cli_fixture.package.xml','mdds_cli_fixture.marker']
+                receipt['launch_test_evidence']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
         if case['id'].startswith('cli:bag/'):
             receipt['bag_artifacts']=[{'path':board+'.'+item['path'].replace('/','_'),'sha256':item['sha256']} for board,value in reports.items() for item in value['bag_files']]
             if case['id']=='cli:bag/burst':

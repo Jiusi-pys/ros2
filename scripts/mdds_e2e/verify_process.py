@@ -16,6 +16,19 @@ def validate(execution,expected,raw,root,run,board,nonce):
     hashes[remote+'/execution_prefix/lib/demo_nodes_cpp/talker']=a.digest((root/'process_talker').read_bytes())
     if native['hashes']!=hashes:raise ValueError('CLI native binary hashes differ')
     shutdown={'signal':2,'cli_pid':execution['child_pid'],'cli_start':execution['child_start'],'native_pid':native['pid'],'native_start':native['start'],'barrier_nonce':nonce}
+    if execution['argv'][1]=='test':
+        shutdown.pop('signal');shutdown['method']='launch_testing_completion'
+        from cli_test_report import validate_xml
+        xml=root/(board+'.process_test.junit.xml');summary=validate_xml(xml.read_text())
+        if detail.get('junit')!=summary or detail.get('junit_sha256')!=a.digest(xml.read_bytes()):raise ValueError('test JUnit report differs')
+        config=json.loads((root/(board+'.process_test_config.json')).read_text())
+        if config!={'run_id':run,'nonce':nonce,'board':board,'expected':expected}:raise ValueError('launch test configuration differs')
+        for name in ('peer_talker_test.py','mdds_cli_fixture.package.xml','mdds_cli_fixture.marker'):
+            if (root/('inputs_'+board+'.sha256')).read_text().splitlines().count(a.digest((root/name).read_bytes())+'  '+name)!=1:raise ValueError('installed test fixture input differs')
+        assertions=json.loads((root/(board+'.process_test_assertions.json')).read_text())
+        final={'run_id':run,'nonce':nonce,'board':board,'assertions':['native_publication','peer_exchange','native_exit'],'native_pid':native['pid'],'native_returncode':0}
+        if assertions!=final or raw.splitlines().count('CLI_LAUNCH_TEST_ASSERTION '+json.dumps(final))!=1:raise ValueError('real launch test assertions missing')
+        if detail.get('native_returncode')!=0 or native_exit_code(raw,native['pid'])!=0:raise ValueError('launch-tested native child failed')
     if execution['argv'][1]=='launch':
         shutdown['recipient']='cli'
         definition=root/'process_talker.launch.py';sha=a.digest(definition.read_bytes())

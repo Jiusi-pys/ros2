@@ -6,6 +6,12 @@ from cli_process import recipe,wait_executable,native_libraries
 
 
 class LaunchRecipe(unittest.TestCase):
+    def test_real_test_cli_uses_installed_fixture_and_junit(self):
+        case,label,argv,expected=recipe('/ros_broker_test','B',mode='test')[0]
+        self.assertEqual((case,label),('cli:test','process_test'))
+        self.assertEqual(argv[:2],['test','/data/local/tmp/ros2/.mdds-owned-runs/test/execution_prefix/share/mdds_cli_fixture/peer_talker_test.py'])
+        self.assertIn('--junit-xml',argv);self.assertIn('mdds_cli_fixture',argv)
+        self.assertIn('__node:=test_A',expected['native_args'])
     def test_staged_rclcpp_is_required_in_native_mappings(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);(root/'lib').mkdir()

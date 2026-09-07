@@ -9,7 +9,8 @@ class ProcessProbe:
         from rclpy.qos import QoSProfile,ReliabilityPolicy
         self.root,self.run,self.nonce,self.board,self.peer,self.node=root,run,nonce,board,peer,node
         self.space='/process_'+run;self.topic=self.space+'/'+peer+'/out';self.received=[];self.saved=False;self.gone=False
-        self.kind='launch' if (root/'cli_batch').read_text().strip()=='process_launch' else 'run'
+        self.kind=(root/'cli_batch').read_text().strip().removeprefix('process_')
+        assert self.kind in ('run','launch','test')
         def callback(message):
             match=re.fullmatch('Hello World: ([1-9][0-9]*)',message.data);assert match
             if self.received:assert int(match[1])==int(self.received[-1].split(': ')[1])+1

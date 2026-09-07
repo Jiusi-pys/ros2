@@ -93,3 +93,49 @@ python scripts/mdds_e2e/check_cli_launch_receipt.py \
 Launch adds one unique case, taking the aggregate ledger to 69/98. The tests
 use private libraries; board-wide deployment and the full graph/single-release
 gates remain unfinished.
+
+## ros2 test
+
+Mode `MDDS_ROS_CLI_BATCH=process_test` configures the standalone
+`scripts/mdds_e2e/fixtures` CMake project with Ninja and installs its package,
+ament resource marker and launch-testing definition into a private prefix.
+Keeping this test package above the middleware avoids adding a client-library
+dependency cycle to rmw_mdds. The runner stages the installed files with hashes
+and invokes the real `ros2 test` CLI with `--package-name mdds_cli_fixture` and
+an explicit `--junit-xml` output file.
+
+Each board executes three real assertions: the native talker publishes the
+expected messages using DSoftBus; the peer observer reports consecutive
+messages and the expected endpoint; and launch-testing observes native exit
+zero after shutting the process down. The host releases a two-board data
+barrier, then the tests return and the framework performs shutdown. The outer
+supervisor sends no normal stop signal in this mode. It still checks the exact
+native child, library hashes, exit event and graph withdrawal.
+
+The JUnit verifier requires the exact three test names and classes, consistent
+counts, zero failures/errors and no skipped tests. It also checks the installed
+definition, test configuration and runtime assertion records against the actual
+CLI logs and child PID. Current Jazzy combines active and post-shutdown results
+in one test-run suite. Run `cli_process_test_20260907_01` remains failed evidence:
+the real assertions passed, but the initial checker incorrectly required two
+suites and caused the batch supervisor to fail.
+
+Corrected run `cli_process_test_20260907_02` passed on both RK3588A boards:
+three tests per board, native/CLI/supervisor exit zero, exact peer data and graph
+withdrawal, plus the base thirty cross-board messages and four services.
+Partial manifest SHA-256:
+`9411cc1995d33dd4d342ee39505629d05e0cba00ce643e988c3ebad61a0ab758`.
+Seven XML contract tests and the installed-test recipe regression are GREEN
+after RED failures. Eighteen actual-receipt adversaries passed, including
+rehashed hidden failures/skips, false totals, missing assertions, altered
+definitions/configuration and incorrect native exit evidence. The existing
+fifteen launch-receipt checks still pass.
+
+```bash
+python scripts/mdds_e2e/check_cli_test_receipt.py \
+  ohos_test_logs/ros_broker/cli_process_test_20260907_02
+```
+
+This adds `cli:test`, bringing the combined CLI/graph/transport ledger to
+70/98. Remaining commands, full graph scenarios and the final single-release
+gate remain unfinished; gateway work is still locked.

@@ -14,10 +14,14 @@ from board_graph_ownership import process_start
 
 
 def recipe(ns,peer,mode='run'):
-    if mode not in ('run','launch'):raise ValueError('unknown process CLI mode')
+    if mode not in ('run','launch','test'):raise ValueError('unknown process CLI mode')
     role='A' if peer=='B' else 'B';run=ns.removeprefix('/ros_broker_');space='/process_'+run
     expected={'role':role,'namespace':space,'node':mode+'_'+role,'topic':space+'/'+role+'/out'}
     expected['native_args']=['--ros-args','-r','__node:='+expected['node'],'-r','__ns:='+space,'-r','chatter:='+expected['topic']]
+    if mode=='test':
+        root='/data/local/tmp/ros2/.mdds-owned-runs/'+run
+        path=root+'/execution_prefix/share/mdds_cli_fixture/peer_talker_test.py';expected.update(test_file=path,junit_file=root+'/process_test.junit.xml')
+        return [('cli:test','process_test',['test',path,'--package-name','mdds_cli_fixture','--junit-xml',expected['junit_file']],expected)]
     if mode=='launch':
         path='/data/local/tmp/ros2/.mdds-owned-runs/'+run+'/process_talker.launch.py';expected['launch_file']=path
         return [('cli:launch','process_launch',['launch','--noninteractive',path,'node_name:='+expected['node'],'node_namespace:='+space,'output_topic:='+expected['topic']],expected)]
@@ -72,6 +76,9 @@ def inspect(root,run,pid):
 
 def execute(argv,output,run,board,case,label,expected,nonce):
     root=output.parent;native=None;shutdown=None;emergency=False
+    if case=='cli:test':
+        with (root/'process_test_config.json').open('x') as config:
+            json.dump({'run_id':run,'nonce':nonce,'board':board,'expected':expected},config)
     actual=[sys.executable,'-u','-B','-c','from ros2cli.cli import main; raise SystemExit(main())']+argv[1:]
     outpath=output/(label+'.stdout');errpath=output/(label+'.stderr')
     with outpath.open('wb') as out,errpath.open('wb') as err,subprocess.Popen(actual,stdout=out,stderr=err,start_new_session=True) as child:
@@ -94,6 +101,7 @@ def execute(argv,output,run,board,case,label,expected,nonce):
                             native=info;break
                         except (FileNotFoundError,ProcessLookupError):continue
                 if native and (root/'process.stop').exists():
+                    if case=='cli:test':break  # The tests consume the barrier and the framework stops its child.
                     if (root/'process.stop').read_text().strip()!=nonce or process_start(child.pid)!=start or process_start(native['pid'])!=native['start']:raise ValueError('ros2 run stop identity differs')
                     shutdown={'signal':2,'cli_pid':child.pid,'cli_start':start,'native_pid':native['pid'],'native_start':native['start'],'barrier_nonce':nonce}
                     if case=='cli:launch':
@@ -115,10 +123,17 @@ def execute(argv,output,run,board,case,label,expected,nonce):
         emergency=True
         if process_start(native['pid'])==native['start']:os.kill(native['pid'],signal.SIGKILL)
     stdout=outpath.read_text();stderr=errpath.read_text();passed=child.returncode==0 and native is not None and shutdown is not None and gone and not emergency
+    if case=='cli:test' and native and (root/'process.stop').is_file() and (root/'process.stop').read_text().strip()==nonce:
+        shutdown={'method':'launch_testing_completion','cli_pid':child.pid,'cli_start':start,'native_pid':native['pid'],'native_start':native['start'],'barrier_nonce':nonce}
+        passed=child.returncode==0 and gone and not emergency
     detail={'native':native,'shutdown':shutdown,'native_gone':gone,'emergency_cleanup':emergency}
-    if case=='cli:launch':
+    if case in ('cli:launch','cli:test'):
         detail['native_returncode']=native_exit_code(stdout+'\n'+stderr,native['pid']) if native else None
         passed=passed and detail['native_returncode']==0
+    if case=='cli:test' and passed:
+        from cli_test_report import validate_xml
+        detail['junit']=validate_xml((root/'process_test.junit.xml').read_text())
+        detail['junit_sha256']=a.digest((root/'process_test.junit.xml').read_bytes())
     execution={'argv':argv,'actual_argv':actual,'board_serial':board,'child_pid':child.pid,'child_start':start,'returncode':child.returncode,'process':detail}
     raw='MDDS_CLI_ACTUAL_ARGV '+json.dumps(actual)+'\nMDDS_CLI_STDOUT_BEGIN\n'+stdout+'\nMDDS_CLI_STDOUT_END\nMDDS_CLI_STDERR_BEGIN\n'+stderr+'\nMDDS_CLI_STDERR_END\nMDDS_CLI_PROCESS '+json.dumps(detail)+'\n'+a.terminal_marker(run,case,child.returncode,argv,board)+'\n'
     if passed:raw+='MDDS_CLI_FUNCTIONAL CASE='+case+' RESULT=PASS\n'

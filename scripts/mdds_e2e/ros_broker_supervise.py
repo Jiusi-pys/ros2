@@ -142,12 +142,15 @@ if role in ('inspect','inspect_domain'):
                 if cols[9] in inodes:
                     udp.append(line)
     report = {'run_id': run, 'pid': pid, 'start': process_start(pid), 'binary_sha256': hashlib.sha256((proc / 'exe').read_bytes()).hexdigest(), 'sdk': {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in sdk}, 'owned_udp': udp}
-    if role=='domain_daemon':report['argv']=(proc/'cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
+    if role=='domain_daemon' or (root/'sdk_trace.enabled').exists():report['argv']=(proc/'cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
     with (root / (role+'.inspect.json')).open('x') as f:
         json.dump(report, f)
     print('INSPECT_READY')
     raise SystemExit(0)
 if role == 'daemon':
+    if (root/'sdk_trace.enabled').exists():
+        if (root/'sdk_trace.enabled').read_text().strip()!=nonce:raise ValueError('wrong SDK trace owner')
+        os.environ.update(MDDS_SDK_TRACE_ROOT=str(root),MDDS_SDK_TRACE_RUN=run,MDDS_SDK_TRACE_NONCE=nonce)
     if (root/'reconnect.enabled').exists():
         if (root/'reconnect.enabled').read_text().strip()!=nonce:raise ValueError('remote-cycle identity differs')
         os.environ.update(MDDS_RECONNECT_CONTROL_ROOT=str(root),MDDS_RECONNECT_RUN=run,MDDS_RECONNECT_NONCE=nonce)
@@ -175,4 +178,11 @@ if role=='ros' and (root/'graph_case').is_file():
     if case not in ('graph:service_client_ownership','graph:endpoint_metadata','graph:duplicate_node_names','graph:churn','graph:abrupt_exit','graph:reconnect','graph:discovery_off','graph:domain_isolation'):raise ValueError('unsupported graph case')
     print('MDDS_GRAPH_ACTUAL_ARGV '+json.dumps(command),flush=True)
     print(terminal_marker(run,case,returncode,command,self),flush=True)
+if role in ('ros','daemon') and (root/'transport_cases').is_file():
+    from cli_acceptance import terminal_marker
+    cases=json.loads((root/'transport_cases').read_bytes())
+    if cases!=['transport:a_to_b','transport:b_to_a']:raise ValueError('unsupported transport cases')
+    actual=command if role=='ros' else json.loads((root/'daemon.inspect.json').read_bytes())['argv']
+    print('MDDS_GRAPH_ACTUAL_ARGV '+json.dumps(actual),flush=True)
+    for case in cases:print(terminal_marker(run,case,returncode,actual,self),flush=True)
 raise SystemExit(returncode)

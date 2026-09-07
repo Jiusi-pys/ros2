@@ -102,7 +102,9 @@ def cli_fixture():
                 'Lifespan':'Infinite','Deadline':'Infinite','Liveliness':'AUTOMATIC','Liveliness lease duration':'Infinite'}
         assert item['publisher']['GID'] != item['subscription']['GID']
         topics[topic] = item
-    (root / 'cli_fixture.json').write_text(json.dumps({'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'topics':topics},indent=2)+'\n')
+    fixture={'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'topics':topics}
+    (root/'cli_fixture.json').write_text(json.dumps(fixture,indent=2)+'\n')
+    if (root/'sdk_trace.enabled').exists():print('SDK_PUBLISHER_GIDS '+json.dumps(fixture),flush=True)
 
 def wait(predicate, seconds=65):
     deadline = time.monotonic() + seconds
@@ -210,6 +212,7 @@ def exchange(active, phase, services=False):
                     msg = String()
                     msg.data = payload(a.self_serial, r['name'], phase, index)
                     r['pub'].publish(msg)
+                    if (root/'sdk_trace.enabled').exists():print('SDK_ROS_TX '+json.dumps({'run_id':a.run_id,'nonce':a.nonce,'role':a.role,'name':r['name'],'payload':msg.data}),flush=True)
                     pending[r['name']] += 1
                 if services and r['future'] is None and r['client'].wait_for_service(timeout_sec=0):
                     request = AddTwoInts.Request()
@@ -281,6 +284,7 @@ try:
 
         def callback(msg, r=r, allowed=allowed):
             (r['received'] if msg.data in allowed else r['bad']).append(msg.data)
+            if (root/'sdk_trace.enabled').exists():print('SDK_ROS_RX '+json.dumps({'run_id':a.run_id,'nonce':a.nonce,'role':a.role,'name':r['name'],'payload':msg.data}),flush=True)
         r['sub'] = node.create_subscription(String, path(other, name) + '/out', callback, qos)
 
         def serve(request, response):

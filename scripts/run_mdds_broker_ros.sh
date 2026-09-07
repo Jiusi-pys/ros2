@@ -14,6 +14,8 @@ cycle_graph="${MDDS_ROS_CYCLE_GRAPH:-0}"
 [[ "$cycle_graph" == 0 || ( "$cycle_graph" == 1 && "$remote_cycle" == 1 ) ]] || exit 2
 peer_restart="${MDDS_ROS_PEER_RESTART:-0}"
 [[ "$peer_restart" == 0 || ( "$peer_restart" == 1 && "$cycle_graph" == 1 ) ]] || exit 2
+sdk_trace="${MDDS_ROS_SDK_TRACE:-0}"
+[[ "$sdk_trace" == 0 || ( "$sdk_trace" == 1 && "$remote_cycle" == 0 && "$cli_batch" == none ) ]] || exit 2
 scratch=scripts/mdds_e2e
 export MDDS_RUN_ID="${MDDS_RUN_ID:?explicit fresh run ID required}"
 [[ "$MDDS_RUN_ID" =~ ^[A-Za-z0-9_]{1,32}$ ]] || exit 2
@@ -24,7 +26,7 @@ LOGDIR="ohos_test_logs/ros_broker/$MDDS_OWNED_RUN_ID"
 [[ ! -e "$LOGDIR" ]]; mkdir -p "$LOGDIR"
 "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/cli_package_overlay.py pack "$LOGDIR"
 "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/ros_type_hashes.py "$(pwd -W)" "$LOGDIR/type_hashes.json"
-if [[ "$remote_cycle" == 1 ]]; then cp build_ohos/mdds/mdds_broker_reconnect_fixture "$LOGDIR/mdds_broker_daemon"; else cp build_ohos/mdds/mdds_broker_daemon "$LOGDIR/"; fi
+if [[ "$sdk_trace" == 1 ]]; then cp build_ohos/mdds/mdds_broker_sdk_trace_fixture "$LOGDIR/mdds_broker_daemon"; elif [[ "$remote_cycle" == 1 ]]; then cp build_ohos/mdds/mdds_broker_reconnect_fixture "$LOGDIR/mdds_broker_daemon"; else cp build_ohos/mdds/mdds_broker_daemon "$LOGDIR/"; fi
 cp build_ohos/mdds/mdds_token_exec "$LOGDIR/"
 cp build_ohos/mdds/libmdds.so "$LOGDIR/"
 cp "${MDDS_ROS_RMW_LIBRARY:-build_ohos/rmw_mdds/librmw_mdds.so}" "$LOGDIR/librmw_mdds.so"
@@ -40,6 +42,10 @@ cp scripts/mdds_e2e/{cli_graph_basic,cli_graph_lists,cli_daemon,cli_daemon_guard
 cp scripts/trace_mount_namespace.py "$LOGDIR/"
 cp scripts/mdds_e2e/cli_acceptance_manifest.json "$LOGDIR/"
 printf '%s\n' "$nonce" > "$LOGDIR/nonce"
+if [[ "$sdk_trace" == 1 ]]; then
+  printf '%s\n' "$nonce" > "$LOGDIR/sdk_trace.enabled"
+  printf '["transport:a_to_b","transport:b_to_a"]\n' > "$LOGDIR/transport_cases"
+fi
 if [[ "$remote_cycle" == 1 ]]; then printf '%s\n' "$nonce" > "$LOGDIR/reconnect.enabled"; fi
 if [[ "$cycle_graph" == 1 ]]; then printf '%s\n' "$nonce" > "$LOGDIR/cycle_graph.enabled"; fi
 if [[ "$peer_restart" == 1 ]]; then printf '%s\n' "$nonce" > "$LOGDIR/peer_restart.enabled"; printf 'graph:reconnect\n' > "$LOGDIR/graph_case"; fi
@@ -103,6 +109,13 @@ for board in "$BOARD_A" "$BOARD_B"; do
     output=$(shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/broker_local_run.py' mark-executable --run-id '$MDDS_OWNED_RUN_ID' --artifact '$MDDS_OWNED_REMOTE_DIR/$name' --sha256 '$hash'" | tr -d '\r')
     [[ "$output" == "BROKER_EXEC_READY sha256=$hash" ]]
   done
+  if [[ "$sdk_trace" == 1 ]]; then
+    for name in sdk_trace.enabled transport_cases; do
+      graph_stage_artifact "$board" "$LOGDIR/$name" "$MDDS_OWNED_REMOTE_DIR/$name" "$(graph_sha "$LOGDIR/$name")"
+      printf '%s  %s\n' "$(graph_sha "$LOGDIR/$name")" "$name" >> "$LOGDIR/inputs_$board.sha256"
+    done
+  fi
+
   if [[ "$peer_restart" == 1 ]]; then
     for name in peer_restart.enabled late_graph_hashes.json graph_case; do
       graph_stage_artifact "$board" "$LOGDIR/$name" "$MDDS_OWNED_REMOTE_DIR/$name" "$(graph_sha "$LOGDIR/$name")"
@@ -602,6 +615,9 @@ for board in "$BOARD_A" "$BOARD_B"; do
   for name in ros.log ros.status.json daemon.log daemon.status.json; do
     graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"
   done
+  if [[ "$sdk_trace" == 1 ]]; then
+    for name in sdk_packets.bin cli_fixture.json sdk_trace.enabled transport_cases; do graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"; done
+  fi
   if [[ "$peer_restart" == 1 ]]; then
     for name in peer_restart.enabled peer_restart.go peer_stop.go peer_kill.json peer_worker.log peer_worker.status.json; do graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"; done
     graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/peer_worker.child.pid" "$LOGDIR/$board.peer_worker.child.final.pid"
@@ -830,3 +846,5 @@ elif [[ "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == intr
 fi
 
 if [[ "$remote_cycle" == 1 ]]; then "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/verify_remote_cycle.py "$LOGDIR"; fi
+
+if [[ "$sdk_trace" == 1 ]]; then "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/verify_socket_packets.py "$LOGDIR"; fi

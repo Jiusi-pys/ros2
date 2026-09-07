@@ -72,5 +72,48 @@ baseline. All 15 real-receipt adversaries and 18 generic gate tests passed.
 - Local guard receipt SHA-256:
   `73b3c8f94d64482fddef851c3082951e592731800bb6400d6a4241d956fde99e`.
 
-Aggregate case coverage is 84/98. Remote guard and the remaining graph matrix,
+## Remote guard case
+
+Design: an independently compiled `graph_remote_waiters` target observes the
+opposite board's graph. After both rclcpp waits are pending, the native process
+atomically publishes its phase-ready marker. HDC then directs the peer's
+already-running ROS source to perform that exact change. Source completion is
+recorded before the host acknowledges application to the observer. HDC control
+uses files rather than adding ROS control nodes. The data/graph path remains
+real DSoftBus Socket/Bytes.
+
+Every phase binds run/nonce, index, source role, observer role and a raw source
+operation record. The native binary must identify remote scope; local
+mutations cannot satisfy this case. The remote wait has a separately declared
+five-second bound, with bounded snapshot convergence for multi-endpoint
+service updates. The pre-existing local wait retains its two-second bound.
+No missing notification is retried after the mutation.
+
+The node-only control uses the same native `_rclpy.Node` binding used by rclpy's
+Node constructor, with rosout disabled, without adding high-level parameter
+endpoints. Source-side by-node queries require zero publishers, subscriptions,
+services and clients. It is destroyed through `destroy_when_not_in_use()`.
+This prevents automatic endpoint changes from masking a node-metadata-only
+notification defect.
+
+`test_remote_graph_contract.py` was supplied before implementation: the initial
+four checks failed RED, and an additional bare-node control failed before
+being implemented. All five now pass. The test requirements were retained.
+
+Actual HDC run `graph_remote_20260907_01` passed both directions, both observers
+and all ten phases, including bare node creation/removal. The enclosing broker
+baseline and peer RPC controls passed. All 20 remote receipt adversaries,
+15 prior local receipt regressions and 18 generic gate tests passed.
+
+- Final manifest SHA-256:
+  `cf9b5f145b8d9cd871609df06c4d23b623cdc9414dc661cbcad34c042fbf590c`.
+- Remote guard receipt SHA-256:
+  `b08c74f5f50cbb6d0ae28a6d787d7244a2ea61ce6e62909bab84d7d6180ad036`.
+- Remote native executable SHA-256:
+  `9f9349e9b51fba025b16c8de7dcaaeb2f74db0bc08df3c442b58c26483108aa5`.
+
+Use `MDDS_ROS_CLI_BATCH=graph_remote` with a fresh run ID to repeat. The CMake
+build above produces both native targets; the runner stages the selected one.
+
+Aggregate case coverage is 85/98. The remaining graph/transport matrix,
 all-CLI-on-one-version validation and unified release remain outstanding.

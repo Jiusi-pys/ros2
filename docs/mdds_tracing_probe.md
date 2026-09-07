@@ -2,7 +2,7 @@
 
 Status at this feature commit: five tracing inventory cases have passed the
 formal CLI receipt gate on both boards. Overall case-receipt coverage is
-84/98 including C++/Python `run`, multi-node `launch`, service ownership and local guard graph coverage.
+85/98 including C++/Python `run`, multi-node `launch`, service ownership and local/remote guard graph coverage.
 This is not a full graph, full CLI, or unified release claim. Gateway remains
 outside this goal. The historical tracing batch added five valid case receipts;
 the later scope audit independently removed two earlier overbroad claims.

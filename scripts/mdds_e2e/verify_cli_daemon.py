@@ -38,7 +38,7 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
-    if (root/'cli_batch').read_text().strip()=='graph_waiters':
+    if (root/'cli_batch').read_text().strip() in ('graph_waiters','graph_remote'):
         from cli_graph_waiters import validate
         validate(value['graph_waiters'],root,run,board,nonce)
     if (root/'cli_batch').read_text().strip()=='service_qos':
@@ -283,7 +283,7 @@ def main():
     if (root/'graph_case').exists():
         from service_graph_receipt import emit
         passed.append(emit(root,manifest,reports,run,nonce))
-    if (root/'cli_batch').read_text().strip()=='graph_waiters':
+    if (root/'cli_batch').read_text().strip() in ('graph_waiters','graph_remote'):
         from cli_graph_waiters import emit_receipt
         passed.append(emit_receipt(root,manifest,reports,run,nonce))
     (root/'cli_partial_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')

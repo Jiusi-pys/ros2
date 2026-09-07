@@ -37,6 +37,15 @@ if role=='multicast_send':
 if role=='graph_waiters_start':
     with (root/'graph_waiters.start').open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
+if role.startswith(('remote_change_','remote_applied_')):
+    operation,index=role.rsplit('_',1)
+    if not index.isdecimal() or not 0<=int(index)<10:raise ValueError('invalid remote phase')
+    name=role+('.go' if operation=='remote_change' else '.done')
+    if (root/name).exists():raise ValueError('remote phase already signaled')
+    tmp=root/(name+'.pending')
+    with tmp.open('x') as f:f.write(nonce+'\n')
+    tmp.replace(root/name)
+    raise SystemExit(0)
 if role in ('process_start','process_stop','python_process_stop'):
     name={'process_start':'process.start','process_stop':'process.stop','python_process_stop':'python_process.stop'}[role]
     with (root/name).open('x') as f:f.write(nonce+'\n')
@@ -93,7 +102,7 @@ elif role == 'container':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [str(root/'component_prefix/lib/rclcpp_components/component_container'),'--ros-args','-r','__node:=container_'+label,'-r','__ns:=/components_'+run]
 elif role == 'cli':
-    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters') else 'cli_graph_basic.py'
+    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters','graph_remote') else 'cli_graph_basic.py'
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')

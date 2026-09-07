@@ -285,7 +285,7 @@ try:
 
         def serve(request, response):
             response.sum = request.a + request.b
-            if (root/'cli_batch').read_text().strip()=='graph_waiters' and request.b==170017:
+            if (root/'cli_batch').read_text().strip() in ('graph_waiters','graph_remote') and request.b==170017:
                 assert request.a==int(a.nonce[:7],16)+(1 if other=='A' else 2)
                 value={'run_id':a.run_id,'nonce':a.nonce,'role':a.role,'requester':other,'a':request.a,'b':request.b,'sum':response.sum}
                 with (root/'graph_waiters_server.json').open('x') as f:f.write(json.dumps(value)+'\n')
@@ -316,7 +316,10 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
-    if (root/'cli_batch').read_text().strip()=='service_qos':
+    if (root/'cli_batch').read_text().strip()=='graph_remote':
+        from board_remote_graph import RemoteGraphSource
+        component_probe=RemoteGraphSource(root,a.run_id,a.nonce,a.role,records[0]['node'])
+    elif (root/'cli_batch').read_text().strip()=='service_qos':
         from board_service_qos import ServiceQoSProbe
         component_probe=ServiceQoSProbe(root,a.run_id,a.nonce,a.role,records[0]['node'])
     elif (root/'cli_batch').read_text().strip()=='trace_probe':

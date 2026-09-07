@@ -8,3 +8,8 @@ add_executable(graph_waiters graph_waiters.cpp)
 target_link_libraries(graph_waiters PRIVATE rclcpp::rclcpp
   std_msgs::std_msgs__rosidl_typesupport_cpp
   example_interfaces::example_interfaces__rosidl_typesupport_cpp)
+add_executable(graph_remote_waiters graph_waiters.cpp)
+target_compile_definitions(graph_remote_waiters PRIVATE GRAPH_REMOTE_WAITER=1)
+target_link_libraries(graph_remote_waiters PRIVATE rclcpp::rclcpp
+  std_msgs::std_msgs__rosidl_typesupport_cpp
+  example_interfaces::example_interfaces__rosidl_typesupport_cpp)

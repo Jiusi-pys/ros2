@@ -9,7 +9,14 @@ MATRIX=[
     {'name':'durability_bad','offered':{},'requested':{'durability':1},'compatible':False},
     {'name':'durability_compatible','offered':{'durability':1},'requested':{},'compatible':True},
     {'name':'deadline_bad','offered':{'deadline':2_000_000_000},'requested':{'deadline':1_000_000_000},'compatible':False},
-    {'name':'deadline_compatible','offered':{'deadline':1_000_000_000},'requested':{'deadline':2_000_000_000},'compatible':True}]
+    {'name':'deadline_compatible','offered':{'deadline':1_000_000_000},'requested':{'deadline':2_000_000_000},'compatible':True},
+    {'name':'liveliness_bad','offered':{},'requested':{'liveliness':3},'compatible':False},
+    {'name':'liveliness_compatible','offered':{'liveliness':3},'requested':{},'compatible':True},
+    {'name':'liveliness_manual_equal','offered':{'liveliness':3},'requested':{'liveliness':3},'compatible':True},
+    {'name':'liveliness_lease_bad','offered':{'lease':120_000_000_000},'requested':{'lease':60_000_000_000},'compatible':False},
+    {'name':'liveliness_infinite_bad','offered':{},'requested':{'lease':60_000_000_000},'compatible':False},
+    {'name':'liveliness_lease_compatible','offered':{'lease':60_000_000_000},'requested':{'lease':120_000_000_000},'compatible':True},
+    {'name':'liveliness_lease_equal','offered':{'lease':60_000_000_000},'requested':{'lease':60_000_000_000},'compatible':True}]
 
 def row(name):return next(v for v in MATRIX if v['name']==name)
 def topic(run,role,name):return '/endpoint_qos_'+run+'/'+role+'/'+name

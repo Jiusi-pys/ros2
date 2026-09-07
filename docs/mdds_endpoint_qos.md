@@ -1,6 +1,6 @@
 # Endpoint metadata and QoS matrix
 
-Design and tests precede implementation. Seven declared cases distinguish
+Design and tests precede implementation. The original seven cases distinguish
 graph-visible endpoints from actual matching and delivery: reliable/reliable,
 best-effort/reliable, reliable/best-effort, volatile/transient-local,
 transient-local/volatile, slow/fast deadline and fast/slow deadline. Negative
@@ -21,7 +21,7 @@ MDDS_RUN_ID=<fresh_id> MDDS_ROS_PROFILE_MODE=implicit MDDS_ROS_CLI_BATCH=endpoin
   bash scripts/run_mdds_broker_ros.sh
 ```
 
-Verified HDC run `endpoint_qos_20260907_04`:
+Earlier verified seven-case HDC run `endpoint_qos_20260907_04`:
 
 - Both boards sent three samples for each case. The four compatible cases
   each received exactly three; reliability, durability and deadline negative
@@ -53,5 +53,31 @@ argv, broker-root and library-path checks. Its port was then verified reusable.
 The outer failure-cleanup gap is now fixed and verified by the independent
 failure injection in [CLI failure cleanup](mdds_cli_failure_cleanup.md).
 
-Coverage is 88/98. This is not completed liveliness matching, complete
-graph/failure/isolation coverage or a unified release. Gateway is out of scope.
+The current matrix has 14 cases. Seven additional cases cover automatic versus
+manual-by-topic liveliness, valid manual offers, equal manual kinds, longer
+and infinite offered leases against finite requests, and shorter/equal valid
+leases. The three new negatives retain real discovered peers and all three
+publication attempts. Kind and lease incompatibilities must both emit the
+DDS LIVELINESS policy, matching the imported Fast DDS/Cyclone mappings.
+
+`liveliness_qos_20260907_01` passed with native/Bash exit 0 and successful
+owned cleanup on both boards. Eight compatible pairs each received three
+exact peer samples; six incompatible pairs received zero, with zero strict
+matched counts and one visible publisher/subscriber. Six contract tests,
+twenty receipt adversaries, eighteen generic tests and eleven enclosing
+broker adversaries passed. Before implementation, the native MDDS QoS,
+RMW query and RMW event tests independently reproduced the defects; those
+RED/GREEN archives are documented in each package's `docs/qos_liveliness.md`.
+
+- Current manifest SHA-256:
+  `21c97fce4ef00985a896794ef10e68e638d6ef5b3d9baa0daa59c27011d5141b`.
+- Current endpoint receipt SHA-256:
+  `ba8a20a131050ace1db191ed545d8a7829864805c4e115765bf80a224cbda7a5`.
+- Tested MDDS / RMW library SHA-256:
+  `24e754e20f0ea629ce4f0694dec23629bb305c22788cf781ddc9c23c6fc7964d`,
+  `23afe3759f04e44d68de49512250ac198cdb54cb42ec27b158c7d0ab39e61df2`.
+
+Coverage remains 90/98. Liveliness matching is verified at the existing
+millisecond representation. Sub-millisecond QoS precision, complete
+liveliness expiry/assertion behavior, remaining graph/failure/isolation and
+advanced APIs, and a unified release remain open. Gateway is out of scope.

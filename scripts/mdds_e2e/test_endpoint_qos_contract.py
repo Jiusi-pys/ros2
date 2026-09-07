@@ -3,9 +3,15 @@ import unittest
 
 
 class EndpointQoSContractTest(unittest.TestCase):
-    def test_reliability_durability_deadline_matrix_has_negative_controls(self):
+    def test_reliability_durability_deadline_liveliness_matrix_has_negative_controls(self):
         from endpoint_qos_contract import MATRIX
-        self.assertEqual({v['name'] for v in MATRIX if not v['compatible']},{'reliability_bad','durability_bad','deadline_bad'})
+        self.assertEqual({v['name'] for v in MATRIX if not v['compatible']},{'reliability_bad','durability_bad','deadline_bad','liveliness_bad','liveliness_lease_bad','liveliness_infinite_bad'})
+    def test_liveliness_positive_controls_are_explicit(self):
+        from endpoint_qos_contract import row
+        for name in ('liveliness_compatible','liveliness_manual_equal','liveliness_lease_compatible','liveliness_lease_equal'):
+            self.assertTrue(row(name)['compatible'])
+        self.assertEqual(row('liveliness_manual_equal')['offered']['liveliness'],3)
+        self.assertEqual(row('liveliness_manual_equal')['requested']['liveliness'],3)
     def test_graph_visibility_does_not_imply_match(self):
         from endpoint_qos_contract import validate_counts
         with self.assertRaises(ValueError):validate_counts('reliability_bad',{'publishers':1,'subscriptions':1,'writer_matches':0,'reader_matches':1})

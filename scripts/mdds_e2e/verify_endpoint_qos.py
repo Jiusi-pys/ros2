@@ -13,7 +13,8 @@ def validate(value,root,run,board,nonce):
     if raw.splitlines().count('ENDPOINT_QOS_RESULT '+json.dumps(report))!=1:raise ValueError('QoS result lacks raw process evidence')
     peer=next(b for b in a.TARGET['board_serials'] if b!=board)
     peer_role='B' if role=='A' else 'A'
-    for name,policy in (('reliability_bad','RELIABILITY'),('durability_bad','DURABILITY'),('deadline_bad','DEADLINE')):
+    for name,policy in (('reliability_bad','RELIABILITY'),('durability_bad','DURABILITY'),('deadline_bad','DEADLINE'),
+                        ('liveliness_bad','LIVELINESS'),('liveliness_lease_bad','LIVELINESS'),('liveliness_infinite_bad','LIVELINESS')):
         for source_role in (role,peer_role):
             text="topic '"+topic(run,source_role,name)+"'"
             if not any(text in line and line.endswith('Last incompatible policy: '+policy) for line in raw.splitlines()):raise ValueError('incompatible QoS event policy missing or wrong')

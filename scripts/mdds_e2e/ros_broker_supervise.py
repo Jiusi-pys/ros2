@@ -37,6 +37,13 @@ if role=='multicast_send':
 if role=='graph_waiters_start':
     with (root/'graph_waiters.start').open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
+if role in ('endpoint_qos_go','endpoint_qos_observe'):
+    name='endpoint_qos.go' if role=='endpoint_qos_go' else 'endpoint_qos.observe_go'
+    tmp=root/(name+'.pending')
+    with tmp.open('x') as f:f.write(nonce+'\n')
+    if (root/name).exists():raise ValueError('QoS phase already released')
+    tmp.replace(root/name)
+    raise SystemExit(0)
 if role in ('late_source_go','late_observer_go','late_source_stop'):
     name={'late_source_go':'late_source.go','late_observer_go':'late_observer.go','late_source_stop':'late_source.stop'}[role]
     if (root/name).exists():raise ValueError('late graph phase already released')
@@ -109,7 +116,7 @@ elif role == 'container':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [str(root/'component_prefix/lib/rclcpp_components/component_container'),'--ros-args','-r','__node:=container_'+label,'-r','__ns:=/components_'+run]
 elif role == 'cli':
-    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters','graph_remote','graph_late') else 'cli_graph_basic.py'
+    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters','graph_remote','graph_late','endpoint_qos') else 'cli_graph_basic.py'
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')
@@ -117,7 +124,7 @@ returncode=supervise_command(command, root / (role + '.status.json'), run, role,
 if role=='ros' and (root/'graph_case').is_file():
     from cli_acceptance import terminal_marker
     case=(root/'graph_case').read_text().strip()
-    if case!='graph:service_client_ownership':raise ValueError('unsupported graph case')
+    if case not in ('graph:service_client_ownership','graph:endpoint_metadata'):raise ValueError('unsupported graph case')
     print('MDDS_GRAPH_ACTUAL_ARGV '+json.dumps(command),flush=True)
     print(terminal_marker(run,case,returncode,command,self),flush=True)
 raise SystemExit(returncode)

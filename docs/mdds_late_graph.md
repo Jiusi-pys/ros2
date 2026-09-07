@@ -62,7 +62,7 @@ Earlier attempts remain distinct:
   was recovered only after checking ownership, absence of PID records and
   absence of matching live processes. It is not a functional test result.
 
-Coverage is 87/98. Hidden entities, endpoint QoS matching, duplicates across
+Coverage is 88/98. Hidden entities, additional QoS audit, duplicates across
 participants, churn/failure/recovery/isolation, transport negative cases and
 full advanced-functionality/unified-release validation remain outstanding.
 Gateway is outside the current goal. No complete graph or release is claimed.

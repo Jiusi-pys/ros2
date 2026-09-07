@@ -25,6 +25,9 @@ def check(root):
         for name in ('reconnect.enabled','reconnect.pause','reconnect.resume'):
             if (root/(board+'.'+name)).read_text().strip()!=nonce:raise ValueError('SDK cycle command differs')
         result['boards'].append({'board':board,'pid':pid,'records':records,'receive_nonces':nonces})
+    if (root/'cycle_graph.enabled').exists():
+        from verify_cycle_graph import check as check_graph
+        result['graph_cycle']=check_graph(root)
     return result
 
 if __name__=='__main__':

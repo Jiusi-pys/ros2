@@ -58,10 +58,46 @@ cleanup passed. Four host contract tests, eight actual-receipt adversaries and
 eleven baseline broker adversaries passed. Pilot report SHA-256:
 `90229a89380a3a949fdf6f57cfe8e8233a0b92965eadeeec51bea42de178b505`.
 
-The pilot explicitly reports `full_reconnect_case: false`. Still required:
-snapshots while disconnected, restart of the owned peer with new participant/
-endpoint identities, and complete recovered graph/RPC evidence. Coverage stays
+The pilot explicitly reports `full_reconnect_case: false`. At that stage it
+still lacked disconnected snapshots, peer restart/new identities and full
+recovered graph/RPC evidence. The next section records the graph/RPC extension.
+Coverage stays
 92/98. Physical transport stop/rebuild works; the full reconnect case is not
 accepted yet. Source and native archive details are in MDDS's
 `docs/broker_reconnect_fixture.md`.
 The previous abrupt-process-death case does not substitute for this case.
+
+## Graph withdrawal and restored RPC
+
+The next test program was supplied before implementation in
+`test_cycle_graph_contract.py`, with its missing-module RED preserved. It
+requires an exact local partition of the initial endpoint snapshot during
+the outage and an exact restored snapshot afterward. The collector includes
+native topic names, node/enclave multiplicity, endpoint GIDs, owner/name,
+direction, type/hash and every QoS field. It also queries previously known
+topics/GIDs, so a disappearing catalog entry or missing owner label cannot
+hide a stale endpoint. Client/subscriber-only names remain where appropriate.
+
+Enable this scenario with `MDDS_ROS_CYCLE_GRAPH=1` in addition to the pilot
+variables above. The host waits for the ROS graph to withdraw and for a local
+cross-context message exchange before restoring the SDK. It then waits for
+complete graph equality and a new peer RPC. Local probe entities are removed
+only after both boards have recorded restoration, before the original ROS
+baseline continues. This changes observation/barriers, not the native driver.
+
+HDC run `cycle_graph_20260908_01` passed. Each board changed from 8 nodes and
+68 endpoints to exactly its 4 local nodes and 34 local endpoints during the
+outage. All three local messages arrived. The remote service became unavailable
+and the remote subscription count became zero. Restoration recovered every
+initial endpoint/GID/QoS/type hash and a new peer RPC completed with its actual
+server callback. The baseline's later cross-board messages and cleanup passed.
+
+Five contract tests, eleven graph-receipt adversaries, eight SDK-cycle receipt
+adversaries, eighteen generic acceptance tests and eleven baseline broker
+adversaries passed. Final report SHA-256:
+`784cc1e2964cccf6f70d6c4319688445be3b15b104b4aae80bc45ba6904a2de0`.
+
+Remaining full-case requirement: restart an owned peer process and prove fresh
+participant/endpoint identities, absence of old identities and complete recovered
+graph/data/RPCs. This run deliberately preserves the original ROS contexts and
+does not satisfy that restart requirement. Coverage remains 92/98.

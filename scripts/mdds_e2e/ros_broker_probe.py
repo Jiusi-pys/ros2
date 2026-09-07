@@ -285,6 +285,11 @@ try:
 
         def serve(request, response):
             response.sum = request.a + request.b
+            if (root/'cycle_graph.enabled').exists() and request.b==177717:
+                from abrupt_graph_contract import write_json
+                assert request.a==int(a.nonce[:7],16)+(1 if other=='A' else 2)
+                value={'run_id':a.run_id,'nonce':a.nonce,'role':a.role,'a':request.a,'b':request.b,'sum':response.sum}
+                write_json(root,'cycle_rpc_server.json',value);print('CYCLE_RPC_SERVER '+json.dumps(value),flush=True)
             if (root/'cli_batch').read_text().strip() in ('graph_waiters','graph_remote') and request.b==170017:
                 assert request.a==int(a.nonce[:7],16)+(1 if other=='A' else 2)
                 value={'run_id':a.run_id,'nonce':a.nonce,'role':a.role,'requester':other,'a':request.a,'b':request.b,'sum':response.sum}
@@ -436,6 +441,9 @@ try:
         event_client=records[1]['node'].create_client(AddTwoInts,ns+'/'+other+'/introspect')
         event_client.configure_introspection(records[1]['node'].get_clock(),event_qos,ServiceIntrospectionState.CONTENTS)
         introspection={'client':event_client,'future':None,'written':False,'service':ns+'/'+other+'/introspect','a':int(a.nonce[:7],16)+(100 if a.role=='A' else 200),'b':17}
+    if (root/'cycle_graph.enabled').exists():
+        from board_cycle_graph import CycleGraphProbe
+        component_probe=CycleGraphProbe(root,a.run_id,a.nonce,a.role,records,graph_ok)
     snapshot(1)
     exchange(records, 1, True)
     cli_fixture()

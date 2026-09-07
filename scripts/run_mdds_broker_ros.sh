@@ -10,6 +10,8 @@ cli_batch="${MDDS_ROS_CLI_BATCH:-none}"
 [[ "$cli_batch" == daemon_abort || "$cli_batch" == none || "$cli_batch" == basic || "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone || "$cli_batch" == process_run || "$cli_batch" == process_launch || "$cli_batch" == process_test || "$cli_batch" == statistics || "$cli_batch" == policy || "$cli_batch" == graph_abrupt || "$cli_batch" == graph_churn || "$cli_batch" == graph_duplicate || "$cli_batch" == graph_hidden || "$cli_batch" == graph_late || "$cli_batch" == graph_remote || "$cli_batch" == graph_waiters || "$cli_batch" == endpoint_qos || "$cli_batch" == service_qos || "$cli_batch" == trace_probe || "$cli_batch" == multicast || "$cli_batch" == diagnostics || "$cli_batch" == hello || "$cli_batch" == bags || "$cli_batch" == bag_transform || "$cli_batch" == bag_burst ]] || exit 2
 remote_cycle="${MDDS_ROS_REMOTE_CYCLE:-0}"
 [[ "$remote_cycle" == 0 || ( "$remote_cycle" == 1 && "$cli_batch" == none ) ]] || exit 2
+cycle_graph="${MDDS_ROS_CYCLE_GRAPH:-0}"
+[[ "$cycle_graph" == 0 || ( "$cycle_graph" == 1 && "$remote_cycle" == 1 ) ]] || exit 2
 scratch=scripts/mdds_e2e
 export MDDS_RUN_ID="${MDDS_RUN_ID:?explicit fresh run ID required}"
 [[ "$MDDS_RUN_ID" =~ ^[A-Za-z0-9_]{1,32}$ ]] || exit 2
@@ -32,11 +34,12 @@ manifest_sha=$(graph_sha "$LOGDIR/rclpy_package.json")
 cp scripts/mdds_e2e/{board_graph_ownership,broker_local_run}.py "$LOGDIR/"
 cp "$scratch/ros_broker_supervise.py" "$LOGDIR/ros_broker_supervise.py"
 cp src/Jiusi-pys/mdds/scripts/mdds_broker_service.py "$LOGDIR/"
-cp scripts/mdds_e2e/{cli_graph_basic,cli_graph_lists,cli_daemon,cli_daemon_guard,cli_service_graph,cli_node_info,cli_action,cli_service_echo,cli_service_events,cli_parameters,cli_parameter_changes,cli_lifecycle,board_lifecycle_fixture,cli_components,board_component_probe,component_process,cli_standalone,board_standalone_probe,cli_process,run_python_overlay,board_process_probe,cli_test_report,cli_doctor,cli_policy,cli_multicast,board_trace_probe,cli_graph_waiters,abrupt_graph_contract,abrupt_arm_handoff,abrupt_victim_owner,abrupt_entities,abrupt_graph_snapshot,board_abrupt_victim,board_abrupt_graph,cli_abrupt_graph,churn_graph_contract,board_churn_graph,duplicate_graph_contract,board_duplicate_graph,hidden_graph_contract,board_hidden_graph,cli_hidden_graph,endpoint_qos_contract,board_endpoint_qos,late_graph_contract,late_graph_snapshot,board_late_source,board_late_observer,cli_late_graph,remote_graph_contract,board_remote_graph,service_qos_contract,board_service_qos,owned_trace_namespace,trace_contract,trace_runtime,board_trace_receiver,doctor_runtime,cli_package_overlay,cli_hello,board_hello_probe,bag_contract,bag_transform,bag_burst,topic_statistics,board_topic_statistics,cli_topic_statistics,board_bag_probe,cli_bag,bag_record,cli_acceptance}.py "$LOGDIR/"
+cp scripts/mdds_e2e/{cli_graph_basic,cli_graph_lists,cli_daemon,cli_daemon_guard,cli_service_graph,cli_node_info,cli_action,cli_service_echo,cli_service_events,cli_parameters,cli_parameter_changes,cli_lifecycle,board_lifecycle_fixture,cli_components,board_component_probe,component_process,cli_standalone,board_standalone_probe,cli_process,run_python_overlay,board_process_probe,cli_test_report,cli_doctor,cli_policy,cli_multicast,board_trace_probe,cli_graph_waiters,cycle_graph_contract,board_cycle_graph,abrupt_graph_contract,abrupt_arm_handoff,abrupt_victim_owner,abrupt_entities,abrupt_graph_snapshot,board_abrupt_victim,board_abrupt_graph,cli_abrupt_graph,churn_graph_contract,board_churn_graph,duplicate_graph_contract,board_duplicate_graph,hidden_graph_contract,board_hidden_graph,cli_hidden_graph,endpoint_qos_contract,board_endpoint_qos,late_graph_contract,late_graph_snapshot,board_late_source,board_late_observer,cli_late_graph,remote_graph_contract,board_remote_graph,service_qos_contract,board_service_qos,owned_trace_namespace,trace_contract,trace_runtime,board_trace_receiver,doctor_runtime,cli_package_overlay,cli_hello,board_hello_probe,bag_contract,bag_transform,bag_burst,topic_statistics,board_topic_statistics,cli_topic_statistics,board_bag_probe,cli_bag,bag_record,cli_acceptance}.py "$LOGDIR/"
 cp scripts/trace_mount_namespace.py "$LOGDIR/"
 cp scripts/mdds_e2e/cli_acceptance_manifest.json "$LOGDIR/"
 printf '%s\n' "$nonce" > "$LOGDIR/nonce"
 if [[ "$remote_cycle" == 1 ]]; then printf '%s\n' "$nonce" > "$LOGDIR/reconnect.enabled"; fi
+if [[ "$cycle_graph" == 1 ]]; then printf '%s\n' "$nonce" > "$LOGDIR/cycle_graph.enabled"; fi
 printf '%s\n' "$policy_mode" > "$LOGDIR/policy_mode"
 printf '%s\n' "$cli_batch" > "$LOGDIR/cli_batch"
 if [[ "$cli_batch" == graph_late ]]; then "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/late_graph_hashes.py "$LOGDIR"; fi
@@ -86,7 +89,7 @@ if [[ "$cli_batch" == graph_waiters || "$cli_batch" == graph_remote ]]; then
 fi
 for board in "$BOARD_A" "$BOARD_B"; do
   ready=$(shell "$board" "mkdir '$MDDS_OWNED_REMOTE_DIR/lib' && printf LIB_READY" | tr -d '\r'); [[ "$ready" == LIB_READY ]]
-  for name in mdds_broker_daemon mdds_token_exec board_graph_ownership.py broker_local_run.py ros_broker_supervise.py mdds_broker_service.py libmdds.so librmw_mdds.so ros_broker_probe.py broker_local_ros_probe.py type_description_lifetime.py profile.env rclpy_overlay.tar rclpy_package.json type_hashes.json policy_mode cli_batch cli_graph_basic.py cli_graph_lists.py cli_daemon.py cli_daemon_guard.py cli_service_graph.py cli_node_info.py cli_action.py cli_service_echo.py cli_service_events.py cli_parameters.py cli_parameter_changes.py cli_lifecycle.py board_lifecycle_fixture.py cli_components.py board_component_probe.py component_process.py cli_standalone.py board_standalone_probe.py cli_process.py run_python_overlay.py board_process_probe.py cli_test_report.py cli_doctor.py cli_policy.py cli_multicast.py board_trace_probe.py cli_graph_waiters.py abrupt_graph_contract.py abrupt_arm_handoff.py abrupt_victim_owner.py abrupt_entities.py abrupt_graph_snapshot.py board_abrupt_victim.py board_abrupt_graph.py cli_abrupt_graph.py churn_graph_contract.py board_churn_graph.py duplicate_graph_contract.py board_duplicate_graph.py hidden_graph_contract.py board_hidden_graph.py cli_hidden_graph.py endpoint_qos_contract.py board_endpoint_qos.py late_graph_contract.py late_graph_snapshot.py board_late_source.py board_late_observer.py cli_late_graph.py remote_graph_contract.py board_remote_graph.py service_qos_contract.py board_service_qos.py owned_trace_namespace.py trace_contract.py trace_runtime.py board_trace_receiver.py trace_mount_namespace.py doctor_runtime.py cli_package_overlay.py cli_hello.py board_hello_probe.py bag_contract.py bag_transform.py bag_burst.py topic_statistics.py board_topic_statistics.py cli_topic_statistics.py board_bag_probe.py cli_bag.py bag_record.py cli_acceptance.py cli_acceptance_manifest.json; do
+  for name in mdds_broker_daemon mdds_token_exec board_graph_ownership.py broker_local_run.py ros_broker_supervise.py mdds_broker_service.py libmdds.so librmw_mdds.so ros_broker_probe.py broker_local_ros_probe.py type_description_lifetime.py profile.env rclpy_overlay.tar rclpy_package.json type_hashes.json policy_mode cli_batch cli_graph_basic.py cli_graph_lists.py cli_daemon.py cli_daemon_guard.py cli_service_graph.py cli_node_info.py cli_action.py cli_service_echo.py cli_service_events.py cli_parameters.py cli_parameter_changes.py cli_lifecycle.py board_lifecycle_fixture.py cli_components.py board_component_probe.py component_process.py cli_standalone.py board_standalone_probe.py cli_process.py run_python_overlay.py board_process_probe.py cli_test_report.py cli_doctor.py cli_policy.py cli_multicast.py board_trace_probe.py cli_graph_waiters.py cycle_graph_contract.py board_cycle_graph.py abrupt_graph_contract.py abrupt_arm_handoff.py abrupt_victim_owner.py abrupt_entities.py abrupt_graph_snapshot.py board_abrupt_victim.py board_abrupt_graph.py cli_abrupt_graph.py churn_graph_contract.py board_churn_graph.py duplicate_graph_contract.py board_duplicate_graph.py hidden_graph_contract.py board_hidden_graph.py cli_hidden_graph.py endpoint_qos_contract.py board_endpoint_qos.py late_graph_contract.py late_graph_snapshot.py board_late_source.py board_late_observer.py cli_late_graph.py remote_graph_contract.py board_remote_graph.py service_qos_contract.py board_service_qos.py owned_trace_namespace.py trace_contract.py trace_runtime.py board_trace_receiver.py trace_mount_namespace.py doctor_runtime.py cli_package_overlay.py cli_hello.py board_hello_probe.py bag_contract.py bag_transform.py bag_burst.py topic_statistics.py board_topic_statistics.py cli_topic_statistics.py board_bag_probe.py cli_bag.py bag_record.py cli_acceptance.py cli_acceptance_manifest.json; do
     hash=$(graph_sha "$LOGDIR/$name"); destination="$MDDS_OWNED_REMOTE_DIR/$name"; if [[ "$name" == libmdds.so || "$name" == librmw_mdds.so ]]; then destination="$MDDS_OWNED_REMOTE_DIR/lib/$name"; fi; graph_stage_artifact "$board" "$LOGDIR/$name" "$destination" "$hash"
     printf '%s  %s\n' "$hash" "$name" >> "$LOGDIR/inputs_$board.sha256"
   done
@@ -95,6 +98,10 @@ for board in "$BOARD_A" "$BOARD_B"; do
     output=$(shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/broker_local_run.py' mark-executable --run-id '$MDDS_OWNED_RUN_ID' --artifact '$MDDS_OWNED_REMOTE_DIR/$name' --sha256 '$hash'" | tr -d '\r')
     [[ "$output" == "BROKER_EXEC_READY sha256=$hash" ]]
   done
+  if [[ "$cycle_graph" == 1 ]]; then
+    graph_stage_artifact "$board" "$LOGDIR/cycle_graph.enabled" "$MDDS_OWNED_REMOTE_DIR/cycle_graph.enabled" "$(graph_sha "$LOGDIR/cycle_graph.enabled")"
+    printf '%s  cycle_graph.enabled\n' "$(graph_sha "$LOGDIR/cycle_graph.enabled")" >> "$LOGDIR/inputs_$board.sha256"
+  fi
   if [[ "$remote_cycle" == 1 ]]; then
     graph_stage_artifact "$board" "$LOGDIR/reconnect.enabled" "$MDDS_OWNED_REMOTE_DIR/reconnect.enabled" "$(graph_sha "$LOGDIR/reconnect.enabled")"
     printf '%s  reconnect.enabled\n' "$(graph_sha "$LOGDIR/reconnect.enabled")" >> "$LOGDIR/inputs_$board.sha256"
@@ -501,11 +508,17 @@ for phase in 1 2; do
         return 1
       }
       for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" ready; done
+      if [[ "$cycle_graph" == 1 ]]; then for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" graph_ready; done; fi
       for board in "$BOARD_A" "$BOARD_B"; do shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/ros_broker_supervise.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' cycle_pause '$board' x '$nonce' '$variant'" >/dev/null; done
       for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" paused; done
-      sleep 1
+      if [[ "$cycle_graph" == 1 ]]; then for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" graph_paused; done; else sleep 1; fi
       for board in "$BOARD_A" "$BOARD_B"; do shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/ros_broker_supervise.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' cycle_resume '$board' x '$nonce' '$variant'" >/dev/null; done
       for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" restored; done
+      if [[ "$cycle_graph" == 1 ]]; then
+        for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" graph_restored; done
+        for board in "$BOARD_A" "$BOARD_B"; do shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/ros_broker_supervise.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' cycle_graph_release '$board' x '$nonce' '$variant'" >/dev/null; done
+        for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" graph_done; done
+      fi
     fi
     for board in "$BOARD_A" "$BOARD_B"; do
       for operation in inspect advance; do
@@ -534,6 +547,9 @@ for board in "$BOARD_A" "$BOARD_B"; do
   for name in ros.log ros.status.json daemon.log daemon.status.json; do
     graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"
   done
+  if [[ "$cycle_graph" == 1 ]]; then
+    for name in cycle_graph.enabled cycle_graph.release cycle_rpc_server.json reconnect.graph_ready.json reconnect.graph_paused.json reconnect.graph_restored.json reconnect.graph_done.json; do graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"; done
+  fi
   if [[ "$remote_cycle" == 1 ]]; then
     for name in reconnect.enabled reconnect.pause reconnect.resume reconnect.ready.json reconnect.paused.json reconnect.restored.json reconnect.sdk_stop_1.json reconnect.sdk_stop_2.json; do graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"; done
   fi

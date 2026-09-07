@@ -31,6 +31,10 @@ if role in ('hello_start_doctor','hello_stop_doctor','hello_start_wtf','hello_st
     _,operation,command=role.split('_')
     with (root/('hello_'+command+'.'+operation)).open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
+if role=='cycle_graph_release':
+    if (root/'cycle_graph.enabled').read_text().strip()!=nonce:raise ValueError('wrong cycle graph owner')
+    with (root/'cycle_graph.release').open('x') as f:f.write(nonce+'\n')
+    raise SystemExit(0)
 if role in ('cycle_pause','cycle_resume'):
     if (root/'reconnect.enabled').read_text().strip()!=nonce:raise ValueError('not an owned remote-cycle fixture')
     name='reconnect.pause' if role=='cycle_pause' else 'reconnect.resume'

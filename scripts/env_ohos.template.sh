@@ -18,6 +18,11 @@ fi
 
 export LD_LIBRARY_PATH="$ROS2_HOME/lib:$ROS2_HOME/Lib:${LD_LIBRARY_PATH:-}"
 export AMENT_PREFIX_PATH="$ROS2_HOME"
+# This deployment is built from the Jazzy source workspace. Diagnostics and
+# rosbag metadata need the release identity even when no overlay is inherited.
+export ROS_DISTRO=jazzy
+export ROS_VERSION=2
+export ROS_PYTHON_VERSION=3
 export RCUTILS_COLORIZED_OUTPUT=0
 export RCUTILS_CONSOLE_OUTPUT_FORMAT="[{severity}] [{name}]: {message}"
 export HOME="$ROS2_HOME"

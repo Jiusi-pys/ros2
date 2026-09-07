@@ -44,6 +44,6 @@ The overlay now includes ros2action as well as ros2cli and ros2multicast, so
 the action-list behavior is bound to the tested source. Shared-prefix rollout
 is part of the later unified release gate.
 
-Coverage is 92/98. Failure/recovery, isolation,
+Coverage is 93/98. Failure/recovery, isolation,
 transport negatives, advanced QoS and unified-release validation remain open.
 Gateway is outside the current goal; no complete graph/release is claimed.

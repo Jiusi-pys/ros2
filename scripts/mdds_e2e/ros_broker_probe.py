@@ -444,6 +444,9 @@ try:
     if (root/'cycle_graph.enabled').exists():
         from board_cycle_graph import CycleGraphProbe
         component_probe=CycleGraphProbe(root,a.run_id,a.nonce,a.role,records,graph_ok)
+        if (root/'peer_restart.enabled').exists():
+            from board_peer_restart_graph import PeerRestartGraph,CombinedCycleProbes
+            component_probe=CombinedCycleProbes(component_probe,PeerRestartGraph(root,a.run_id,a.nonce,a.role,records[0]['node']))
     snapshot(1)
     exchange(records, 1, True)
     cli_fixture()

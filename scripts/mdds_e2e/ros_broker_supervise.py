@@ -31,6 +31,11 @@ if role in ('hello_start_doctor','hello_stop_doctor','hello_start_wtf','hello_st
     _,operation,command=role.split('_')
     with (root/('hello_'+command+'.'+operation)).open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
+if role in ('peer_restart','peer_stop'):
+    if (root/'peer_restart.enabled').read_text().strip()!=nonce:raise ValueError('wrong peer restart owner')
+    name='peer_restart.go' if role=='peer_restart' else 'peer_stop.go'
+    with (root/name).open('x') as f:f.write(nonce+'\n')
+    raise SystemExit(0)
 if role=='cycle_graph_release':
     if (root/'cycle_graph.enabled').read_text().strip()!=nonce:raise ValueError('wrong cycle graph owner')
     with (root/'cycle_graph.release').open('x') as f:f.write(nonce+'\n')
@@ -140,6 +145,9 @@ if role == 'daemon':
         if (root/'reconnect.enabled').read_text().strip()!=nonce:raise ValueError('remote-cycle identity differs')
         os.environ.update(MDDS_RECONNECT_CONTROL_ROOT=str(root),MDDS_RECONNECT_RUN=run,MDDS_RECONNECT_NONCE=nonce)
     command = [sys.executable, str(root / 'mdds_broker_service.py'), '--root', str(root / 'brokers'), '--domain', '175', '--daemon', str(root / 'mdds_broker_daemon'), '--token-exec', str(root / 'mdds_token_exec')]
+elif role == 'peer_worker':
+    label='A' if self=='3e01ff55454d202020104033bf453b00' else 'B'
+    command=[sys.executable,str(root/'peer_restart_worker.py'),str(root),run,label,nonce]
 elif role == 'ros':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [sys.executable, str(root / 'ros_broker_probe.py'), '--root', str(root), '--run-id', run, '--role', label, '--self-serial', self, '--peer-serial', peer, '--nonce', nonce, '--manifest-sha', os.environ['MDDS_RCLPY_MANIFEST_SHA']]
@@ -155,7 +163,7 @@ returncode=supervise_command(command, root / (role + '.status.json'), run, role,
 if role=='ros' and (root/'graph_case').is_file():
     from cli_acceptance import terminal_marker
     case=(root/'graph_case').read_text().strip()
-    if case not in ('graph:service_client_ownership','graph:endpoint_metadata','graph:duplicate_node_names','graph:churn','graph:abrupt_exit'):raise ValueError('unsupported graph case')
+    if case not in ('graph:service_client_ownership','graph:endpoint_metadata','graph:duplicate_node_names','graph:churn','graph:abrupt_exit','graph:reconnect'):raise ValueError('unsupported graph case')
     print('MDDS_GRAPH_ACTUAL_ARGV '+json.dumps(command),flush=True)
     print(terminal_marker(run,case,returncode,command,self),flush=True)
 raise SystemExit(returncode)

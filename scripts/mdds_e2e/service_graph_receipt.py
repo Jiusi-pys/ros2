@@ -21,6 +21,16 @@ def emit(root,manifest,reports,run,nonce):
         from verify_abrupt_graph import validate as checker
         key='abrupt_graph';prefix='ABRUPT_GRAPH_RESULT '
         suffixes=('abrupt_graph.json','abrupt_before.json','abrupt_after.json','abrupt_after.ready','abrupt_armed.json','peer_armed.json','victim.ready.json','victim.status.json','victim.log','victim_kill.go','hidden_source.json','hidden_source.go','hidden_cli.go','hidden_source.stop','hidden_source.done','hidden_cli.ready','hidden_cli.done')
+    elif case_name=='graph:reconnect' and mode=='none':
+        from verify_peer_restart import validate_complete as checker
+        key='peer_restart';prefix='PEER_GRAPH_FINAL '
+        suffixes=('peer_restart.enabled','peer_restart.go','peer_stop.go','peer_kill.json','peer_worker.log','peer_worker.status.json','peer_worker.child.pid','peer_worker.child.final.pid')
+        suffixes+=tuple('reconnect.peer_'+stage+'.json' for stage in ('before','paused','old_gone','new_local','restored','final'))
+        suffixes+=tuple('reconnect.peer_'+str(g)+'.'+stage+'.json' for g in (1,2) for stage in ('created','ready','status'))
+        suffixes+=('peer_1.log','peer_2.log','cycle_graph.enabled','cycle_graph.release','cycle_rpc_server.json')
+        suffixes+=tuple('reconnect.graph_'+stage+'.json' for stage in ('ready','paused','restored','done'))
+        suffixes+=tuple('reconnect.'+stage+'.json' for stage in ('ready','paused','restored','sdk_stop_1','sdk_stop_2'))
+        suffixes+=('reconnect.enabled','reconnect.pause','reconnect.resume')
     elif case_name=='graph:churn' and mode=='graph_churn':
         from verify_churn_graph import validate as checker
         key='churn_graph';prefix='CHURN_GRAPH_RESULT '

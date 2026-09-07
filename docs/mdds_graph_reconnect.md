@@ -61,9 +61,7 @@ eleven baseline broker adversaries passed. Pilot report SHA-256:
 The pilot explicitly reports `full_reconnect_case: false`. At that stage it
 still lacked disconnected snapshots, peer restart/new identities and full
 recovered graph/RPC evidence. The next section records the graph/RPC extension.
-Coverage stays
-92/98. Physical transport stop/rebuild works; the full reconnect case is not
-accepted yet. Source and native archive details are in MDDS's
+Coverage at that stage remained 92/98. Source and native archive details are in MDDS's
 `docs/broker_reconnect_fixture.md`.
 The previous abrupt-process-death case does not substitute for this case.
 
@@ -97,7 +95,66 @@ adversaries, eighteen generic acceptance tests and eleven baseline broker
 adversaries passed. Final report SHA-256:
 `784cc1e2964cccf6f70d6c4319688445be3b15b104b4aae80bc45ba6904a2de0`.
 
-Remaining full-case requirement: restart an owned peer process and prove fresh
+The remaining full-case requirement at that stage was to restart an owned peer process and prove fresh
 participant/endpoint identities, absence of old identities and complete recovered
 graph/data/RPCs. This run deliberately preserves the original ROS contexts and
-does not satisfy that restart requirement. Coverage remains 92/98.
+did not satisfy that restart requirement. The completed scenario is recorded below.
+
+## Peer restart test design
+
+Before implementation: add one owned child peer on each board in a namespace
+separate from the baseline. Each child owns all 25 topic/service/action/parameter
+endpoints of a rich ROS node, exchanges three generation-tagged messages and an
+RPC with the other child, and reports its real PID/start and native provenance.
+Pause the real SDK as above, verify the old peer graph is local-only, and send
+SIGKILL only after exact child ownership checks. Wait until the local old peer
+is absent before starting generation 2 while the SDK is still paused.
+
+Require the new local graph and created-process record before restoring the SDK.
+After restoration, both rich peer graphs must have new, disjoint GIDs and new
+enclave generation tags, while endpoint types/QoS remain identical. Both new
+children must complete new generation-tagged messages and RPCs. Stop generation
+2 normally only after both observers record recovery, then require complete peer
+graph removal. Retain old exit -9 and new exit 0 separately. The original main
+ROS contexts continue through the existing graph/RPC cycle. The first contract
+tests are in `test_peer_restart_contract.py`.
+
+## Completed peer restart case
+
+Five independent contract tests were supplied before implementation, with the
+initial missing-module RED retained. `peer_reconnect_20260908_01` correctly
+rejected the fixture's invalid numeric enclave token before peer traffic.
+Generation tokens were changed to valid `g1/g2` names while preserving all
+generation assertions. `peer_reconnect_20260908_02` completed native peer
+replacement but failed with exit 127 because the runner called a nonexistent
+wait helper. Diagnostics remain preserved. The runner now uses
+`graph_wait_status` and distinct initial/final worker identity captures.
+
+Final HDC run `peer_reconnect_20260908_03` passed the full declared sequence.
+Before interruption both observers saw 2 peers and 50 endpoints; during pause,
+each saw only its local peer and 25 endpoints. After owned SIGKILL each local
+old-peer graph became empty before generation 2 was created. New local peers
+were visible while SDK transport was still paused. After restoration both
+observers saw 50 fresh endpoints disjoint from all old GIDs, with unchanged
+types, hashes and QoS and new enclave generation tags. Each generation exchanged
+three exact peer messages and completed a peer RPC. Generation 2 then exited
+normally and the peer graph became empty. Main ROS contexts retained their
+graph/GIDs, local outage traffic, restored RPC and later baseline peer traffic.
+
+Actual PID/start identities: A changed `21317/49519558` to `21417/49520594`;
+B changed `14510/49520818` to `14599/49521558`. Old exits were -9; new exits
+were 0. Worker identity readbacks, ordered native phases, private RMW/library
+provenance and fresh SDK receive nonces were checked. Run/cleanup exits were 0.
+
+Five peer contract tests, 17 peer receipt adversaries, 11 main-graph receipt
+adversaries, 8 SDK receipt adversaries, 18 generic acceptance tests and 11
+baseline broker adversaries passed. A frozen `graph:reconnect` declaration and
+native case-specific terminal markers are required before issuing acceptance.
+
+- Manifest: `ac021a442cdf7fc780fe37ae12a6d608965e6f54d326278bb1d500e9d87f02ca`.
+- Reconnect receipt: `9b6119249143ddcc4c13be8780f3c24467e02b141457584dc882fd5ec5a6a664`.
+- Full cycle report: `cf6cf597f5a7a5f8f8fa21695b41cdbd9cfa80e87fce6e784e3f71d3e2898bb5`.
+
+Coverage is 93/98 across frozen runs. Domain/discovery isolation, dedicated
+transport negatives, advanced API/liveliness work and a unified release remain
+open. Gateway stays outside the current goal.

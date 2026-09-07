@@ -28,8 +28,19 @@ def check(root):
     if (root/'cycle_graph.enabled').exists():
         from verify_cycle_graph import check as check_graph
         result['graph_cycle']=check_graph(root)
+    if (root/'peer_restart.enabled').exists():
+        from verify_peer_restart import check as check_peer
+        result['peer_restart']=check_peer(root)
     return result
 
 if __name__=='__main__':
-    root=Path(sys.argv[1]);value=check(root);p=root/'remote_cycle_report.json';p.write_text(json.dumps(value,indent=2)+'\n')
-    print('REMOTE_CYCLE_PASS sha256='+hashlib.sha256(p.read_bytes()).hexdigest()+' full_reconnect_case=false')
+    root=Path(sys.argv[1]);value=check(root)
+    if (root/'graph_case').exists():
+        from service_graph_receipt import emit
+        run=root.name;nonce=(root/'nonce').read_text().strip()
+        reports={board:{'peer_restart':json.loads((root/(board+'.reconnect.peer_final.json')).read_bytes())} for board in TARGET['board_serials']}
+        manifest=json.loads((root/'cli_acceptance_manifest.json').read_bytes());manifest['run_id']=run
+        if emit(root,manifest,reports,run,nonce)!='graph:reconnect':raise ValueError('reconnection case not accepted')
+        (root/'cli_partial_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');value['full_reconnect_case']=True
+    p=root/'remote_cycle_report.json';p.write_text(json.dumps(value,indent=2)+'\n')
+    print('REMOTE_CYCLE_PASS sha256='+hashlib.sha256(p.read_bytes()).hexdigest()+' full_reconnect_case='+str(value['full_reconnect_case']).lower())

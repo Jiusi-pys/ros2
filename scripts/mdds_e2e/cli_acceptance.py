@@ -325,6 +325,14 @@ def validate_receipt(case, reference, manifest, root):
                      if e['board_serial'] == board and e['argv'][:2] == ['ros2', 'run']}
             if not {('demo_nodes_cpp', 'talker'), ('demo_nodes_py', 'talker')} <= demos:
                 raise ValueError('ros2 run requires actual C++ and Python demo executions on each required board')
+    if case['id'] == 'cli:launch':
+        for execution in executions:
+            children=execution.get('process',{}).get('children',[])
+            if len(children)<2 or any(c.get('native_returncode')!=0 or c.get('native_gone') is not True or c.get('emergency_cleanup') is not False for c in children):
+                raise ValueError('launch requires multiple independently completed native children')
+            pids=[c.get('native',{}).get('pid') for c in children]
+            if any(type(pid) is not int or pid<=0 for pid in pids) or len(set(pids))!=len(pids):
+                raise ValueError('launch child process identities are missing or duplicated')
     if not set(case['execution_boards']) <= execution_boards:
         raise ValueError('functional evidence is missing execution logs from a required board')
     assertions = receipt.get('assertions')

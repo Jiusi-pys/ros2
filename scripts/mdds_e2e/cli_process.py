@@ -24,7 +24,10 @@ def recipe(ns,peer,mode='run'):
         return [('cli:test','process_test',['test',path,'--package-name','mdds_cli_fixture','--junit-xml',expected['junit_file']],expected)]
     if mode=='launch':
         path='/data/local/tmp/ros2/.mdds-owned-runs/'+run+'/process_talker.launch.py';expected['launch_file']=path
-        return [('cli:launch','process_launch',['launch','--noninteractive',path,'node_name:='+expected['node'],'node_namespace:='+space,'output_topic:='+expected['topic']],expected)]
+        secondary={'role':role,'namespace':space,'node':'launch_secondary_'+role,'topic':space+'/'+role+'/secondary_out','artifact_prefix':'secondary_process','launch_label':'talker-2'}
+        secondary['native_args']=['--ros-args','-r','__node:='+secondary['node'],'-r','__ns:='+space,'-r','chatter:='+secondary['topic']]
+        expected['secondary']=secondary
+        return [('cli:launch','process_launch',['launch','--noninteractive',path,'node_name:='+expected['node'],'node_namespace:='+space,'output_topic:='+expected['topic'],'secondary_node_name:='+secondary['node'],'secondary_output_topic:='+secondary['topic']],expected)]
     rows=[('cli:run','process_run',['run','demo_nodes_cpp','talker']+expected['native_args'],expected)]
     python_expected={**expected,'language':'python','artifact_prefix':'python_process','node':'run_python_'+role,'topic':space+'/'+role+'/python_out'}
     python_expected['native_args']=['--ros-args','-r','__node:='+python_expected['node'],'-r','__ns:='+space,'-r','chatter:='+python_expected['topic']]
@@ -43,9 +46,10 @@ def native_matches(record,root,cli_pid,expected):
             and record.get('executable')==exe and record.get('argv')==argv)
 
 
-def native_exit_code(raw,pid):
-    outcomes=[0 for _ in re.finditer(r'(?m)^\[INFO\] \[talker-1\]: process has finished cleanly \[pid '+str(pid)+r'\]$',raw)]
-    outcomes += [int(m.group(1)) for m in re.finditer(r'(?m)^\[ERROR\] \[talker-1\]: process has died \[pid '+str(pid)+r', exit code (-?[0-9]+), cmd ',raw)]
+def native_exit_code(raw,pid,label='talker-1'):
+    label=re.escape(label)
+    outcomes=[0 for _ in re.finditer(r'(?m)^\[INFO\] \['+label+r'\]: process has finished cleanly \[pid '+str(pid)+r'\]$',raw)]
+    outcomes += [int(m.group(1)) for m in re.finditer(r'(?m)^\[ERROR\] \['+label+r'\]: process has died \[pid '+str(pid)+r', exit code (-?[0-9]+), cmd ',raw)]
     return outcomes[0] if len(outcomes)==1 else None
 
 
@@ -87,7 +91,7 @@ def inspect(root,run,pid,python=False):
 
 
 def execute(argv,output,run,board,case,label,expected,nonce):
-    root=output.parent;native=None;shutdown=None;emergency=False
+    root=output.parent;native=None;secondary_native=None;shutdown=None;emergency=False
     stop_path=root/(expected.get('artifact_prefix','process')+'.stop')
     if case=='cli:test':
         with (root/'process_test_config.json').open('x') as config:
@@ -103,19 +107,27 @@ def execute(argv,output,run,board,case,label,expected,nonce):
         try:
             deadline=time.monotonic()+30
             while time.monotonic()<deadline and child.poll() is None:
-                if native is None:
+                if native is None or (case=='cli:launch' and secondary_native is None):
                     for proc in Path('/proc').iterdir():
                         if not proc.name.isdecimal():continue
                         try:
                             stat=(proc/'stat').read_text().rsplit(')',1)[1].split()
                             if int(stat[1])!=child.pid or stat[0]=='Z':continue
+                            if any(n and n['pid']==int(proc.name) for n in (native,secondary_native)):continue
                             info=inspect(root,run,int(proc.name),expected.get('language')=='python')
-                            if not native_matches(info,root,child.pid,expected):raise ValueError('ros2 run child identity differs')
-                            native=info;break
+                            if native_matches(info,root,child.pid,expected):
+                                if native is not None:raise ValueError('duplicate primary launch child')
+                                native=info
+                            elif case=='cli:launch' and native_matches(info,root,child.pid,expected['secondary']):
+                                if secondary_native is not None:raise ValueError('duplicate secondary launch child')
+                                secondary_native=info
+                            else:raise ValueError('ros2 run child identity differs')
+                            if case!='cli:launch':break
                         except (FileNotFoundError,ProcessLookupError):continue
-                if native and stop_path.exists():
+                if native and (case!='cli:launch' or secondary_native) and stop_path.exists():
                     if case=='cli:test':break  # The tests consume the barrier and the framework stops its child.
                     if stop_path.read_text().strip()!=nonce or process_start(child.pid)!=start or process_start(native['pid'])!=native['start']:raise ValueError('ros2 run stop identity differs')
+                    if secondary_native and process_start(secondary_native['pid'])!=secondary_native['start']:raise ValueError('secondary launch child changed before stop')
                     shutdown={'signal':2,'cli_pid':child.pid,'cli_start':start,'native_pid':native['pid'],'native_start':native['start'],'barrier_nonce':nonce}
                     if case=='cli:launch':
                         shutdown['recipient']='cli';child.send_signal(signal.SIGINT)
@@ -143,6 +155,21 @@ def execute(argv,output,run,board,case,label,expected,nonce):
     if case in ('cli:launch','cli:test'):
         detail['native_returncode']=native_exit_code(stdout+'\n'+stderr,native['pid']) if native else None
         passed=passed and detail['native_returncode']==0
+    if case=='cli:launch':
+        secondary_gone=False
+        if secondary_native:
+            try:
+                stat=(Path('/proc')/str(secondary_native['pid'])/'stat').read_text().rsplit(')',1)[1].split()
+                secondary_gone=stat[19]!=secondary_native['start'] or stat[0]=='Z'
+            except FileNotFoundError:secondary_gone=True
+            if not secondary_gone and process_start(secondary_native['pid'])==secondary_native['start']:
+                os.kill(secondary_native['pid'],signal.SIGKILL)
+        secondary_shutdown={**shutdown,'native_pid':secondary_native['pid'],'native_start':secondary_native['start']} if shutdown and secondary_native else None
+        secondary={'native':secondary_native,'shutdown':secondary_shutdown,'native_gone':secondary_gone,
+                   'emergency_cleanup':emergency or not secondary_gone,
+                   'native_returncode':native_exit_code(stdout+'\n'+stderr,secondary_native['pid'],label='talker-2') if secondary_native else None}
+        detail['children']=[dict(detail),secondary]
+        passed=passed and secondary_gone and secondary['native_returncode']==0 and secondary_shutdown is not None
     if case=='cli:test' and passed:
         from cli_test_report import validate_xml
         detail['junit']=validate_xml((root/'process_test.junit.xml').read_text())

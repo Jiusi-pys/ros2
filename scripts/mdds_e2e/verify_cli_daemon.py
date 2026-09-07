@@ -121,7 +121,8 @@ def validate_report(value, root, run, board, nonce):
             raw_policy=acceptance.read_artifact({**reference,'path':board+'.'+reference['path']},root).decode()
             validate_policy(raw_policy,expected_policy(run))
         elif case in ('cli:run','cli:launch','cli:test'):
-            from verify_process import validate
+            from verify_process import validate,validate_multi_launch
+            if case=='cli:launch':validate=validate_multi_launch
             validate(execution,expected,raw,root,run,board,nonce)
         elif case=='cli:component/standalone':
             from verify_standalone import validate
@@ -225,6 +226,8 @@ def main():
                 names=['run_python.json','run_python.zip','process_python_talker']+[board+'.'+suffix for board in reports for suffix in ('python_process_received.json','python_process_gone.json','python_process.stop','run_python_ready.json')]
                 receipt['python_demo_evidence']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
             if case['id']=='cli:launch':receipt['launch_definition']={'path':'process_talker.launch.py','sha256':acceptance.digest((root/'process_talker.launch.py').read_bytes())}
+            if case['id']=='cli:launch':
+                receipt['secondary_launch_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in ('secondary_process_received.json','secondary_process_gone.json')]
             if case['id']=='cli:test':
                 names=[board+'.'+suffix for board in reports for suffix in ('process_test.junit.xml','process_test_config.json','process_test_assertions.json')]+['peer_talker_test.py','mdds_cli_fixture.package.xml','mdds_cli_fixture.marker']
                 receipt['launch_test_evidence']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]

@@ -278,6 +278,11 @@ def main():
                 while time.monotonic()<deadline and not gone_path.exists():time.sleep(.1)
                 proof=json.loads(gone_path.read_text())
                 if proof['run_id']!=run or proof['nonce']!=nonce:raise ValueError('process withdrawal identity differs')
+                if case=='cli:launch':
+                    secondary=root/'secondary_process_gone.json';deadline=time.monotonic()+12
+                    while time.monotonic()<deadline and not secondary.exists():time.sleep(.1)
+                    proof=json.loads(secondary.read_bytes())
+                    if proof['run_id']!=run or proof['nonce']!=nonce or proof['kind']!='launch_secondary':raise ValueError('secondary launch withdrawal differs')
             if case=='cli:bag/play':
                 marker=root/('bag_'+wanted['storage']+'_played.json');deadline=time.monotonic()+12
                 while time.monotonic()<deadline and not marker.exists():time.sleep(.1)

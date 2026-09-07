@@ -5,13 +5,14 @@ import cli_acceptance as a
 from cli_process import native_matches,native_exit_code
 
 
-def validate(execution,expected,raw,root,run,board,nonce):
+def validate(execution,expected,raw,root,run,board,nonce,detail_override=None):
     python=expected.get('language')=='python';artifact_prefix=expected.get('artifact_prefix','process')
     for observed_board in a.TARGET['board_serials']:
         for stage in ('ready','start','stop'):
-            prefix=artifact_prefix if stage=='stop' else 'process'
+            prefix=artifact_prefix if stage=='stop' and python else 'process'
             if (root/(observed_board+'.'+prefix+'.'+stage)).read_text().strip()!=nonce:raise ValueError('process barrier differs')
-    detail=execution['process'];native=detail['native'];remote='/data/local/tmp/ros2/.mdds-owned-runs/'+run
+    detail=execution['process'] if detail_override is None else detail_override
+    native=detail['native'];remote='/data/local/tmp/ros2/.mdds-owned-runs/'+run
     if not native_matches(native,remote,execution['child_pid'],expected) or native.get('run_id')!=run or native.get('owned_udp')!=[]:raise ValueError('CLI native child differs')
     hashes={remote+'/lib/'+name:a.digest((root/name).read_bytes()) for name in ('libmdds.so','librmw_mdds.so','libtalker_library.so')}
     if (root/'librclcpp.so').is_file():hashes[remote+'/lib/librclcpp.so']=a.digest((root/'librclcpp.so').read_bytes())
@@ -44,9 +45,10 @@ def validate(execution,expected,raw,root,run,board,nonce):
         definition=root/'process_talker.launch.py';sha=a.digest(definition.read_bytes())
         if (root/('inputs_'+board+'.sha256')).read_text().splitlines().count(sha+'  process_talker.launch.py')!=1:raise ValueError('launch file differs from staged input')
         pid=str(native['pid'])
-        if detail.get('native_returncode')!=0 or native_exit_code(raw,native['pid'])!=0 or raw.count('process started with pid ['+pid+']')!=1 or raw.count("sending signal 'SIGINT' to process[talker-1]")!=1:raise ValueError('launch did not manage native startup and shutdown')
+        label=expected.get('launch_label','talker-1')
+        if detail.get('native_returncode')!=0 or native_exit_code(raw,native['pid'],label=label)!=0 or raw.count('process started with pid ['+pid+']')!=1 or raw.count("sending signal 'SIGINT' to process["+label+"]")!=1:raise ValueError('launch did not manage native startup and shutdown')
     if detail['shutdown']!=shutdown or detail['native_gone'] is not True or detail['emergency_cleanup'] is not False or execution['returncode']!=0:raise ValueError('CLI native process did not stop cleanly')
-    if raw.splitlines().count('MDDS_CLI_PROCESS '+json.dumps(detail))!=1 or 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('CLI process/transport log differs')
+    if raw.splitlines().count('MDDS_CLI_PROCESS '+json.dumps(execution['process']))!=1 or 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('CLI process/transport log differs')
     peer=next(b for b in a.TARGET['board_serials'] if b!=board)
     received=json.loads((root/(peer+'.'+artifact_prefix+'_received.json')).read_text());gone=json.loads((root/(peer+'.'+artifact_prefix+'_gone.json')).read_text())
     for stage,proof in [('received',received),('gone',gone)]:
@@ -66,3 +68,14 @@ def validate(execution,expected,raw,root,run,board,nonce):
         numbers.append(int(match[1]))
     if numbers!=list(range(numbers[0],numbers[0]+len(numbers))):raise ValueError('CLI child sample order differs')
     if gone.get('node_absent') is not True or gone.get('publisher_absent') is not True:raise ValueError('CLI child graph did not withdraw')
+
+
+def validate_multi_launch(execution,expected,raw,root,run,board,nonce):
+    detail=execution['process'];children=detail.get('children',[])
+    if len(children)!=2 or children[0]!={k:v for k,v in detail.items() if k!='children'}:raise ValueError('launch primary child proof differs')
+    if children[0]['native']['pid']==children[1]['native']['pid']:raise ValueError('launch reused a child identity')
+    validate(execution,expected,raw,root,run,board,nonce,detail_override=children[0])
+    validate(execution,expected['secondary'],raw,root,run,board,nonce,detail_override=children[1])
+    peer=next(b for b in a.TARGET['board_serials'] if b!=board)
+    records=[json.loads((root/(peer+'.'+prefix+'_received.json')).read_bytes()) for prefix in ('process','secondary_process')]
+    if records[0]['endpoint']['gid']==records[1]['endpoint']['gid']:raise ValueError('launch nodes share one endpoint identity')

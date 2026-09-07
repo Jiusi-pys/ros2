@@ -318,8 +318,8 @@ try:
         from board_hello_probe import HelloProbe
         component_probe=HelloProbe(root,a.run_id,a.nonce,a.self_serial,other,records[1]['node'])
     elif (root/'cli_batch').read_text().strip() in ('process_run','process_launch','process_test'):
-        from board_process_probe import ProcessProbe,RunProbes
-        probe=RunProbes if (root/'cli_batch').read_text().strip()=='process_run' else ProcessProbe
+        from board_process_probe import ProcessProbe,RunProbes,LaunchProbes
+        probe={'process_run':RunProbes,'process_launch':LaunchProbes,'process_test':ProcessProbe}[(root/'cli_batch').read_text().strip()]
         component_probe=probe(root,a.run_id,a.nonce,a.self_serial,other,records[1]['node'])
     elif (root/'cli_batch').read_text().strip()=='statistics':
         from board_topic_statistics import StatisticsProbe

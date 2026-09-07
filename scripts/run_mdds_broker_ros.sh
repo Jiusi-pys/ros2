@@ -274,7 +274,9 @@ for phase in 1 2; do
           for board in "$BOARD_A" "$BOARD_B"; do
             ready=false
             for ((attempt=0;attempt<100;++attempt)); do
-              value=$(shell "$board" "if test -f '$MDDS_OWNED_REMOTE_DIR/$marker'; then printf PROCESS_READY; elif test -f '$MDDS_OWNED_REMOTE_DIR/cli.status.json'; then printf CLI_EXITED; fi" | tr -d '\r')
+              required="test -f '$MDDS_OWNED_REMOTE_DIR/$marker'"
+              if [[ "$cli_batch" == process_launch && "$stage" == received ]]; then required="$required && test -f '$MDDS_OWNED_REMOTE_DIR/secondary_process_received.json'"; fi
+              value=$(shell "$board" "if $required; then printf PROCESS_READY; elif test -f '$MDDS_OWNED_REMOTE_DIR/cli.status.json'; then printf CLI_EXITED; fi" | tr -d '\r')
               if [[ "$value" == PROCESS_READY ]]; then ready=true;break;fi
               [[ "$value" != CLI_EXITED ]] || break
               sleep 0.2
@@ -458,6 +460,9 @@ for board in "$BOARD_A" "$BOARD_B"; do
         for name in python_process_received.json python_process_gone.json python_process.stop run_python_ready.json; do
           graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"
         done
+      fi
+      if [[ "$cli_batch" == process_launch ]]; then
+        for name in secondary_process_received.json secondary_process_gone.json; do graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"; done
       fi
       for name in process_received.json process_gone.json process.ready process.start process.stop; do
         graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"

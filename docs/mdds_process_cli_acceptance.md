@@ -3,8 +3,8 @@
 ## Complete C++ and Python ros2 run coverage
 
 Current status: `cli:run` is verified on both RK3588A boards by
-`cli_run_languages_20260907_03`. Coverage is 81/98 after restoring this case;
-multi-node `cli:launch`, the remaining graph/transport matrix and final unified
+`cli_run_languages_20260907_03`. Coverage is 82/98 after the multi-node launch
+verification below; the remaining graph/transport matrix and final unified
 release remain incomplete. Gateway is outside the current goal.
 
 Design: execute the installed C++ talker, prove peer reception and retirement,
@@ -98,7 +98,45 @@ to 68/98. Launch/test, remaining commands, the full graph matrix, historical
 stress observations and final single-release acceptance remain unfinished.
 No gateway acceptance or push is implied.
 
-## ros2 launch
+## Complete multi-node ros2 launch coverage
+
+Design: one actual launch command creates two independent native C++ talkers
+with distinct ROS node names and topic remaps. Each remote observer verifies
+both publishers independently. The host releases the stop barrier only after
+both boards have received both streams. It signals the launch CLI, which must
+forward SIGINT to both children and collect each exit. CLI return code 0 cannot
+hide either child failure. Native PID/start/argv/hash, endpoint GID/type/hash,
+ordered peer samples and per-kind retirement evidence remain mandatory.
+
+`test_cli_launch_multi.py` was supplied before implementation. Four checks
+failed RED: one Node action, no secondary arguments, no independently selected
+child-exit parser, and acceptance of the old single-node receipt. All four now
+pass. The original six launch/child utilities and 18 CLI gate tests also pass.
+No original functional requirement was removed to make this feature pass.
+
+Run `cli_launch_multi_20260907_01` completed through HDC on both RK3588A boards:
+
+- A's launched children 22782 and 22783 both returned 0; B's 11736 and 11737
+  both returned 0. These are historical PID identities bound to this run's
+  start-time records, not current process claims.
+- Each board received `Hello World: 1`, `2`, `3` from each peer publisher.
+  Primary and secondary endpoint GIDs differed, and both node kinds withdrew.
+- The enclosing actual DSoftBus broker data/service/graph baseline passed,
+  including 11 baseline receipt adversaries.
+- All 24 launch receipt tests pass, covering a missing secondary child,
+  duplicate PID, wrong binary, surviving child, masked secondary crash,
+  missing signal forwarding, reused GID/kind and missing peer samples.
+  The preceding C++/Python run bundle still passes its 20 receipt tests.
+- CLI manifest SHA-256:
+  `fe64506c8ab1b3c0a8c54229f8c24e08d2e43187beee7400db921b811d355a84`.
+
+The generic CLI gate now rejects a launch receipt without multiple distinct,
+successfully completed native children. Deep validation binds both children
+to the actual launch output and independent peer observations. The historical
+single-node artifacts below remain narrower evidence and are superseded for
+full-case acceptance.
+
+## Earlier single-node ros2 launch evidence
 
 Mode `MDDS_ROS_CLI_BATCH=process_launch` runs the staged
 `process_talker.launch.py` through the actual CLI, with declared launch

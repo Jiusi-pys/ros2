@@ -13,6 +13,7 @@ class ProcessProbe:
         assert self.kind in ('run','launch','test')
         self.prefix='process';self.minimum=1
         if language=='python':self.kind='run_python';self.topic=self.space+'/'+peer+'/python_out';self.prefix='python_process';self.minimum=0
+        if language=='secondary':self.kind='launch_secondary';self.topic=self.space+'/'+peer+'/secondary_out';self.prefix='secondary_process'
         def callback(message):
             match=re.fullmatch('Hello World: (0|[1-9][0-9]*)',message.data);assert match and int(match[1])>=self.minimum
             if self.received:assert int(match[1])==int(self.received[-1].split(': ')[1])+1
@@ -37,5 +38,11 @@ class ProcessProbe:
 
 class RunProbes:
     def __init__(self,*args):self.probes=[ProcessProbe(*args,language=language) for language in ('cpp','python')]
+    def tick(self):
+        for probe in self.probes:probe.tick()
+
+
+class LaunchProbes:
+    def __init__(self,*args):self.probes=[ProcessProbe(*args,language=language) for language in ('cpp','secondary')]
     def tick(self):
         for probe in self.probes:probe.tick()

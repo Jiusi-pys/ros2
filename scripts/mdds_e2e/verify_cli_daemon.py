@@ -33,6 +33,9 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
+    if (root/'cli_batch').read_text().strip()=='statistics':
+        from verify_topic_statistics import validate
+        validate(value,root,run,board,nonce)
     if (root/'cli_batch').read_text().strip()=='standalone' and value.get('standalone_start_nonce')!=nonce:raise ValueError('standalone started without matching barrier')
     if (root/'cli_batch').read_text().strip()=='components':
         from verify_components import validate
@@ -73,7 +76,8 @@ def validate_report(value, root, run, board, nonce):
         if case!=expected_case or execution['argv']!=argv or result['expected']!=expected or not result['passed']:
             raise ValueError('wrong CLI lifecycle recipe')
         absent=case=='cli:param/delete' and expected.get('kind')=='absent'
-        if execution['returncode'] not in ((1,) if absent else ((0,2) if case=='cli:service/echo' else (0,))) or execution['board_serial']!=board or execution['child_pid']<=0 or not str(execution['child_start']).isdecimal():raise ValueError('CLI child identity/exit failed')
+        controlled=case in ('cli:service/echo','cli:topic/hz','cli:topic/bw','cli:topic/delay')
+        if execution['returncode'] not in ((1,) if absent else ((0,2) if controlled else (0,))) or execution['board_serial']!=board or execution['child_pid']<=0 or not str(execution['child_start']).isdecimal():raise ValueError('CLI child identity/exit failed')
         log_ref={**execution['log'],'path':board+'.'+execution['log']['path']}
         raw=acceptance.read_artifact(log_ref,root).decode()
         if absent:
@@ -201,6 +205,10 @@ def main():
                             path=board+'.'+result['label']+suffix
                             artifacts.append({'path':path,'sha256':acceptance.digest((root/path).read_bytes())})
                 receipt['transformation_artifacts']=artifacts
+        if case['id'] in ('cli:topic/hz','cli:topic/bw','cli:topic/delay'):
+            verb=case['id'].split('/')[-1]
+            names=[board+'.stats_'+verb+suffix for board in reports for suffix in ('_sent.json','_received.json','.go')]
+            receipt['statistics_artifacts']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

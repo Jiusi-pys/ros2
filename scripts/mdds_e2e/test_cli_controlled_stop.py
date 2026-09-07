@@ -30,6 +30,19 @@ class ControlledStop(unittest.TestCase):
             self.execution['returncode']=value
             with self.subTest(returncode=value),self.assertRaises(ValueError):self.validate(**kwargs)
     def test_requested_sigint(self):self.validate()
+    def test_statistics_commands_support_requested_sigint(self):
+        for verb in ('hz','bw','delay'):
+            with self.subTest(verb=verb):
+                self.case.update(id='cli:topic/'+verb,command=['ros2','topic',verb])
+                self.execution['argv']=['ros2','topic',verb,'/fixture']
+                self.validate()
+    def test_statistics_cannot_claim_unrequested_stop(self):
+        self.execution.pop('controlled_stop')
+        for verb in ('hz','bw','delay'):
+            with self.subTest(verb=verb):
+                self.case.update(id='cli:topic/'+verb,command=['ros2','topic',verb])
+                self.execution.update(argv=['ros2','topic',verb,'/fixture'],returncode=2)
+                self.reject()
     def test_clean_exit_after_requested_stop(self):self.execution['returncode']=0;self.validate()
     def test_unrequested(self):self.execution.pop('controlled_stop');self.reject()
     def test_other_command(self):self.case['id']='cli:service/call';self.reject()

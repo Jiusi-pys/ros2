@@ -26,6 +26,9 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='statistics':
+        from topic_statistics import recipe
+        return recipe(ns,peer,nonce)
     if mode=='bag_burst':
         from bag_burst import recipe
         return recipe(ns,peer,nonce)
@@ -49,6 +52,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case in ('cli:topic/hz','cli:topic/bw','cli:topic/delay'):return True  # Independently checked against peer fixture records.
     if case=='cli:bag/burst':return True  # Exact peer proof and controlled player exit are mandatory.
     if case in ('cli:bag/convert','cli:bag/reindex'):return True  # Mandatory native and independent file checks follow.
     if case.startswith('cli:bag/'):return bag_oracle(case,stdout,expected)
@@ -148,7 +152,10 @@ def main():
         if case in ('cli:bag/convert','cli:bag/reindex'):
             from bag_transform import prepare
             preparation=prepare(root,expected)
-        if case=='cli:service/echo':value=execute_echo(['ros2']+args,output,run,board,case,label,expected,nonce)
+        if case in ('cli:topic/hz','cli:topic/bw','cli:topic/delay'):
+            from cli_topic_statistics import execute as execute_statistics
+            value=execute_statistics(['ros2']+args,output,run,board,case,label,expected,nonce)
+        elif case=='cli:service/echo':value=execute_echo(['ros2']+args,output,run,board,case,label,expected,nonce)
         elif case=='cli:component/standalone':value=execute_standalone(['ros2']+args,output,run,board,case,label,expected,nonce)
         elif case=='cli:bag/record':value=execute_record(['ros2']+args,output,run,board,case,label,expected,nonce)
         elif case=='cli:bag/burst':

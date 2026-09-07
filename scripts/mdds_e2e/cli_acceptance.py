@@ -290,7 +290,7 @@ def validate_receipt(case, reference, manifest, root):
         if '--help' in argv or '-h' in argv:
             raise ValueError('help output is not functional evidence')
         code=execution.get('returncode')
-        controlled=case['id']=='cli:service/echo'
+        controlled=case['id'] in ('cli:service/echo','cli:topic/hz','cli:topic/bw','cli:topic/delay')
         absent=case['id']=='cli:param/delete' and execution.get('expected_failure')=='parameter_not_set'
         if 'expected_failure' in execution and not absent:raise ValueError('unsupported expected failure')
         if type(code) is not int or code not in ((1,) if absent else ((0,2) if controlled else (0,))):

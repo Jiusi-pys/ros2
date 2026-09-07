@@ -16,12 +16,14 @@ from board_graph_ownership import process_start
 
 def inspect_process(pid,root,storage):
     proc=Path('/proc')/str(pid);paths=set()
-    names={'libmdds.so','librmw_mdds.so','librosbag2_storage_'+storage+'.so'}
+    names={'libmdds.so','librmw_mdds.so'}
+    if storage is not None:names.add('librosbag2_storage_'+storage+'.so')
     for line in (proc/'maps').read_text().splitlines():
         parts=line.split(None,5)
         if len(parts)==6 and Path(parts[5]).name in names:paths.add(parts[5])
     # The deployed lib directory links to Lib; /proc/maps names the target.
-    wanted={str(root/'lib/libmdds.so'),str(root/'lib/librmw_mdds.so'),'/data/local/tmp/ros2/Lib/librosbag2_storage_'+storage+'.so'}
+    wanted={str(root/'lib/libmdds.so'),str(root/'lib/librmw_mdds.so')}
+    if storage is not None:wanted.add('/data/local/tmp/ros2/Lib/librosbag2_storage_'+storage+'.so')
     if paths!=wanted:raise ValueError('recorder library paths differ: '+repr(sorted(paths)))
     sockets=set()
     for fd in (proc/'fd').iterdir():

@@ -28,6 +28,11 @@ def validate_native_link(raw):
 
 
 def validate_report(value, root, run, board, nonce):
+    if (root/'ros2cli_overlay.json').exists():
+        overlay=json.loads((root/'ros2cli_overlay.json').read_text())
+        if acceptance.digest((root/'ros2cli_overlay.zip').read_bytes())!=overlay['archive_sha256']:raise ValueError('CLI source overlay archive differs')
+        ready=json.loads((root/(board+'.ros2cli_overlay_ready.json')).read_text())
+        if ready!={'run_id':run,'manifest_sha256':acceptance.digest((root/'ros2cli_overlay.json').read_bytes()),'files':len(overlay['files'])}:raise ValueError('CLI source overlay readiness differs')
     validate_native_link((root/(board+'.daemon.log')).read_text())
     remote='/data/local/tmp/ros2/.mdds-owned-runs/'+run
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
@@ -103,6 +108,11 @@ def validate_report(value, root, run, board, nonce):
             if server!={**expected,'run_id':run,'nonce':nonce,'board':peer_board,'count':1}:raise ValueError('peer service callback differs')
             if (root/(peer_board+'.ros.log')).read_text().splitlines().count('CLI_INTROSPECTION_SERVER '+json.dumps(server))!=1:raise ValueError('peer service callback missing')
         elif case=='cli:bag/record':pass  # Native storage and exact byte-level samples checked above.
+        elif case=='cli:security/generate_policy':
+            from cli_policy import expected_policy,validate_policy
+            reference=execution['policy_file']
+            raw_policy=acceptance.read_artifact({**reference,'path':board+'.'+reference['path']},root).decode()
+            validate_policy(raw_policy,expected_policy(run))
         elif case in ('cli:run','cli:launch','cli:test'):
             from verify_process import validate
             validate(execution,expected,raw,root,run,board,nonce)
@@ -234,6 +244,12 @@ def main():
             command=case['id'].split(':')[1].split('/')[0]
             names=['doctor_manifest.json','doctor_application.zip']+[board+'.hello_'+command+suffix for board in reports for suffix in ('_received.json','_gone.json','.ready','.start','.observed','.stop')]
             receipt['hello_evidence']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
+        if case['id']=='cli:security/generate_policy':
+            names=[board+'.policy_'+mode+'.xml' for board in reports for mode in ('cached','direct')]
+            receipt['policy_artifacts']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
+        if (root/'ros2cli_overlay.json').exists():
+            names=['ros2cli_overlay.json','ros2cli_overlay.zip']+[board+'.ros2cli_overlay_ready.json' for board in reports]
+            receipt['cli_source_overlay']=[{'path':name,'sha256':acceptance.digest((root/name).read_bytes())} for name in names]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

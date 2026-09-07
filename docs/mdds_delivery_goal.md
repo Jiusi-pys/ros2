@@ -14,6 +14,13 @@ ROS 2 CLI command's real operation, and complete graph semantics. Missing,
 skipped, substituted or failing cases keep this gate closed. Diagnostic
 commands that explicitly exercise UDP do not substitute for middleware proof.
 
+The user's latest revision explicitly requires HDC execution on the actual
+RK3588A devices and successful cross-board ROS 2/rmw_mdds/MDDS interaction.
+Acceptance must bind the explicit board serials, actual process/exit records,
+loaded binary hashes and exact peer receiving evidence. Host-only tests,
+cross-compilation, mocks, deployment success and one-board loopback do not
+replace this requirement.
+
 The user removed mdds_gateway and all gateway coordination/loop/deduplication
 requirements from the active objective on 2026-09-07. Existing gateway work is
 preserved but is not implementation or release scope for this objective.

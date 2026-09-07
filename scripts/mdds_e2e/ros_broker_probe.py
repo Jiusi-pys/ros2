@@ -355,7 +355,7 @@ try:
             (root/'parameter_events.json').write_text(json.dumps({'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'events':parameter_events})+'\n')
             print('CLI_PARAMETER_EVENT '+json.dumps(record),flush=True)
         parameter_event_sub=records[1]['node'].create_subscription(ParameterEvent,'/parameter_events',on_parameter_event,QoSProfile(depth=32,reliability=ReliabilityPolicy.RELIABLE))
-    if (root/'cli_batch').read_text().strip() == 'daemon':
+    if (root/'cli_batch').read_text().strip() in ('daemon','policy'):
         from rclpy.action import ActionClient, ActionServer
         from example_interfaces.action import Fibonacci
         def execute_action(handle):

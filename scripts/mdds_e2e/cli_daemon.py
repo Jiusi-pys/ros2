@@ -26,6 +26,9 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='policy':
+        from cli_policy import recipe
+        return recipe(ns,peer,nonce)
     if mode=='hello':
         from cli_hello import recipe
         return recipe(ns,peer,nonce)
@@ -67,6 +70,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case=='cli:security/generate_policy':return True  # Exact policy artifact verification is mandatory.
     if case in ('cli:doctor/hello','cli:wtf/hello'):
         from cli_hello import summary
         return summary(stdout,expected) is not None
@@ -109,6 +113,14 @@ def execute(argv, directory, run, board, case, label, expected):
         stdout, stderr = stdout.decode(), stderr.decode()
         absent=case=='cli:param/delete' and expected.get('kind')=='absent'
         passed = child.returncode == (1 if absent else 0) and oracle(case,stdout,expected)
+        policy_file=None;policy_error=None
+        if case=='cli:security/generate_policy' and passed:
+            from cli_policy import expected_policy,validate_policy
+            path=directory.parent/('policy_'+expected['mode']+'.xml')
+            try:
+                validate_policy(path.read_text(),expected_policy(run))
+                policy_file={'path':path.name,'sha256':acceptance.digest(path.read_bytes())}
+            except (OSError,ValueError) as error:passed=False;policy_error=str(error)
         if absent:
             errors=[line.strip() for line in stderr.splitlines() if line.strip() and not line.startswith('[INFO] [rmw_mdds]: mdds transports active: dsoftbus(')]
             passed=passed and errors==['Parameter not set']
@@ -131,6 +143,8 @@ def execute(argv, directory, run, board, case, label, expected):
             'argv':argv,'actual_argv':actual,'child_pid':child.pid,'child_start':start,'board_serial':board,
             'returncode':child.returncode,'log':{'path':log.name,'sha256':acceptance.digest(log.read_bytes())}}}
         if absent:value['execution']['expected_failure']='parameter_not_set'
+        if policy_file:value['execution']['policy_file']=policy_file
+        if policy_error:value['policy_error']=policy_error
         return value
 
 

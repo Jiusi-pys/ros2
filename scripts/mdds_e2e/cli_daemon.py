@@ -26,6 +26,7 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='graph_hidden':return []
     if mode=='endpoint_qos':return []
     if mode=='graph_late':return []
     if mode in ('graph_waiters','graph_remote'):return []
@@ -256,6 +257,9 @@ def main():
             if (root/'process.start').read_text().strip()!=nonce:raise ValueError('process start barrier differs')
             report['process_start_nonce']=nonce
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
+        if (root/'cli_batch').read_text().strip()=='graph_hidden':
+            from cli_hidden_graph import execute as execute_hidden
+            report['hidden_graph']=execute_hidden(root,run,board,nonce)
         if (root/'cli_batch').read_text().strip()=='endpoint_qos':
             path=root/'endpoint_qos.json';deadline=time.monotonic()+30
             while not path.exists() and time.monotonic()<deadline:time.sleep(.05)

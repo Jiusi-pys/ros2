@@ -38,6 +38,9 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
+    if (root/'cli_batch').read_text().strip()=='graph_hidden':
+        from verify_hidden_graph import validate
+        validate(value['hidden_graph'],root,run,board,nonce)
     if (root/'cli_batch').read_text().strip()=='endpoint_qos':
         from verify_endpoint_qos import validate
         validate(value,root,run,board,nonce)
@@ -295,6 +298,9 @@ def main():
     if (root/'cli_batch').read_text().strip()=='graph_late':
         from verify_late_graph import emit
         passed.extend(emit(root,manifest,reports,run,nonce))
+    if (root/'cli_batch').read_text().strip()=='graph_hidden':
+        from verify_hidden_graph import emit
+        passed.append(emit(root,manifest,reports,run,nonce))
     (root/'cli_partial_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('CLI_DAEMON_PASS '+json.dumps(passed))
 

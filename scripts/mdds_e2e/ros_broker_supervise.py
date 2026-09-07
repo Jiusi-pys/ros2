@@ -37,6 +37,13 @@ if role=='multicast_send':
 if role=='graph_waiters_start':
     with (root/'graph_waiters.start').open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
+if role in ('hidden_source_go','hidden_cli_go','hidden_source_stop'):
+    name={'hidden_source_go':'hidden_source.go','hidden_cli_go':'hidden_cli.go','hidden_source_stop':'hidden_source.stop'}[role]
+    tmp=root/(name+'.pending')
+    with tmp.open('x') as f:f.write(nonce+'\n')
+    if (root/name).exists():raise ValueError('hidden phase already released')
+    tmp.replace(root/name)
+    raise SystemExit(0)
 if role=='abort_cli_worker':
     import signal
     if (root/'cli_batch').read_text().strip()!='daemon_abort':raise ValueError('not a failure-injection run')
@@ -126,7 +133,7 @@ elif role == 'container':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [str(root/'component_prefix/lib/rclcpp_components/component_container'),'--ros-args','-r','__node:=container_'+label,'-r','__ns:=/components_'+run]
 elif role == 'cli':
-    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters','graph_remote','graph_late','endpoint_qos','daemon_abort') else 'cli_graph_basic.py'
+    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters','graph_remote','graph_late','endpoint_qos','daemon_abort','graph_hidden') else 'cli_graph_basic.py'
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')

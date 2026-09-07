@@ -11,7 +11,7 @@ def digest(raw):return hashlib.sha256(raw).hexdigest()
 
 
 def pack(root):
-    files=[];archive=root/'ros2cli_overlay.zip';packages=['ros2cli','ros2multicast']
+    files=[];archive=root/'ros2cli_overlay.zip';packages=['ros2cli','ros2multicast','ros2action']
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as zipped:
         for package in packages:
             source=Path.cwd()/'src/ros2/ros2cli'/package/package
@@ -33,7 +33,7 @@ def prepare(root,expected):
     site=root/'python';extract_wheel(root/'ros2cli_overlay.zip',site,manifest['archive_sha256'])
     for item in manifest['files']:
         path=site/item['path']
-        if not any(path.resolve().is_relative_to((site/package).resolve()) for package in ('ros2cli','ros2multicast')) or path.stat().st_size!=item['size'] or digest(path.read_bytes())!=item['sha256']:raise ValueError('CLI overlay source differs')
+        if not any(path.resolve().is_relative_to((site/package).resolve()) for package in ('ros2cli','ros2multicast','ros2action')) or path.stat().st_size!=item['size'] or digest(path.read_bytes())!=item['sha256']:raise ValueError('CLI overlay source differs')
     result={'run_id':root.name,'manifest_sha256':expected,'files':len(manifest['files'])}
     (root/'ros2cli_overlay_ready.json').write_text(json.dumps(result)+'\n')
     print('ROS2CLI_OVERLAY_READY '+expected,flush=True)

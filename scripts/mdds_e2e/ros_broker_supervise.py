@@ -37,8 +37,8 @@ if role=='multicast_send':
 if role=='graph_waiters_start':
     with (root/'graph_waiters.start').open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
-if role in ('hidden_source_go','hidden_cli_go','hidden_source_stop'):
-    name={'hidden_source_go':'hidden_source.go','hidden_cli_go':'hidden_cli.go','hidden_source_stop':'hidden_source.stop'}[role]
+if role in ('hidden_source_go','hidden_cli_go','hidden_source_stop','victim_kill_go'):
+    name={'hidden_source_go':'hidden_source.go','hidden_cli_go':'hidden_cli.go','hidden_source_stop':'hidden_source.stop','victim_kill_go':'victim_kill.go'}[role]
     tmp=root/(name+'.pending')
     with tmp.open('x') as f:f.write(nonce+'\n')
     if (root/name).exists():raise ValueError('hidden phase already released')
@@ -133,7 +133,7 @@ elif role == 'container':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'
     command = [str(root/'component_prefix/lib/rclcpp_components/component_container'),'--ros-args','-r','__node:=container_'+label,'-r','__ns:=/components_'+run]
 elif role == 'cli':
-    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters','graph_remote','graph_late','endpoint_qos','daemon_abort','graph_churn','graph_duplicate','graph_hidden') else 'cli_graph_basic.py'
+    module = 'cli_daemon.py' if (root/'cli_batch').read_text().strip() in ('daemon','action','introspection','parameter_read','parameter_write','lifecycle','components','standalone','bags','bag_transform','bag_burst','statistics','process_run','process_launch','process_test','diagnostics','hello','policy','multicast','trace_probe','service_qos','graph_waiters','graph_remote','graph_late','endpoint_qos','daemon_abort','graph_abrupt','graph_churn','graph_duplicate','graph_hidden') else 'cli_graph_basic.py'
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')
@@ -141,7 +141,7 @@ returncode=supervise_command(command, root / (role + '.status.json'), run, role,
 if role=='ros' and (root/'graph_case').is_file():
     from cli_acceptance import terminal_marker
     case=(root/'graph_case').read_text().strip()
-    if case not in ('graph:service_client_ownership','graph:endpoint_metadata','graph:duplicate_node_names','graph:churn'):raise ValueError('unsupported graph case')
+    if case not in ('graph:service_client_ownership','graph:endpoint_metadata','graph:duplicate_node_names','graph:churn','graph:abrupt_exit'):raise ValueError('unsupported graph case')
     print('MDDS_GRAPH_ACTUAL_ARGV '+json.dumps(command),flush=True)
     print(terminal_marker(run,case,returncode,command,self),flush=True)
 raise SystemExit(returncode)

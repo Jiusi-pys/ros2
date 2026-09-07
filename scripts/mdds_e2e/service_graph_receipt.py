@@ -17,6 +17,10 @@ def emit(root,manifest,reports,run,nonce):
         from verify_endpoint_qos import validate as checker
         key='endpoint_qos';prefix='ENDPOINT_QOS_RESULT '
         suffixes=('endpoint_qos.json','endpoint_qos.ready','endpoint_qos.go','endpoint_qos.sent','endpoint_qos.observe_go')
+    elif case_name=='graph:abrupt_exit' and mode=='graph_abrupt':
+        from verify_abrupt_graph import validate as checker
+        key='abrupt_graph';prefix='ABRUPT_GRAPH_RESULT '
+        suffixes=('abrupt_graph.json','abrupt_before.json','abrupt_after.json','abrupt_after.ready','abrupt_armed.json','peer_armed.json','victim.ready.json','victim.status.json','victim.log','victim_kill.go','hidden_source.json','hidden_source.go','hidden_cli.go','hidden_source.stop','hidden_source.done','hidden_cli.ready','hidden_cli.done')
     elif case_name=='graph:churn' and mode=='graph_churn':
         from verify_churn_graph import validate as checker
         key='churn_graph';prefix='CHURN_GRAPH_RESULT '

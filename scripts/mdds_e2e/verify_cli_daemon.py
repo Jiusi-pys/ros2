@@ -28,6 +28,9 @@ def validate_native_link(raw):
 
 
 def validate_report(value, root, run, board, nonce):
+    if (root/'cli_batch').read_text().strip()=='graph_abrupt':
+        from verify_abrupt_graph import validate
+        validate(value,root,run,board,nonce)
     if (root/'cli_batch').read_text().strip()=='graph_churn':
         from verify_churn_graph import validate
         validate(value,root,run,board,nonce)

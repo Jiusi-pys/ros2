@@ -31,6 +31,13 @@ if role in ('hello_start_doctor','hello_stop_doctor','hello_start_wtf','hello_st
     _,operation,command=role.split('_')
     with (root/('hello_'+command+'.'+operation)).open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
+if role in ('cycle_pause','cycle_resume'):
+    if (root/'reconnect.enabled').read_text().strip()!=nonce:raise ValueError('not an owned remote-cycle fixture')
+    name='reconnect.pause' if role=='cycle_pause' else 'reconnect.resume'
+    with (root/(name+'.pending')).open('x') as f:f.write(nonce+'\n')
+    if (root/name).exists():raise ValueError('remote-cycle command already exists')
+    (root/(name+'.pending')).replace(root/name)
+    raise SystemExit(0)
 if role=='multicast_send':
     with (root/'multicast.send').open('x') as f:f.write(nonce+'\n')
     raise SystemExit(0)
@@ -125,6 +132,9 @@ if role == 'inspect':
     print('INSPECT_READY')
     raise SystemExit(0)
 if role == 'daemon':
+    if (root/'reconnect.enabled').exists():
+        if (root/'reconnect.enabled').read_text().strip()!=nonce:raise ValueError('remote-cycle identity differs')
+        os.environ.update(MDDS_RECONNECT_CONTROL_ROOT=str(root),MDDS_RECONNECT_RUN=run,MDDS_RECONNECT_NONCE=nonce)
     command = [sys.executable, str(root / 'mdds_broker_service.py'), '--root', str(root / 'brokers'), '--domain', '175', '--daemon', str(root / 'mdds_broker_daemon'), '--token-exec', str(root / 'mdds_token_exec')]
 elif role == 'ros':
     label = 'A' if self == '3e01ff55454d202020104033bf453b00' else 'B'

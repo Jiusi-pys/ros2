@@ -8,6 +8,8 @@ policy_mode="${MDDS_ROS_PROFILE_MODE:-explicit}"
 [[ "$policy_mode" == explicit || "$policy_mode" == implicit ]] || exit 2
 cli_batch="${MDDS_ROS_CLI_BATCH:-none}"
 [[ "$cli_batch" == daemon_abort || "$cli_batch" == none || "$cli_batch" == basic || "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone || "$cli_batch" == process_run || "$cli_batch" == process_launch || "$cli_batch" == process_test || "$cli_batch" == statistics || "$cli_batch" == policy || "$cli_batch" == graph_abrupt || "$cli_batch" == graph_churn || "$cli_batch" == graph_duplicate || "$cli_batch" == graph_hidden || "$cli_batch" == graph_late || "$cli_batch" == graph_remote || "$cli_batch" == graph_waiters || "$cli_batch" == endpoint_qos || "$cli_batch" == service_qos || "$cli_batch" == trace_probe || "$cli_batch" == multicast || "$cli_batch" == diagnostics || "$cli_batch" == hello || "$cli_batch" == bags || "$cli_batch" == bag_transform || "$cli_batch" == bag_burst ]] || exit 2
+remote_cycle="${MDDS_ROS_REMOTE_CYCLE:-0}"
+[[ "$remote_cycle" == 0 || ( "$remote_cycle" == 1 && "$cli_batch" == none ) ]] || exit 2
 scratch=scripts/mdds_e2e
 export MDDS_RUN_ID="${MDDS_RUN_ID:?explicit fresh run ID required}"
 [[ "$MDDS_RUN_ID" =~ ^[A-Za-z0-9_]{1,32}$ ]] || exit 2
@@ -18,7 +20,7 @@ LOGDIR="ohos_test_logs/ros_broker/$MDDS_OWNED_RUN_ID"
 [[ ! -e "$LOGDIR" ]]; mkdir -p "$LOGDIR"
 "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/cli_package_overlay.py pack "$LOGDIR"
 "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/ros_type_hashes.py "$(pwd -W)" "$LOGDIR/type_hashes.json"
-cp build_ohos/mdds/mdds_broker_daemon "$LOGDIR/"
+if [[ "$remote_cycle" == 1 ]]; then cp build_ohos/mdds/mdds_broker_reconnect_fixture "$LOGDIR/mdds_broker_daemon"; else cp build_ohos/mdds/mdds_broker_daemon "$LOGDIR/"; fi
 cp build_ohos/mdds/mdds_token_exec "$LOGDIR/"
 cp build_ohos/mdds/libmdds.so "$LOGDIR/"
 cp "${MDDS_ROS_RMW_LIBRARY:-build_ohos/rmw_mdds/librmw_mdds.so}" "$LOGDIR/librmw_mdds.so"
@@ -34,6 +36,7 @@ cp scripts/mdds_e2e/{cli_graph_basic,cli_graph_lists,cli_daemon,cli_daemon_guard
 cp scripts/trace_mount_namespace.py "$LOGDIR/"
 cp scripts/mdds_e2e/cli_acceptance_manifest.json "$LOGDIR/"
 printf '%s\n' "$nonce" > "$LOGDIR/nonce"
+if [[ "$remote_cycle" == 1 ]]; then printf '%s\n' "$nonce" > "$LOGDIR/reconnect.enabled"; fi
 printf '%s\n' "$policy_mode" > "$LOGDIR/policy_mode"
 printf '%s\n' "$cli_batch" > "$LOGDIR/cli_batch"
 if [[ "$cli_batch" == graph_late ]]; then "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/late_graph_hashes.py "$LOGDIR"; fi
@@ -92,6 +95,10 @@ for board in "$BOARD_A" "$BOARD_B"; do
     output=$(shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/broker_local_run.py' mark-executable --run-id '$MDDS_OWNED_RUN_ID' --artifact '$MDDS_OWNED_REMOTE_DIR/$name' --sha256 '$hash'" | tr -d '\r')
     [[ "$output" == "BROKER_EXEC_READY sha256=$hash" ]]
   done
+  if [[ "$remote_cycle" == 1 ]]; then
+    graph_stage_artifact "$board" "$LOGDIR/reconnect.enabled" "$MDDS_OWNED_REMOTE_DIR/reconnect.enabled" "$(graph_sha "$LOGDIR/reconnect.enabled")"
+    printf '%s  reconnect.enabled\n' "$(graph_sha "$LOGDIR/reconnect.enabled")" >> "$LOGDIR/inputs_$board.sha256"
+  fi
   if [[ "$cli_batch" == trace_probe ]]; then graph_stage_artifact "$board" "$LOGDIR/trace_runtime.json" "$MDDS_OWNED_REMOTE_DIR/trace_runtime.json" "$(graph_sha "$LOGDIR/trace_runtime.json")"; fi
   if [[ "$cli_batch" == service_qos || "$cli_batch" == endpoint_qos || "$cli_batch" == graph_duplicate || "$cli_batch" == graph_churn || "$cli_batch" == graph_abrupt ]]; then
     graph_stage_artifact "$board" "$LOGDIR/graph_case" "$MDDS_OWNED_REMOTE_DIR/graph_case" "$(graph_sha "$LOGDIR/graph_case")"
@@ -482,6 +489,24 @@ for phase in 1 2; do
         for board in "$BOARD_A" "$BOARD_B"; do mdds_owned_stop_log "$board" container.child; graph_wait_status "$board" container; done
       fi
     fi
+    if [[ "$remote_cycle" == 1 ]]; then
+      wait_remote_cycle() {
+        local board="$1" phase="$2" response attempt
+        for ((attempt=0;attempt<300;++attempt)); do
+          response=$(shell "$board" "if test -f '$MDDS_OWNED_REMOTE_DIR/reconnect.$phase.json'; then printf CYCLE_READY; elif test -f '$MDDS_OWNED_REMOTE_DIR/daemon.status.json' || test -f '$MDDS_OWNED_REMOTE_DIR/ros.status.json'; then printf CYCLE_EXITED; fi" | tr -d '\r')
+          [[ "$response" != CYCLE_EXITED ]] || return 1
+          if [[ "$response" == CYCLE_READY ]]; then return 0; fi
+          sleep 0.2
+        done
+        return 1
+      }
+      for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" ready; done
+      for board in "$BOARD_A" "$BOARD_B"; do shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/ros_broker_supervise.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' cycle_pause '$board' x '$nonce' '$variant'" >/dev/null; done
+      for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" paused; done
+      sleep 1
+      for board in "$BOARD_A" "$BOARD_B"; do shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/ros_broker_supervise.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' cycle_resume '$board' x '$nonce' '$variant'" >/dev/null; done
+      for board in "$BOARD_A" "$BOARD_B"; do wait_remote_cycle "$board" restored; done
+    fi
     for board in "$BOARD_A" "$BOARD_B"; do
       for operation in inspect advance; do
         shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/ros_broker_supervise.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' '$operation' '$board' x '$nonce' '$variant'" >/dev/null
@@ -509,6 +534,9 @@ for board in "$BOARD_A" "$BOARD_B"; do
   for name in ros.log ros.status.json daemon.log daemon.status.json; do
     graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"
   done
+  if [[ "$remote_cycle" == 1 ]]; then
+    for name in reconnect.enabled reconnect.pause reconnect.resume reconnect.ready.json reconnect.paused.json reconnect.restored.json reconnect.sdk_stop_1.json reconnect.sdk_stop_2.json; do graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"; done
+  fi
   graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/ros2cli_overlay_ready.json" "$LOGDIR/$board.ros2cli_overlay_ready.json"
   if [[ "$phase_ok" == true ]]; then graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/daemon.inspect.json" "$LOGDIR/$board.daemon.inspect.json"; fi
   if [[ "$cli_batch" == basic ]]; then
@@ -710,3 +738,5 @@ if [[ "$cli_batch" == basic ]]; then
 elif [[ "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone || "$cli_batch" == process_run || "$cli_batch" == process_launch || "$cli_batch" == process_test || "$cli_batch" == statistics || "$cli_batch" == policy || "$cli_batch" == graph_abrupt || "$cli_batch" == graph_churn || "$cli_batch" == graph_duplicate || "$cli_batch" == graph_hidden || "$cli_batch" == graph_late || "$cli_batch" == graph_remote || "$cli_batch" == graph_waiters || "$cli_batch" == endpoint_qos || "$cli_batch" == service_qos || "$cli_batch" == trace_probe || "$cli_batch" == multicast || "$cli_batch" == diagnostics || "$cli_batch" == hello || "$cli_batch" == bags || "$cli_batch" == bag_transform || "$cli_batch" == bag_burst ]]; then
   "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/verify_cli_daemon.py "$LOGDIR" "$MDDS_OWNED_RUN_ID"
 fi
+
+if [[ "$remote_cycle" == 1 ]]; then "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/verify_remote_cycle.py "$LOGDIR"; fi

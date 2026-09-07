@@ -440,7 +440,7 @@ try:
     exchange(records, 1, True)
     cli_fixture()
     (root / 'phase1.done').write_text(a.nonce + '\n')
-    wait(lambda: (root / 'phase2.go').is_file() and (root / 'phase2.go').read_text().strip() == a.nonce, seconds={'graph_churn':180,'graph_abrupt':120}.get((root/'cli_batch').read_text().strip(),65))
+    wait(lambda: (root / 'phase2.go').is_file() and (root / 'phase2.go').read_text().strip() == a.nonce, seconds=180 if (root/'reconnect.enabled').exists() else {'graph_churn':180,'graph_abrupt':120}.get((root/'cli_batch').read_text().strip(),65))
     if (root/'cli_batch').read_text().strip()=='lifecycle':
         state_id,state_label=records[0]['node']._state_machine.current_state
         final={'run_id':a.run_id,'nonce':a.nonce,'board':a.self_serial,'node':ns+'/alpha_'+a.role,'state':{'id':state_id,'label':state_label}}

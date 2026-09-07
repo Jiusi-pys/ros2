@@ -277,6 +277,9 @@ def main():
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])
+    if (root/'graph_case').exists():
+        from service_graph_receipt import emit
+        passed.append(emit(root,manifest,reports,run,nonce))
     (root/'cli_partial_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('CLI_DAEMON_PASS '+json.dumps(passed))
 

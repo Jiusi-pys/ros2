@@ -35,6 +35,7 @@ cp scripts/mdds_e2e/cli_acceptance_manifest.json "$LOGDIR/"
 printf '%s\n' "$nonce" > "$LOGDIR/nonce"
 printf '%s\n' "$policy_mode" > "$LOGDIR/policy_mode"
 printf '%s\n' "$cli_batch" > "$LOGDIR/cli_batch"
+if [[ "$cli_batch" == service_qos ]]; then printf 'graph:service_client_ownership\n' > "$LOGDIR/graph_case"; fi
 if [[ "$cli_batch" == trace_probe ]]; then "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/trace_runtime.py install_ohos "$LOGDIR/trace_runtime.json"; fi
 if [[ "$cli_batch" == diagnostics || "$cli_batch" == hello ]]; then
   doctor_options=(); [[ "$cli_batch" != hello ]] || doctor_options+=(--hello)
@@ -80,6 +81,10 @@ for board in "$BOARD_A" "$BOARD_B"; do
     [[ "$output" == "BROKER_EXEC_READY sha256=$hash" ]]
   done
   if [[ "$cli_batch" == trace_probe ]]; then graph_stage_artifact "$board" "$LOGDIR/trace_runtime.json" "$MDDS_OWNED_REMOTE_DIR/trace_runtime.json" "$(graph_sha "$LOGDIR/trace_runtime.json")"; fi
+  if [[ "$cli_batch" == service_qos ]]; then
+    graph_stage_artifact "$board" "$LOGDIR/graph_case" "$MDDS_OWNED_REMOTE_DIR/graph_case" "$(graph_sha "$LOGDIR/graph_case")"
+    printf '%s  graph_case\n' "$(graph_sha "$LOGDIR/graph_case")" >> "$LOGDIR/inputs_$board.sha256"
+  fi
   for name in ros2cli_overlay.zip ros2cli_overlay.json; do
     graph_stage_artifact "$board" "$LOGDIR/$name" "$MDDS_OWNED_REMOTE_DIR/$name" "$(graph_sha "$LOGDIR/$name")"
   done

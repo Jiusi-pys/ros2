@@ -94,4 +94,11 @@ elif role == 'cli':
     command = [sys.executable, str(root / module), str(root), run, self, peer, nonce]
 else:
     raise ValueError('bad role')
-raise SystemExit(supervise_command(command, root / (role + '.status.json'), run, role, '/ros_broker_' + run, root / (role + '.child.pid')))
+returncode=supervise_command(command, root / (role + '.status.json'), run, role, '/ros_broker_' + run, root / (role + '.child.pid'))
+if role=='ros' and (root/'graph_case').is_file():
+    from cli_acceptance import terminal_marker
+    case=(root/'graph_case').read_text().strip()
+    if case!='graph:service_client_ownership':raise ValueError('unsupported graph case')
+    print('MDDS_GRAPH_ACTUAL_ARGV '+json.dumps(command),flush=True)
+    print(terminal_marker(run,case,returncode,command,self),flush=True)
+raise SystemExit(returncode)

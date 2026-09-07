@@ -42,7 +42,36 @@ RED and GREEN provenance is documented in that package's
 `docs/service_availability.md`. Board runners archive original failures rather
 than changing their acceptance criteria.
 
-This mode proves the specific fix and its peer controls. It does not issue a
-complete non-CLI graph-case receipt yet, so aggregate coverage remains 82/98.
-Full graph failure/lifetime/isolation coverage, advanced-functionality audit
-and single-release provenance remain outstanding. Gateway is out of scope.
+That initial run proved the specific fix and peer controls but did not issue
+a complete non-CLI graph-case receipt. The formal gate added below uses a fresh
+run; the initial artifacts were preserved without relabelling them.
+
+## Formal service ownership graph case
+
+Design: declare `graph:service_client_ownership` in the frozen board inputs.
+The ROS supervisor records actual argv and the case-specific terminal marker
+only after its real ROS child exits. The host requires both board identities,
+PID/start records, normal exits, raw markers, service ownership/count/readiness
+results, and exact peer response callbacks before issuing the case receipt.
+
+`test_service_graph_gate.py` was supplied first. Its four checks failed RED
+because the old verifier ignored the declared graph case. They pass after the
+implementation: no terminal, one board only and nonzero terminal are rejected;
+the complete synthetic unit fixture is accepted. The unit fixtures are copied
+test data and are not counted as board acceptance.
+
+Actual acceptance run `graph_services_20260907_01` subsequently passed on both
+RK3588A boards using DSoftBus Socket/Bytes. Its case covers `ownership_exact`,
+`counts_exact` and `availability_exact`. All 18 real-receipt adversaries and
+18 general CLI gate tests passed.
+
+- Final manifest SHA-256:
+  `1ec28621517f4c0902eae043d7ffd58af19a1ffcc9f723ec8cdaf1a90ff60add`.
+- Graph case receipt SHA-256:
+  `01fd770494a87e758e9dd4b6d45e60b61365ec9e475126073a25463c562af564`.
+- RMW SHA-256, including the separately tested null-argument code fix:
+  `e2c3e1d2143cdd2b50de77c9b243f6dd692a253be352fcce3b2770a3e0b0c2ba`.
+
+Aggregate case coverage is now 83/98. Full graph failure/lifetime/isolation
+coverage, advanced-functionality audit and single-release provenance remain
+outstanding. Gateway is out of scope.

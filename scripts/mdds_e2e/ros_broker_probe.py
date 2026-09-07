@@ -285,6 +285,11 @@ try:
 
         def serve(request, response):
             response.sum = request.a + request.b
+            if (root/'cli_batch').read_text().strip()=='graph_waiters' and request.b==170017:
+                assert request.a==int(a.nonce[:7],16)+(1 if other=='A' else 2)
+                value={'run_id':a.run_id,'nonce':a.nonce,'role':a.role,'requester':other,'a':request.a,'b':request.b,'sum':response.sum}
+                with (root/'graph_waiters_server.json').open('x') as f:f.write(json.dumps(value)+'\n')
+                print('GRAPH_WAITER_SERVER '+json.dumps(value),flush=True)
             return response
         r['service'] = node.create_service(AddTwoInts, path(a.role, name) + '/serve', serve)
         r['client'] = node.create_client(AddTwoInts, path(other, name) + '/serve')

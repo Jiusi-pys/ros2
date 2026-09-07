@@ -38,6 +38,9 @@ def validate_report(value, root, run, board, nonce):
     if any(value.get(k)!=v for k,v in {'run_id':run,'board':board,'nonce':nonce,'passed':True,'before':ABSENT,'after_stop':ABSENT,'after':ABSENT}.items()):
         raise ValueError('daemon batch identity/lifecycle/isolation mismatch')
     if 'emergency_cleanup' in value:raise ValueError('daemon needed emergency cleanup')
+    if (root/'cli_batch').read_text().strip()=='graph_waiters':
+        from cli_graph_waiters import validate
+        validate(value['graph_waiters'],root,run,board,nonce)
     if (root/'cli_batch').read_text().strip()=='service_qos':
         from verify_service_qos import validate
         validate(value,root,run,board,nonce)

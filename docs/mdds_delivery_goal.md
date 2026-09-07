@@ -1,6 +1,9 @@
 # MDDS delivery execution contract
 
-User objective recorded on 2026-09-06. Status: **ACTIVE / phase 1**.
+User objective recorded on 2026-09-06 and extended on 2026-09-07.
+Status: **ACTIVE / phase 1**. The current counted evidence is maintained in
+`../verification_evidence/goal1_20260906/cli_verified_batches.json`; older
+progress entries below remain historical records.
 
 ## Ordered acceptance gates
 
@@ -12,6 +15,33 @@ User objective recorded on 2026-09-06. Status: **ACTIVE / phase 1**.
 2. Only after gate 1 passes, implement and validate the independent
    `mdds_gateway` for MDDS to/from the ROS 2 DDS implementations in the supported
    distribution. DDS-to-DDS translation is outside this objective.
+   Multiple devices running the gateway must coordinate main-gateway ownership,
+   prevent translation loops and deduplicate relayed samples. At most one
+   gateway may have valid main authority in the cooperating deployment.
+
+### Gateway coordination acceptance added on 2026-09-07
+
+These are required, unimplemented/unverified gate-2 criteria. They do not
+unlock gateway work before gate 1 passes.
+
+- Concurrent starts, restart and rejoin must converge to one valid main when
+  coordination is healthy. A role flag or periodic observation of one main is
+  insufficient: forwarding must be gated by current ownership authority.
+- Graceful handover, main-process crash, delayed messages, process pauses and
+  network partition/recovery must not create two effective mains. A stale main
+  must not continue forwarding after losing authority. When exclusive ownership
+  cannot be established, safety must not be replaced by unilateral promotion.
+- Bidirectional MDDS/DDS traffic must not re-enter translation through a
+  gateway's own output endpoints, through another replica, or through stale
+  endpoints from a previous main. Exercise cyclic topologies and reconnection.
+- Retries, replay and concurrent duplicate arrivals must not produce duplicate
+  translated deliveries. Preserve logical sample identity across translations
+  and leadership changes; identical payloads from distinct legitimate samples
+  must still be delivered. Payload hashing alone is not a sample identity.
+- Validate bounded coordination/deduplication state, cleanup of retired epochs
+  and endpoints, and sustained traffic under failure/recovery. Define the
+  identity and lifetime contracts explicitly before implementation, then prove
+  them with deterministic TDD cases and real multi-device evidence.
 
 No finite suite proves the absence of all bugs. Completion requires the full
 agreed executable acceptance matrix, no known unresolved defects, and explicit

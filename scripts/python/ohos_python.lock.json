@@ -182,6 +182,13 @@
       "sha256": "4b0ce306c966eb73bc3a7b6abad017c556dadd92c44701562cd528ac7fde4d5b"
     },
     {
+      "project": "distro",
+      "version": "1.9.0",
+      "filename": "distro-1.9.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2"
+    },
+    {
       "project": "docutils",
       "version": "0.20.1",
       "filename": "docutils-0.20.1-py3-none-any.whl",
@@ -341,6 +348,20 @@
       "filename": "PyYAML-6.0.2-cp312-cp312-musllinux_1_1_aarch64.whl",
       "architecture": "aarch64-musllinux",
       "sha256": "0833f8694549e586547b576dcfaba4a6b55b9e96098b36cdc7ebefe667dfed48"
+    },
+    {
+      "project": "rosdistro",
+      "version": "1.1.0",
+      "filename": "rosdistro-1.1.0-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "a10d0852fcef15b2b9c92a7b4d553481f660e4e672eaeb1138ad077ffe9a2a38"
+    },
+    {
+      "project": "rospkg",
+      "version": "1.6.2",
+      "filename": "rospkg-1.6.2-py3-none-any.whl",
+      "architecture": "any",
+      "sha256": "d8c32b8560501a9ca6616a1ef5f61ca89da79701f4a66020ada189594fe15f5a"
     },
     {
       "project": "setuptools",

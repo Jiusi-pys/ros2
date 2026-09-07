@@ -426,6 +426,7 @@ REQUIRED_STAGE_PATHS = (
     "colcon_ros/__init__.py",
     "colcon_test_result/__init__.py",
     "cryptography/__init__.py",
+    "distro/__init__.py",
     "em.py",
     "lark/__init__.py",
     "lxml/__init__.py",
@@ -436,6 +437,8 @@ REQUIRED_STAGE_PATHS = (
     "psutil/__init__.py",
     "pycparser/__init__.py",
     "pytest/__init__.py",
+    "rosdistro/__init__.py",
+    "rospkg/__init__.py",
     "setuptools/__init__.py",
     "yaml/__init__.py",
 )

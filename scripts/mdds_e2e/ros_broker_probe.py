@@ -316,7 +316,10 @@ try:
     hidden_sub = records[0]['node'].create_subscription(Bool, ns+'/'+other+'/_hidden', lambda message: None, qos)
     hidden_service = records[0]['node'].create_service(AddTwoInts, ns+'/'+a.role+'/_hidden_service', serve)
     hidden_client = records[0]['node'].create_client(AddTwoInts, ns+'/'+other+'/_hidden_service')
-    if (root/'cli_batch').read_text().strip()=='graph_hidden':
+    if (root/'cli_batch').read_text().strip()=='graph_duplicate':
+        from board_duplicate_graph import DuplicateGraphSource
+        component_probe=DuplicateGraphSource(root,a.run_id,a.nonce,a.role,records[0]['node'])
+    elif (root/'cli_batch').read_text().strip()=='graph_hidden':
         from board_hidden_graph import HiddenGraphSource
         component_probe=HiddenGraphSource(root,a.run_id,a.nonce,a.role,records[0]['node'],records[0]['executor'])
     elif (root/'cli_batch').read_text().strip()=='endpoint_qos':

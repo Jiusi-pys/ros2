@@ -28,6 +28,9 @@ def validate_native_link(raw):
 
 
 def validate_report(value, root, run, board, nonce):
+    if (root/'cli_batch').read_text().strip()=='graph_duplicate':
+        from verify_duplicate_graph import validate
+        validate(value,root,run,board,nonce)
     if (root/'ros2cli_overlay.json').exists():
         overlay=json.loads((root/'ros2cli_overlay.json').read_text())
         if acceptance.digest((root/'ros2cli_overlay.zip').read_bytes())!=overlay['archive_sha256']:raise ValueError('CLI source overlay archive differs')

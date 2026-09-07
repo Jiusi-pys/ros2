@@ -2,17 +2,18 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source scripts/run_mdds_graph_ownership.sh
+source scripts/lib/ros_broker_cleanup.sh
 variant=service
 policy_mode="${MDDS_ROS_PROFILE_MODE:-explicit}"
 [[ "$policy_mode" == explicit || "$policy_mode" == implicit ]] || exit 2
 cli_batch="${MDDS_ROS_CLI_BATCH:-none}"
-[[ "$cli_batch" == none || "$cli_batch" == basic || "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone || "$cli_batch" == process_run || "$cli_batch" == process_launch || "$cli_batch" == process_test || "$cli_batch" == statistics || "$cli_batch" == policy || "$cli_batch" == graph_late || "$cli_batch" == graph_remote || "$cli_batch" == graph_waiters || "$cli_batch" == endpoint_qos || "$cli_batch" == service_qos || "$cli_batch" == trace_probe || "$cli_batch" == multicast || "$cli_batch" == diagnostics || "$cli_batch" == hello || "$cli_batch" == bags || "$cli_batch" == bag_transform || "$cli_batch" == bag_burst ]] || exit 2
+[[ "$cli_batch" == daemon_abort || "$cli_batch" == none || "$cli_batch" == basic || "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone || "$cli_batch" == process_run || "$cli_batch" == process_launch || "$cli_batch" == process_test || "$cli_batch" == statistics || "$cli_batch" == policy || "$cli_batch" == graph_late || "$cli_batch" == graph_remote || "$cli_batch" == graph_waiters || "$cli_batch" == endpoint_qos || "$cli_batch" == service_qos || "$cli_batch" == trace_probe || "$cli_batch" == multicast || "$cli_batch" == diagnostics || "$cli_batch" == hello || "$cli_batch" == bags || "$cli_batch" == bag_transform || "$cli_batch" == bag_burst ]] || exit 2
 scratch=scripts/mdds_e2e
 export MDDS_RUN_ID="${MDDS_RUN_ID:?explicit fresh run ID required}"
 [[ "$MDDS_RUN_ID" =~ ^[A-Za-z0-9_]{1,32}$ ]] || exit 2
 nonce=$("$GRAPH_HOST_PYTHON" -c 'import secrets; print(secrets.token_hex(16))' | tr -d '\r')
 mdds_owned_init ros_broker "$BOARD_A" "$BOARD_B"
-trap 'rc=$?; trap - EXIT; mdds_owned_finish || rc=1; exit "$rc"' EXIT
+trap 'rc=$?; trap - EXIT; ros_broker_finish || rc=1; exit "$rc"' EXIT
 LOGDIR="ohos_test_logs/ros_broker/$MDDS_OWNED_RUN_ID"
 [[ ! -e "$LOGDIR" ]]; mkdir -p "$LOGDIR"
 "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/cli_package_overlay.py pack "$LOGDIR"
@@ -255,6 +256,27 @@ for phase in 1 2; do
     if [[ "$cli_batch" != none ]]; then
       launch_role "$BOARD_A" "$BOARD_B" cli
       launch_role "$BOARD_B" "$BOARD_A" cli
+      if [[ "$cli_batch" == daemon_abort ]]; then
+        for board in "$BOARD_A" "$BOARD_B"; do
+          ready=false
+          for ((attempt=0;attempt<100;++attempt)); do
+            value=$(shell "$board" "if test -f '$MDDS_OWNED_REMOTE_DIR/daemon_abort.ready'; then printf ABORT_READY; elif test -f '$MDDS_OWNED_REMOTE_DIR/cli.status.json'; then printf CLI_EXITED; fi" | tr -d '\r')
+            if [[ "$value" == ABORT_READY ]]; then ready=true;break;fi
+            [[ "$value" != CLI_EXITED ]] || break
+            sleep 0.2
+          done
+          [[ "$ready" == true ]] || exit 1
+          graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/daemon_abort.ready" "$LOGDIR/$board.daemon_abort.ready"
+        done
+        for board in "$BOARD_A" "$BOARD_B"; do
+          peer_board="$BOARD_A"; [[ "$board" != "$BOARD_A" ]] || peer_board="$BOARD_B"
+          shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/ros_broker_supervise.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' abort_cli_worker '$board' '$peer_board' '$nonce' '$variant'"
+          graph_wait_status "$board" cli
+          graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli.status.json" "$LOGDIR/$board.cli.status.json"
+        done
+        printf 'DAEMON_ABORT_INJECTED both_boards signal=9\n'
+        exit 42
+      fi
       if [[ "$cli_batch" == endpoint_qos ]]; then
         for stage in ready sent; do
           for board in "$BOARD_A" "$BOARD_B"; do

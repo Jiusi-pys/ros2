@@ -232,6 +232,9 @@ def main():
         command('cli:daemon/status','status_before',['daemon','status'],'The daemon is not running')
         command('cli:daemon/start','start',['daemon','start'],'The daemon has been started')
         report['daemon']=inspect_daemon(root)
+        if (root/'cli_batch').read_text().strip()=='daemon_abort':
+            (root/'daemon_abort.ready').write_text(json.dumps({'run_id':run,'nonce':nonce,'board':board,'worker_pid':os.getpid(),'worker_start':process_start(os.getpid()),'daemon':report['daemon']})+'\n')
+            while True:time.sleep(1)  # The failure-injection driver kills this exact worker.
         command('cli:daemon/status','status_running',['daemon','status'],'The daemon is running')
         # The source fixture is already held live. Give the newly spawned cache
         # time to receive complete remote announcements before its first query.

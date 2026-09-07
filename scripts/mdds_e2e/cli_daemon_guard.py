@@ -21,6 +21,10 @@ def owned(record, root):
             and sorted(record.get('libraries', [])) == [root+'/lib/libmdds.so', root+'/lib/librmw_mdds.so'])
 
 
+def select_owned(records,root):
+    return [record for record in records if owned(record,root)]
+
+
 def observe(pid):
     proc = Path('/proc') / str(pid)
     stat = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
@@ -58,7 +62,7 @@ def assert_absent(domain=175):
     return {'domain':domain, 'daemons':[], 'port_bindable':True}
 
 
-def retire(pid, root, expected_start):
+def retire(pid, root, expected_start, require_absent=True):
     root = Path(root)
     run = root.name
     if root != Path('/data/local/tmp/ros2/.mdds-owned-runs')/run or (root/'owner').read_text() != f'MDDS_RUN_OWNER RUN_ID={run} LABEL=ros_broker\n':
@@ -66,7 +70,8 @@ def retire(pid, root, expected_start):
     before = observe(pid)
     if before['start'] != expected_start: raise ValueError('PID start identity changed')
     if not owned(before, str(root)): raise ValueError('daemon is not owned by this run')
-    if observe(pid)['start'] != before['start']: raise ValueError('PID reused before signal')
+    current=observe(pid)
+    if current['start'] != before['start'] or not owned(current,str(root)): raise ValueError('daemon identity changed before signal')
     os.kill(pid, signal.SIGTERM)
     deadline = time.monotonic()+10
     while time.monotonic() < deadline:
@@ -77,18 +82,37 @@ def retire(pid, root, expected_start):
         time.sleep(.1)
     else:
         raise RuntimeError('owned daemon did not exit after SIGTERM')
-    return {'before':before, 'signal':'SIGTERM', 'terminated':True, 'after':assert_absent()}
+    return {'before':before, 'signal':'SIGTERM', 'terminated':True,
+            'after':assert_absent() if require_absent else {'owned_process_terminated':True}}
+
+
+def cleanup(root):
+    root=Path(root);run=root.name
+    if root!=Path('/data/local/tmp/ros2/.mdds-owned-runs')/run or (root/'owner').read_text()!=f'MDDS_RUN_OWNER RUN_ID={run} LABEL=ros_broker\n':raise ValueError('wrong cleanup owner')
+    before=domain_daemons();selected=select_owned(before,str(root));retired=[]
+    for record in selected:
+        try:retired.append(retire(record['pid'],root,record['start'],require_absent=False))
+        except (FileNotFoundError,ProcessLookupError):
+            retired.append({'before':record,'terminated':True,'already_gone':True})
+    remaining=domain_daemons();ours=select_owned(remaining,str(root))
+    if ours:raise RuntimeError('owned CLI daemons remain after cleanup')
+    result={'run_id':run,'root':str(root),'selected':selected,'retired':retired,'remaining_owned':ours,
+            'foreign_preserved':remaining,'after':assert_absent() if not remaining else None}
+    temporary=root/'cli_outer_cleanup.pending';temporary.write_text(json.dumps(result,indent=2)+'\n')
+    temporary.replace(root/'cli_outer_cleanup.json')
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=('inspect', 'absent', 'retire'))
+    parser.add_argument('operation', choices=('inspect', 'absent', 'retire','cleanup'))
     parser.add_argument('--pid', type=int)
     parser.add_argument('--root')
     parser.add_argument('--start')
     args = parser.parse_args()
     if args.operation == 'inspect': result = domain_daemons()
     elif args.operation == 'absent': result = assert_absent()
+    elif args.operation == 'cleanup': result = cleanup(args.root)
     else: result = retire(args.pid, args.root, args.start)
     print(json.dumps(result))
 

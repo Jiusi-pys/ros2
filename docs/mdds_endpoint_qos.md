@@ -50,7 +50,8 @@ identify the pre-cleanup state, so later diagnostics append distinct states.
 merely a transfer problem. Recovery assertions stopped any pass reconstruction.
 PID 9563/start 47179471 was retired only after exact old-run ownership,
 argv, broker-root and library-path checks. Its port was then verified reusable.
-The outer failure-cleanup gap needs its own fault-injection fix before release.
+The outer failure-cleanup gap is now fixed and verified by the independent
+failure injection in [CLI failure cleanup](mdds_cli_failure_cleanup.md).
 
 Coverage is 88/98. This is not completed liveliness matching, complete
 graph/failure/isolation coverage or a unified release. Gateway is out of scope.

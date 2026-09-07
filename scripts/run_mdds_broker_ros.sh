@@ -6,7 +6,7 @@ variant=service
 policy_mode="${MDDS_ROS_PROFILE_MODE:-explicit}"
 [[ "$policy_mode" == explicit || "$policy_mode" == implicit ]] || exit 2
 cli_batch="${MDDS_ROS_CLI_BATCH:-none}"
-[[ "$cli_batch" == none || "$cli_batch" == basic || "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone ]] || exit 2
+[[ "$cli_batch" == none || "$cli_batch" == basic || "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone || "$cli_batch" == bags ]] || exit 2
 scratch=scripts/mdds_e2e
 export MDDS_RUN_ID="${MDDS_RUN_ID:?explicit fresh run ID required}"
 [[ "$MDDS_RUN_ID" =~ ^[A-Za-z0-9_]{1,32}$ ]] || exit 2
@@ -28,11 +28,18 @@ manifest_sha=$(graph_sha "$LOGDIR/rclpy_package.json")
 cp scripts/mdds_e2e/{board_graph_ownership,broker_local_run}.py "$LOGDIR/"
 cp "$scratch/ros_broker_supervise.py" "$LOGDIR/ros_broker_supervise.py"
 cp src/Jiusi-pys/mdds/scripts/mdds_broker_service.py "$LOGDIR/"
-cp scripts/mdds_e2e/{cli_graph_basic,cli_graph_lists,cli_daemon,cli_daemon_guard,cli_service_graph,cli_node_info,cli_action,cli_service_echo,cli_service_events,cli_parameters,cli_parameter_changes,cli_lifecycle,board_lifecycle_fixture,cli_components,board_component_probe,component_process,cli_standalone,board_standalone_probe,cli_acceptance}.py "$LOGDIR/"
+cp scripts/mdds_e2e/{cli_graph_basic,cli_graph_lists,cli_daemon,cli_daemon_guard,cli_service_graph,cli_node_info,cli_action,cli_service_echo,cli_service_events,cli_parameters,cli_parameter_changes,cli_lifecycle,board_lifecycle_fixture,cli_components,board_component_probe,component_process,cli_standalone,board_standalone_probe,bag_contract,board_bag_probe,cli_bag,bag_record,cli_acceptance}.py "$LOGDIR/"
 cp scripts/mdds_e2e/cli_acceptance_manifest.json "$LOGDIR/"
 printf '%s\n' "$nonce" > "$LOGDIR/nonce"
 printf '%s\n' "$policy_mode" > "$LOGDIR/policy_mode"
 printf '%s\n' "$cli_batch" > "$LOGDIR/cli_batch"
+if [[ "$cli_batch" == bags ]]; then
+  cp install_ohos/lib/librosbag2_storage_sqlite3.so install_ohos/lib/librosbag2_storage_mcap.so "$LOGDIR/"
+  cp scripts/mdds_e2e/bag_python_overlay.py "$LOGDIR/"
+  cp src/ros2/rosbag2/rosbag2_py/rosbag2_py/__init__.py "$LOGDIR/rosbag_init.py"
+  cp src/ros2/rosbag2/rosbag2_py/rosbag2_py/_ohos_plugin_scope.py "$LOGDIR/rosbag_scope.py"
+  "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/bag_python_overlay.py pack --package install_ohos/Lib/site-packages/rosbag2_py --init "$LOGDIR/rosbag_init.py" --scope "$LOGDIR/rosbag_scope.py" --output "$LOGDIR/rosbag_manifest.json"
+fi
 if [[ "$cli_batch" == components || "$cli_batch" == standalone ]]; then
   cp install_ohos/lib/rclcpp_components/component_container "$LOGDIR/component_container"
   cp install_ohos/share/ament_index/resource_index/rclcpp_components/composition "$LOGDIR/composition.components"
@@ -41,7 +48,7 @@ if [[ "$cli_batch" == components || "$cli_batch" == standalone ]]; then
 fi
 for board in "$BOARD_A" "$BOARD_B"; do
   ready=$(shell "$board" "mkdir '$MDDS_OWNED_REMOTE_DIR/lib' && printf LIB_READY" | tr -d '\r'); [[ "$ready" == LIB_READY ]]
-  for name in mdds_broker_daemon mdds_token_exec board_graph_ownership.py broker_local_run.py ros_broker_supervise.py mdds_broker_service.py libmdds.so librmw_mdds.so ros_broker_probe.py broker_local_ros_probe.py type_description_lifetime.py profile.env rclpy_overlay.tar rclpy_package.json type_hashes.json policy_mode cli_batch cli_graph_basic.py cli_graph_lists.py cli_daemon.py cli_daemon_guard.py cli_service_graph.py cli_node_info.py cli_action.py cli_service_echo.py cli_service_events.py cli_parameters.py cli_parameter_changes.py cli_lifecycle.py board_lifecycle_fixture.py cli_components.py board_component_probe.py component_process.py cli_standalone.py board_standalone_probe.py cli_acceptance.py cli_acceptance_manifest.json; do
+  for name in mdds_broker_daemon mdds_token_exec board_graph_ownership.py broker_local_run.py ros_broker_supervise.py mdds_broker_service.py libmdds.so librmw_mdds.so ros_broker_probe.py broker_local_ros_probe.py type_description_lifetime.py profile.env rclpy_overlay.tar rclpy_package.json type_hashes.json policy_mode cli_batch cli_graph_basic.py cli_graph_lists.py cli_daemon.py cli_daemon_guard.py cli_service_graph.py cli_node_info.py cli_action.py cli_service_echo.py cli_service_events.py cli_parameters.py cli_parameter_changes.py cli_lifecycle.py board_lifecycle_fixture.py cli_components.py board_component_probe.py component_process.py cli_standalone.py board_standalone_probe.py bag_contract.py board_bag_probe.py cli_bag.py bag_record.py cli_acceptance.py cli_acceptance_manifest.json; do
     hash=$(graph_sha "$LOGDIR/$name"); destination="$MDDS_OWNED_REMOTE_DIR/$name"; if [[ "$name" == libmdds.so || "$name" == librmw_mdds.so ]]; then destination="$MDDS_OWNED_REMOTE_DIR/lib/$name"; fi; graph_stage_artifact "$board" "$LOGDIR/$name" "$destination" "$hash"
     printf '%s  %s\n' "$hash" "$name" >> "$LOGDIR/inputs_$board.sha256"
   done
@@ -62,9 +69,21 @@ if [[ "$cli_batch" == components || "$cli_batch" == standalone ]]; then
     ready=$(shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/broker_local_run.py' mark-executable --run-id '$MDDS_OWNED_RUN_ID' --artifact '$prefix/lib/rclcpp_components/component_container' --sha256 '$(graph_sha "$LOGDIR/component_container")'" | tr -d '\r'); [[ "$ready" == "BROKER_EXEC_READY sha256=$(graph_sha "$LOGDIR/component_container")" ]]
   done
 fi
+if [[ "$cli_batch" == bags ]]; then
+  for board in "$BOARD_A" "$BOARD_B"; do
+    for name in bag_python_overlay.py rosbag_init.py rosbag_scope.py rosbag_manifest.json; do
+      graph_stage_artifact "$board" "$LOGDIR/$name" "$MDDS_OWNED_REMOTE_DIR/$name" "$(graph_sha "$LOGDIR/$name")"
+    done
+  done
+fi
 for board in "$BOARD_A" "$BOARD_B"; do
   ready=$(shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; export MDDS_RCLPY_MANIFEST_SHA='$manifest_sha'; python3.12 '$MDDS_OWNED_REMOTE_DIR/ros_broker_supervise.py' '$MDDS_OWNED_REMOTE_DIR' '$MDDS_OWNED_RUN_ID' prepare '$board' x '$nonce' '$variant'" | tr -d '\r')
   [[ "$ready" == "BROKER_RCLPY_READY manifest_sha256=$manifest_sha" ]] || { printf '%s\n' "$ready" >&2; exit 1; }
+  if [[ "$cli_batch" == bags ]]; then
+    rosbag_sha=$(graph_sha "$LOGDIR/rosbag_manifest.json")
+    ready=$(shell "$board" ". '$DEVICE_DIR/env.sh' || exit 70; python3.12 '$MDDS_OWNED_REMOTE_DIR/bag_python_overlay.py' prepare --root '$MDDS_OWNED_REMOTE_DIR' --manifest-sha '$rosbag_sha'" | tr -d '\r')
+    [[ "$ready" == "ROSBAG_OVERLAY_READY $rosbag_sha" ]] || { printf '%s\n' "$ready" >&2; exit 1; }
+  fi
 done
 launch_role() {
   local board="$1" peer="$2" role="$3" record line found=false
@@ -196,7 +215,7 @@ for board in "$BOARD_A" "$BOARD_B"; do
     for name in cli_topic_type cli_topic_find cli_service_call cli_topic_info cli_topic_pub cli_topic_echo cli_topic_list_visible cli_topic_list_hidden cli_service_list_visible cli_service_list_hidden; do
       graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli_graph/$name.log" "$LOGDIR/$board.$name.log"
     done
-  elif [[ "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone ]]; then
+  elif [[ "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone || "$cli_batch" == bags ]]; then
     graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli.status.json" "$LOGDIR/$board.cli.status.json"
     graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli.log" "$LOGDIR/$board.cli.log"
     graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli_daemon/results.json" "$LOGDIR/$board.cli.results.json"
@@ -236,6 +255,20 @@ for board in "$BOARD_A" "$BOARD_B"; do
         graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"
       done
     fi
+    if [[ "$cli_batch" == bags ]]; then
+      cli_names="status_before start status_running nodes_cached nodes_direct bag_record_sqlite3 bag_info_sqlite3 bag_play_sqlite3 bag_record_mcap bag_info_mcap bag_play_mcap stop status_after nodes_after_stop"
+      graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/bag_files.json" "$LOGDIR/$board.bag_files.json"
+      for storage in sqlite3 mcap; do
+        for stage in inspection sent received played; do
+          name="bag_${storage}_${stage}.json"
+          graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"
+        done
+      done
+      while IFS= read -r path; do
+        path="${path%$'\r'}"; name="${path//\//_}"
+        graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$path" "$LOGDIR/$board.$name"
+      done < <("$GRAPH_HOST_PYTHON" scripts/mdds_e2e/bag_file_list.py "$LOGDIR/$board.bag_files.json")
+    fi
     for name in $cli_names; do
       graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/cli_daemon/$name.log" "$LOGDIR/$board.$name.log"
     done
@@ -246,6 +279,6 @@ done
 printf 'ROS_BROKER_RECEIPT_TESTS PASS count=11\n'
 if [[ "$cli_batch" == basic ]]; then
   "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/verify_cli_graph_basic.py "$LOGDIR" "$MDDS_OWNED_RUN_ID"
-elif [[ "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone ]]; then
+elif [[ "$cli_batch" == daemon || "$cli_batch" == action || "$cli_batch" == introspection || "$cli_batch" == parameter_read || "$cli_batch" == parameter_write || "$cli_batch" == lifecycle || "$cli_batch" == components || "$cli_batch" == standalone || "$cli_batch" == bags ]]; then
   "$GRAPH_HOST_PYTHON" scripts/mdds_e2e/verify_cli_daemon.py "$LOGDIR" "$MDDS_OWNED_RUN_ID"
 fi

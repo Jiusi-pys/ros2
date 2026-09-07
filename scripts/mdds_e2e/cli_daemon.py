@@ -21,9 +21,12 @@ from cli_parameter_changes import recipe as parameter_change_recipe,oracle as pa
 from cli_lifecycle import recipe as lifecycle_recipe,oracle as lifecycle_oracle
 from cli_components import recipe as component_recipe,oracle as component_oracle,containers
 from cli_standalone import recipe as standalone_recipe,execute as execute_standalone
+from cli_bag import recipe as bag_recipe,oracle as bag_oracle
+from bag_record import execute as execute_record,freeze_files as freeze_bag_files
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='bags':return bag_recipe(ns,peer,nonce)
     if mode=='standalone':return standalone_recipe(ns,peer)
     if mode=='components':return component_recipe(ns,peer)
     if mode=='lifecycle':return lifecycle_recipe(ns,peer)
@@ -40,6 +43,7 @@ def node_names(namespace):
 
 
 def oracle(case, stdout, expected):
+    if case.startswith('cli:bag/'):return bag_oracle(case,stdout,expected)
     if case.startswith('cli:component/'):return component_oracle(stdout,expected)
     if case.startswith('cli:lifecycle/'):return lifecycle_oracle(stdout,expected)
     if case in ('cli:param/set','cli:param/load','cli:param/delete'):return parameter_change_oracle(stdout,expected)
@@ -79,7 +83,7 @@ def execute(argv, directory, run, board, case, label, expected):
             passed = passed and 'nodes in the graph that share an exact name' in stderr
         if case == 'cli:node/info' and expected['duplicate']:
             passed = passed and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' in stderr
-        if '--no-daemon' in argv or case=='cli:action/send_goal' or case.startswith('cli:param/') or case in ('cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set','cli:component/load','cli:component/list','cli:component/unload'):
+        if '--no-daemon' in argv or case in ('cli:action/send_goal','cli:bag/play') or case.startswith('cli:param/') or case in ('cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set','cli:component/load','cli:component/list','cli:component/unload'):
             passed = passed and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' in stderr
         marker = 'MDDS_CLI_FUNCTIONAL CASE='+case+' RESULT=PASS'
         log = directory / (label+'.log')
@@ -134,6 +138,7 @@ def main():
     def command(case,label,args,expected):
         if case=='cli:service/echo':value=execute_echo(['ros2']+args,output,run,board,case,label,expected,nonce)
         elif case=='cli:component/standalone':value=execute_standalone(['ros2']+args,output,run,board,case,label,expected,nonce)
+        elif case=='cli:bag/record':value=execute_record(['ros2']+args,output,run,board,case,label,expected,nonce)
         else:value=execute(['ros2']+args,output,run,board,case,label,expected)
         report['results'].append(value)
         if not value['passed']:
@@ -160,11 +165,18 @@ def main():
             if (root/'standalone.start').read_text().strip()!=nonce:raise ValueError('standalone start barrier mismatch')
             report['standalone_start_nonce']=nonce
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
+        if (root/'cli_batch').read_text().strip()=='bags':
+            (root/'bags').mkdir()
+            (root/'mcap_config.yaml').write_text('noChunking: true\n')
         if (root/'cli_batch').read_text().strip()=='parameter_write':
             import yaml
             (output/'parameter_load.yaml').write_text(yaml.safe_dump({'/ros_broker_'+run+'/alpha_'+peer_role:{'ros__parameters':loaded_values(nonce,peer_role)}}))
         for case,label,argv,wanted in batch_recipe((root/'cli_batch').read_text().strip(),'/ros_broker_'+run,peer_role,nonce):
             command(case,label,argv,wanted)
+            if case=='cli:bag/play':
+                marker=root/('bag_'+wanted['storage']+'_played.json');deadline=time.monotonic()+12
+                while time.monotonic()<deadline and not marker.exists():time.sleep(.1)
+                if json.loads(marker.read_text())['nonce']!=nonce:raise ValueError('bag replay proof identity differs')
             if case=='cli:component/standalone':
                 deadline=time.monotonic()+12
                 while time.monotonic()<deadline and not (root/'standalone_gone.json').exists():time.sleep(.1)
@@ -180,6 +192,7 @@ def main():
                     if stage=='loaded':
                         from component_process import inspect
                         report['container']=inspect(root,run)
+        if (root/'cli_batch').read_text().strip()=='bags':report['bag_files']=freeze_bag_files(root)
         report['daemon_after_queries']=inspect_daemon(root)
         if report['daemon_after_queries']['pid']!=report['daemon']['pid'] or report['daemon_after_queries']['start']!=report['daemon']['start']:
             raise ValueError('daemon replaced during graph comparison')

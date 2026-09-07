@@ -37,6 +37,9 @@ def validate_report(value, root, run, board, nonce):
     if (root/'cli_batch').read_text().strip()=='components':
         from verify_components import validate
         validate(value,root,run,board,nonce)
+    if (root/'cli_batch').read_text().strip()=='bags':
+        from verify_bags import validate
+        validate(value,root,run,board,nonce)
     daemon=value['daemon']
     for record in (daemon,value['daemon_after_queries']):
         if not owned(record,remote) or record['owned_udp'] or record['listeners']!=[{'table':'tcp','local':f'0100007F:{11511+175:04X}'}]:
@@ -80,6 +83,7 @@ def validate_report(value, root, run, board, nonce):
             server=json.loads((root/(peer_board+'.introspection.server.json')).read_text())
             if server!={**expected,'run_id':run,'nonce':nonce,'board':peer_board,'count':1}:raise ValueError('peer service callback differs')
             if (root/(peer_board+'.ros.log')).read_text().splitlines().count('CLI_INTROSPECTION_SERVER '+json.dumps(server))!=1:raise ValueError('peer service callback missing')
+        elif case=='cli:bag/record':pass  # Native storage and exact byte-level samples checked above.
         elif case=='cli:component/standalone':
             from verify_standalone import validate
             validate(execution,expected,raw,root,run,board,nonce)
@@ -87,7 +91,7 @@ def validate_report(value, root, run, board, nonce):
         if case=='cli:node/list':
             if 'nodes in the graph that share an exact name' not in raw:raise ValueError('duplicate-node warning missing')
         if case=='cli:node/info' and expected['duplicate'] and f'There are 2 nodes in the graph with the exact name "{expected["node"]}".' not in raw:raise ValueError('duplicate-node info warning missing')
-        if ('--no-daemon' in argv or case.startswith('cli:param/') or case in ('cli:action/send_goal','cli:service/echo','cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set','cli:component/load','cli:component/list','cli:component/unload')) and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
+        if ('--no-daemon' in argv or case.startswith('cli:param/') or case in ('cli:action/send_goal','cli:service/echo','cli:bag/record','cli:bag/play','cli:lifecycle/get','cli:lifecycle/list','cli:lifecycle/set','cli:component/load','cli:component/list','cli:component/unload')) and 'dsoftbus(local=AF_UNIX physical=dsoftbus_broker' not in raw:raise ValueError('direct query did not select DSoftBus')
         if case.startswith('cli:lifecycle/'):
             peer_board=next(other for other in acceptance.TARGET['board_serials'] if other!=board)
             node='/ros_broker_'+run+'/alpha_'+peer_role
@@ -176,6 +180,8 @@ def main():
         if case['id'].startswith('cli:component/'):
             suffixes=('standalone_received.json','standalone_gone.json','standalone.ready','standalone.start','standalone.stop') if case['id']=='cli:component/standalone' else ('components_loaded.json','components_retired.json','components_empty.json','container.log','container.status.json')
             receipt['component_evidence']=[{'path':board+'.'+suffix,'sha256':acceptance.digest((root/(board+'.'+suffix)).read_bytes())} for board in reports for suffix in suffixes]
+        if case['id'].startswith('cli:bag/'):
+            receipt['bag_artifacts']=[{'path':board+'.'+item['path'].replace('/','_'),'sha256':item['sha256']} for board,value in reports.items() for item in value['bag_files']]
         path=root/(case['id'].replace(':','_').replace('/','_')+'.receipt.json');path.write_text(json.dumps(receipt,indent=2)+'\n')
         ref={'path':path.name,'sha256':acceptance.digest(path.read_bytes())};acceptance.validate_receipt(case,ref,manifest,root)
         case['status']='PASS';case['evidence']=[ref];passed.append(case['id'])

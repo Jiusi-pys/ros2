@@ -53,7 +53,7 @@ argv, broker-root and library-path checks. Its port was then verified reusable.
 The outer failure-cleanup gap is now fixed and verified by the independent
 failure injection in [CLI failure cleanup](mdds_cli_failure_cleanup.md).
 
-The current matrix has 14 cases. Seven additional cases cover automatic versus
+The previous matrix had 14 cases. Seven additional cases cover automatic versus
 manual-by-topic liveliness, valid manual offers, equal manual kinds, longer
 and infinite offered leases against finite requests, and shorter/equal valid
 leases. The three new negatives retain real discovered peers and all three
@@ -77,7 +77,13 @@ RED/GREEN archives are documented in each package's `docs/qos_liveliness.md`.
   `24e754e20f0ea629ce4f0694dec23629bb305c22788cf781ddc9c23c6fc7964d`,
   `23afe3759f04e44d68de49512250ac198cdb54cb42ec27b158c7d0ab39e61df2`.
 
-Coverage remains 90/98. Liveliness matching is verified at the existing
-millisecond representation. Sub-millisecond QoS precision, complete
-liveliness expiry/assertion behavior, remaining graph/failure/isolation and
-advanced APIs, and a unified release remain open. Gateway is out of scope.
+The current 19-case protocol-v10 matrix passed in `qos_nanoseconds_20260907_01`.
+It adds one-nanosecond RxO differences, exact fractional-millisecond metadata
+and a matched-but-expired 1 ns lifespan control. Ten pairs receive three samples
+each; eight incompatible pairs and the expired pair receive none. Eight contract
+tests, 24 receipt adversaries and 18 generic tests passed. Exact native hashes
+and the final manifest are recorded in [Nanosecond QoS](mdds_qos_nanoseconds.md).
+
+Coverage remains 90/98. Complete liveliness expiry/assertion/recovery behavior,
+remaining graph/failure/isolation and advanced APIs, and a unified release
+remain open. Gateway is out of scope.

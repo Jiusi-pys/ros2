@@ -16,9 +16,15 @@ MATRIX=[
     {'name':'liveliness_lease_bad','offered':{'lease':120_000_000_000},'requested':{'lease':60_000_000_000},'compatible':False},
     {'name':'liveliness_infinite_bad','offered':{},'requested':{'lease':60_000_000_000},'compatible':False},
     {'name':'liveliness_lease_compatible','offered':{'lease':60_000_000_000},'requested':{'lease':120_000_000_000},'compatible':True},
-    {'name':'liveliness_lease_equal','offered':{'lease':60_000_000_000},'requested':{'lease':60_000_000_000},'compatible':True}]
+    {'name':'liveliness_lease_equal','offered':{'lease':60_000_000_000},'requested':{'lease':60_000_000_000},'compatible':True},
+    {'name':'deadline_precision_bad','offered':{'deadline':1_500_001},'requested':{'deadline':1_500_000},'compatible':False},
+    {'name':'deadline_precision_compatible','offered':{'deadline':1_500_000,'lifespan':123_456_789_123},'requested':{'deadline':1_500_001},'compatible':True},
+    {'name':'liveliness_precision_bad','offered':{'lease':1_500_001},'requested':{'lease':1_500_000},'compatible':False},
+    {'name':'liveliness_precision_compatible','offered':{'lease':1_500_000},'requested':{'lease':1_500_001},'compatible':True},
+    {'name':'lifespan_expired','offered':{'lifespan':1},'requested':{},'compatible':True,'delivers':False}]
 
 def row(name):return next(v for v in MATRIX if v['name']==name)
+def delivers(name):return row(name).get('delivers',row(name)['compatible'])
 def topic(run,role,name):return '/endpoint_qos_'+run+'/'+role+'/'+name
 def payloads(run,nonce,role,name):return ['|'.join((run,nonce,role,name,str(i))) for i in range(3)]
 
@@ -32,7 +38,7 @@ def validate_counts(name,value):
     if value!={'publishers':1,'subscriptions':1,'writer_matches':matched,'reader_matches':matched}:raise ValueError('graph visibility or QoS match count differs: '+name)
 
 def validate_received(name,received,run,nonce,peer):
-    if received!=(payloads(run,nonce,peer,name) if row(name)['compatible'] else []):raise ValueError('QoS-filtered peer payloads differ: '+name)
+    if received!=(payloads(run,nonce,peer,name) if delivers(name) else []):raise ValueError('QoS-filtered peer payloads differ: '+name)
 
 def validate(value,run,nonce,role,type_hash):
     peer='B' if role=='A' else 'A';names={v['name'] for v in MATRIX};gids=[]

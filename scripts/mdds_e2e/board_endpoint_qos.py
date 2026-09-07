@@ -1,7 +1,7 @@
 """Run real cross-board pub/sub with compatible and incompatible QoS."""
 import json
 import time
-from endpoint_qos_contract import MATRIX,qos,topic,payloads,validate,validate_counts
+from endpoint_qos_contract import MATRIX,qos,topic,payloads,validate,validate_counts,delivers
 
 
 class EndpointQoSProbe:
@@ -24,8 +24,8 @@ class EndpointQoSProbe:
             compatibility,reason=qos_check_compatible(offered,requested)
             self.compatibility[name]={'code':int(compatibility),'reason':reason}
             self.pubs[name]=node.create_publisher(String,topic(run,role,name),offered)
-            def receive(message,name=name,compatible=item['compatible']):
-                if not compatible:raise RuntimeError('incompatible QoS delivered a sample: '+name)
+            def receive(message,name=name,expected_delivery=delivers(name)):
+                if not expected_delivery:raise RuntimeError('incompatible or expired QoS delivered a sample: '+name)
                 expected=payloads(run,nonce,self.peer,name);values=self.received[name]
                 if len(values)>=len(expected) or message.data!=expected[len(values)]:raise ValueError('QoS sample identity/order differs')
                 values.append(message.data)
@@ -76,7 +76,7 @@ class EndpointQoSProbe:
         if (self.root/'endpoint_qos.observe_go').read_text().strip()!=self.nonce:raise ValueError('QoS observation barrier differs')
         if self.observe_start is None:self.observe_start=now
         if now-self.observe_start<1_000_000_000:return
-        if any(len(self.received[v['name']])!=3 for v in MATRIX if v['compatible']):return
+        if any(len(self.received[v['name']])!=3 for v in MATRIX if delivers(v['name'])):return
         value={'run_id':self.run,'nonce':self.nonce,'role':self.role,'passed':True,'observation_ns':now-self.observe_start,
                'counts':counts,'metadata':metadata,'sent':self.sent,'received':self.received,'compatibility':self.compatibility}
         type_hash=json.loads((self.root/'type_hashes.json').read_bytes())['hashes']['std_msgs/msg/String']

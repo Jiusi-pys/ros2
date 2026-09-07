@@ -283,6 +283,9 @@ def main():
     if (root/'graph_case').exists():
         from service_graph_receipt import emit
         passed.append(emit(root,manifest,reports,run,nonce))
+    if (root/'cli_batch').read_text().strip()=='graph_waiters':
+        from cli_graph_waiters import emit_receipt
+        passed.append(emit_receipt(root,manifest,reports,run,nonce))
     (root/'cli_partial_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('CLI_DAEMON_PASS '+json.dumps(passed))
 

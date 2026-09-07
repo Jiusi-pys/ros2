@@ -3,8 +3,8 @@
 ## Complete C++ and Python ros2 run coverage
 
 Current status: `cli:run` is verified on both RK3588A boards by
-`cli_run_languages_20260907_03`. Coverage is 83/98 including multi-node launch
-and the service ownership graph case; the remaining graph/transport matrix and final unified
+`cli_run_languages_20260907_03`. Coverage is 84/98 including multi-node launch,
+service ownership and local guard graph cases; the remaining graph/transport matrix and final unified
 release remain incomplete. Gateway is outside the current goal.
 
 Design: execute the installed C++ talker, prove peer reception and retirement,

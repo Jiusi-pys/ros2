@@ -49,6 +49,28 @@ The RMW alias defect and native RED/GREEN evidence are documented in
 NULL-placeholder test assumption is recorded there explicitly, including the
 contract-corrected RED; the original failed archive was preserved.
 
-Formal local/remote guard case receipts and the remaining graph matrix are
-still outstanding. Aggregate case coverage remains 83/98. This probe is not
-an all-graph, all-CLI-on-one-version or unified release claim.
+## Formal local guard case
+
+Design: preserve the ten-phase/two-observer checks and record the exact native
+argv and `graph:local_guard` terminal marker only after the C++ process exits.
+Bind that log to the original stdout/stderr, native PID/start, private library
+and source hashes, barriers, and actual peer callback. A pre-shutdown program
+banner alone is insufficient.
+
+`test_local_graph_gate.py` was written first. All four checks failed RED under
+the old verifier, which ignored the local graph case. They pass after adding
+the receipt gate: missing terminal, single-board-only terminal and nonzero
+terminal are rejected; a complete synthetic unit fixture is accepted. Original
+board evidence is never edited by these unit tests.
+
+Fresh HDC run `graph_local_guard_20260907_01` then passed both boards, including
+all ten native phases, both observers, peer calls and the enclosing DSoftBus
+baseline. All 15 real-receipt adversaries and 18 generic gate tests passed.
+
+- Final manifest SHA-256:
+  `ece2f0f328528b975bacd868e787bec8597dde132a26fae3675d469f2a68acad`.
+- Local guard receipt SHA-256:
+  `73b3c8f94d64482fddef851c3082951e592731800bb6400d6a4241d956fde99e`.
+
+Aggregate case coverage is 84/98. Remote guard and the remaining graph matrix,
+all-CLI-on-one-version validation and unified release remain outstanding.

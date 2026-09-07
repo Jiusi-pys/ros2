@@ -466,7 +466,7 @@ for board in "$BOARD_A" "$BOARD_B"; do
     fi
     if [[ "$cli_batch" == graph_waiters ]]; then
       cli_names="status_before start status_running nodes_cached nodes_direct stop status_after nodes_after_stop"
-      for name in graph_waiters.json graph_waiters.stdout graph_waiters.stderr graph_waiters_server.json graph_waiters.ready graph_waiters.start graph_waiters.done; do graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"; done
+      for name in graph_waiters.log graph_waiters.json graph_waiters.stdout graph_waiters.stderr graph_waiters_server.json graph_waiters.ready graph_waiters.start graph_waiters.done; do graph_fetch_verified "$board" "$MDDS_OWNED_REMOTE_DIR/$name" "$LOGDIR/$board.$name"; done
     fi
     if [[ "$cli_batch" == service_qos ]]; then
       cli_names="status_before start status_running nodes_cached nodes_direct stop status_after nodes_after_stop"

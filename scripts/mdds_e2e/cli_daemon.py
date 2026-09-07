@@ -26,6 +26,7 @@ from bag_record import execute as execute_record,freeze_files as freeze_bag_file
 
 
 def batch_recipe(mode,ns,peer,nonce=''):
+    if mode=='trace_probe':return []  # Tracing remains unaccepted until CTF is independently decoded.
     if mode=='multicast':
         from cli_multicast import recipe
         return recipe(ns,peer,nonce)
@@ -246,6 +247,9 @@ def main():
             if (root/'process.start').read_text().strip()!=nonce:raise ValueError('process start barrier differs')
             report['process_start_nonce']=nonce
         peer_role='B' if board==acceptance.TARGET['board_serials'][0] else 'A'
+        if (root/'cli_batch').read_text().strip()=='trace_probe':
+            from board_trace_probe import execute as trace_execute
+            report['trace_probe']=trace_execute(root,run,'A' if peer_role=='B' else 'B',nonce)
         if (root/'cli_batch').read_text().strip() in ('bags','bag_transform','bag_burst'):
             (root/'bags').mkdir()
             (root/'mcap_config.yaml').write_text('noChunking: true\n')

@@ -1,0 +1,5 @@
+# Pure-Python doctor dependencies; existing ROS runtime supplies PyYAML,
+# catkin_pkg and setuptools. Download with pip --no-deps --require-hashes.
+rosdistro==1.1.0 --hash=sha256:a10d0852fcef15b2b9c92a7b4d553481f660e4e672eaeb1138ad077ffe9a2a38
+rospkg==1.6.2 --hash=sha256:d8c32b8560501a9ca6616a1ef5f61ca89da79701f4a66020ada189594fe15f5a
+distro==1.9.0 --hash=sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2

@@ -1,7 +1,7 @@
 From ea48d021ba6cdc03344dab5d8d59aeb9650acfb4 Mon Sep 17 00:00:00 2001
 From: Yusheng Peng <jiusi0519@gmail.com>
 Date: Thu, 27 Aug 2026 17:03:07 +0800
-Subject: [PATCH 1/2] rclcpp: drop mimick_vendor test_depends (aarch64
+Subject: [PATCH 1/6] rclcpp: drop mimick_vendor test_depends (aarch64
  trampoline asm not portable to OHOS NDK)
 
 mimick_vendor's aarch64 trampoline assembly does not assemble with the
@@ -16,7 +16,7 @@ keeps colcon dependency resolution happy.
  3 files changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/rclcpp/package.xml b/rclcpp/package.xml
-index 0581c0f0..b6abb03f 100644
+index 0581c0f09bd60849adde298230decb7d3f84c496..b6abb03fa1c0d7ea0645e6290439061dc72d00ad 100644
 --- a/rclcpp/package.xml
 +++ b/rclcpp/package.xml
 @@ -51,7 +51,7 @@
@@ -29,7 +29,7 @@ index 0581c0f0..b6abb03f 100644
    <test_depend>rmw</test_depend>
    <test_depend>rmw_implementation_cmake</test_depend>
 diff --git a/rclcpp_action/package.xml b/rclcpp_action/package.xml
-index ccdfaf21..1556228c 100644
+index ccdfaf21634e83c270e8c119cac5f32820901737..1556228c60e86084cfc2f31fd0a06569d804f383 100644
 --- a/rclcpp_action/package.xml
 +++ b/rclcpp_action/package.xml
 @@ -31,7 +31,7 @@
@@ -42,7 +42,7 @@ index ccdfaf21..1556228c 100644
    <test_depend>test_msgs</test_depend>
  
 diff --git a/rclcpp_lifecycle/package.xml b/rclcpp_lifecycle/package.xml
-index 845c93d8..628ba160 100644
+index 845c93d83dcccc10e8ec3515145ce154f76afab3..628ba1606da54750b8284cec221734471750e83c 100644
 --- a/rclcpp_lifecycle/package.xml
 +++ b/rclcpp_lifecycle/package.xml
 @@ -37,7 +37,7 @@
@@ -61,7 +61,7 @@ index 845c93d8..628ba160 100644
 From bf8c5fd331f8ee8bd2c32f77d9917650b4af7492 Mon Sep 17 00:00:00 2001
 From: Yusheng Peng <jiusi0519@gmail.com>
 Date: Sat, 29 Aug 2026 02:07:11 +0800
-Subject: [PATCH 2/2] package.xml: dependency unrolls for the OHOS cross
+Subject: [PATCH 2/6] package.xml: dependency unrolls for the OHOS cross
  workspace
 
 ---
@@ -71,7 +71,7 @@ Subject: [PATCH 2/2] package.xml: dependency unrolls for the OHOS cross
  3 files changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/rclcpp/package.xml b/rclcpp/package.xml
-index b6abb03f..0581c0f0 100644
+index b6abb03fa1c0d7ea0645e6290439061dc72d00ad..0581c0f09bd60849adde298230decb7d3f84c496 100644
 --- a/rclcpp/package.xml
 +++ b/rclcpp/package.xml
 @@ -51,7 +51,7 @@
@@ -84,7 +84,7 @@ index b6abb03f..0581c0f0 100644
    <test_depend>rmw</test_depend>
    <test_depend>rmw_implementation_cmake</test_depend>
 diff --git a/rclcpp_action/package.xml b/rclcpp_action/package.xml
-index 1556228c..ccdfaf21 100644
+index 1556228c60e86084cfc2f31fd0a06569d804f383..ccdfaf21634e83c270e8c119cac5f32820901737 100644
 --- a/rclcpp_action/package.xml
 +++ b/rclcpp_action/package.xml
 @@ -31,7 +31,7 @@
@@ -97,7 +97,7 @@ index 1556228c..ccdfaf21 100644
    <test_depend>test_msgs</test_depend>
  
 diff --git a/rclcpp_lifecycle/package.xml b/rclcpp_lifecycle/package.xml
-index 628ba160..845c93d8 100644
+index 628ba1606da54750b8284cec221734471750e83c..845c93d83dcccc10e8ec3515145ce154f76afab3 100644
 --- a/rclcpp_lifecycle/package.xml
 +++ b/rclcpp_lifecycle/package.xml
 @@ -37,7 +37,7 @@
@@ -109,6 +109,835 @@ index 628ba160..845c93d8 100644
    <test_depend>performance_test_fixture</test_depend>
    <test_depend>rcpputils</test_depend>
    <test_depend>test_msgs</test_depend>
+-- 
+2.55.0.windows.5
+
+
+From eea15faeaa740d3263025d2b6800c949233289f8 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Mon, 7 Sep 2026 11:22:45 +0800
+Subject: [PATCH 3/6] fix(rclcpp): preserve OHOS signal ABI and graceful
+ shutdown
+
+---
+ rclcpp/CMakeLists.txt                        |   1 +
+ rclcpp/OHOS_SIGNAL_HANDLING.md               |  67 +++++++++
+ rclcpp/src/rclcpp/ohos_signal_dispatcher.cpp |  50 +++++++
+ rclcpp/src/rclcpp/signal_handler.cpp         |  38 ++++-
+ rclcpp/src/rclcpp/signal_handler.hpp         |  12 +-
+ rclcpp/test/rclcpp/CMakeLists.txt            |  11 ++
+ rclcpp/test/rclcpp/test_signal_chaining.cpp  | 150 +++++++++++++++++++
+ 7 files changed, 324 insertions(+), 5 deletions(-)
+ create mode 100644 rclcpp/OHOS_SIGNAL_HANDLING.md
+ create mode 100644 rclcpp/src/rclcpp/ohos_signal_dispatcher.cpp
+ create mode 100644 rclcpp/test/rclcpp/test_signal_chaining.cpp
+
+diff --git a/rclcpp/CMakeLists.txt b/rclcpp/CMakeLists.txt
+index 4d44ba669c9802f741fc05bd09209530f60d6a15..80aec9bd382d6bf7dad35ebf063f0d8c37bd71c3 100644
+--- a/rclcpp/CMakeLists.txt
++++ b/rclcpp/CMakeLists.txt
+@@ -120,6 +120,7 @@ set(${PROJECT_NAME}_SRCS
+   src/rclcpp/serialized_message.cpp
+   src/rclcpp/service.cpp
+   src/rclcpp/signal_handler.cpp
++  src/rclcpp/ohos_signal_dispatcher.cpp
+   src/rclcpp/subscription_base.cpp
+   src/rclcpp/subscription_intra_process_base.cpp
+   src/rclcpp/time.cpp
+diff --git a/rclcpp/OHOS_SIGNAL_HANDLING.md b/rclcpp/OHOS_SIGNAL_HANDLING.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..ff8b0ebb72426ad4f8cfccb7f714a170417316ce
+--- /dev/null
++++ b/rclcpp/OHOS_SIGNAL_HANDLING.md
+@@ -0,0 +1,67 @@
++# OpenHarmony signal handling
++
++On the KaihongOS RK3588A target, ROS must handle SIGINT/SIGTERM gracefully
++without invoking FFRT's terminating fault dispatcher as an ordinary callback.
++The exact previous sigaction remains available for restoration when ROS
++uninstalls its handlers. Ordinary application handlers still receive their
++original one-argument or SA_SIGINFO calling convention.
++
++Two separate problems were found in a real ros2 launch shutdown:
++
++1. Strict C++ compilation on OHOS does not define the POSIX feature macros
++   previously used to select sigaction. The library chose std::signal, then
++   called FFRT's three-argument handler through a one-argument pointer. A real
++   talker crashed at FFRT's siginfo access, address 0x50. The OHOS compiler
++   defines `__OHOS__`, and the SDK exposes sigaction; that platform now selects
++   the correct API explicitly. Default and ignored dispositions are checked
++   even when SA_SIGINFO is set.
++2. Correcting that ABI alone removed the invalid access but did not permit
++   graceful shutdown. The system FFRT dispatcher restores its saved action
++   and requeues the signal, so invoking it manually caused SIGINT termination.
++   Native ELF evidence showed sigaction at offset 0x68e74 and the AArch64
++   rt_tgsigqueueinfo call at 0x68e9c. The inspected system library SHA-256 was
++   `9262fafbfa0d37276beecb2414dddfea710ba201ebf5f18b053c8aebe02f65b1`.
++
++The implementation keeps restored actions separate from chainable callbacks.
++During installation, an OHOS-only helper uses dladdr to recognize the system
++NDK FFRT library paths. That dispatcher is retained for uninstall but omitted
++from the callbacks invoked by ROS. Other handlers remain chainable. Module
++lookup occurs during installation, never inside the signal handler. Fatal
++signals outside the SIGINT/SIGTERM options are unaffected. The GNU declaration
++needed for dladdr is confined to one implementation file.
++
++Native regression evidence (2026-09-07):
++
++- `signal_chain_red2_20260907`: five cases, five failures. Four detected the
++  wrong installed ABI; the legacy-handler case detected a lost signal mask.
++  Archive SHA-256:
++  `129066ddc1d1a21e77ec7914b77ec7a816f3be95c90b6b2fdf1d30daf04d6684`.
++- `signal_chain_green_20260907`: those five cases passed after the sigaction
++  correction, before the real FFRT requeue case was added.
++- `ffrt_chain_red_20260907`: six cases, one failure. The test verified the
++  real system FFRT origin and flags 0x14000004, then died from SIGINT.
++  Archive SHA-256:
++  `9de10c91851f02d6c2d92ee68229d4e5b8b52bd58d442a9904612a0f74a6ba6e`.
++- `ffrt_chain_green_20260907`: all six passed, including restoration of the
++  real FFRT disposition and preservation of ordinary callbacks and masks.
++  READY, terminal, raw log, XML and archive verdicts agree. Archive SHA-256:
++  `5a3e2f2cb3c41ebc232927ac282164227d5be51625b44be8833947e42655f371`.
++
++The tested production library SHA-256 is
++`cde55d5d806eb738c98fbb5c0d34d7e7cb8b5b7b4c41b7141d8507972fa1cd55`.
++Formatting the test source afterwards did not change this library.
++Real two-board launch run `cli_launch_ffrt_fix_20260907` loaded this exact
++private library on both boards, delivered peer samples over DSoftBus, forwarded
++SIGINT from launch, observed native and CLI exit zero, and verified graph
++withdrawal. Its partial CLI manifest SHA-256 is
++`0f5d03fbcf2276eec116f5be4fde97e82ccbecba60ac3c93876d31ac6de15559`.
++The same library also passed the two-board ros2 run process-group shutdown
++regression `cli_run_ffrt_fix_20260907`; its manifest SHA-256 is
++`da912da1e6f7e966067aff26509a35b4401081f0d19ef5bf59806d1f00ea88c2`.
++Fifteen launch and eleven run evidence-adversary checks passed. The four
++changed C++ files pass the workspace's ament_uncrustify check.
++
++This validates the signal fix and its launch integration. It does not claim
++that all rclcpp tests, all ROS CLI/graph cases or a final release gate passed.
++Board-wide shared installation is a separate deployment step; these runtime
++checks use verified private libraries.
+diff --git a/rclcpp/src/rclcpp/ohos_signal_dispatcher.cpp b/rclcpp/src/rclcpp/ohos_signal_dispatcher.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..ad90ba14d1a5d2abdec33b968c9d94ae37675901
+--- /dev/null
++++ b/rclcpp/src/rclcpp/ohos_signal_dispatcher.cpp
+@@ -0,0 +1,50 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++// Isolate the GNU dladdr declaration from the rest of rclcpp's feature macros.
++#if defined(__OHOS__) && !defined(_GNU_SOURCE)
++#define _GNU_SOURCE 1
++#endif
++
++#if defined(__OHOS__)
++#include <dlfcn.h>
++#include <cstring>
++#endif
++
++namespace rclcpp
++{
++namespace detail
++{
++
++// Called only during signal-handler installation, never from signal context.
++bool is_ohos_ffrt_signal_dispatcher(const void * handler) noexcept
++{
++#if defined(__OHOS__)
++  Dl_info origin {};
++  if (!dladdr(handler, &origin) || origin.dli_fname == nullptr) {
++    return false;
++  }
++  // The SDK's fault dispatcher restores its saved action and requeues the
++  // signal. It is not a returnable application callback. Limit this treatment
++  // to the system NDK copies; unrelated/user handlers remain chainable.
++  return std::strcmp(origin.dli_fname, "/system/lib64/ndk/libffrt.so") == 0 ||
++         std::strcmp(origin.dli_fname, "/system/lib/ndk/libffrt.so") == 0;
++#else
++  (void)handler;
++  return false;
++#endif
++}
++
++}  // namespace detail
++}  // namespace rclcpp
+diff --git a/rclcpp/src/rclcpp/signal_handler.cpp b/rclcpp/src/rclcpp/signal_handler.cpp
+index 4c5c3e08bd3dcc22667cb3c5a2baabd53b7e986d..0f8865c026a3a98a5e52766356d570c56d418ee9 100644
+--- a/rclcpp/src/rclcpp/signal_handler.cpp
++++ b/rclcpp/src/rclcpp/signal_handler.cpp
+@@ -38,6 +38,32 @@
+ using rclcpp::SignalHandler;
+ using rclcpp::SignalHandlerOptions;
+ 
++namespace rclcpp
++{
++namespace detail
++{
++bool is_ohos_ffrt_signal_dispatcher(const void * handler) noexcept;
++}  // namespace detail
++}  // namespace rclcpp
++
++SignalHandler::signal_handler_type
++SignalHandler::select_chained_handler(const signal_handler_type & original)
++{
++  auto chained = original;
++#if defined(__OHOS__)
++  if (original.sa_handler != SIG_DFL && original.sa_handler != SIG_IGN &&
++    original.sa_handler != nullptr &&
++    detail::is_ohos_ffrt_signal_dispatcher(reinterpret_cast<const void *>(original.sa_handler)))
++  {
++    // ROS handles SIGINT/SIGTERM gracefully. Calling this dispatcher would
++    // restore an earlier disposition and requeue the already-handled signal.
++    // uninstall() still restores the unmodified original action below.
++    chained.sa_handler = SIG_DFL;
++  }
++#endif
++  return chained;
++}
++
+ SignalHandler::signal_handler_type
+ SignalHandler::set_signal_handler(
+   int signal_value,
+@@ -73,7 +99,11 @@ SignalHandler::signal_handler(
+ 
+   auto old_signal_handler = instance.get_old_signal_handler(signum);
+   if (old_signal_handler.sa_flags & SA_SIGINFO) {
+-    if (old_signal_handler.sa_sigaction != NULL) {
++    if (
++      old_signal_handler.sa_sigaction != NULL &&
++      old_signal_handler.sa_handler != SIG_DFL &&
++      old_signal_handler.sa_handler != SIG_IGN)
++    {
+       old_signal_handler.sa_sigaction(signum, siginfo, context);
+     }
+   } else {
+@@ -146,6 +176,7 @@ SignalHandler::install(SignalHandlerOptions signal_handler_options)
+       signal_handler_options == SignalHandlerOptions::All)
+     {
+       old_sigint_handler_ = set_signal_handler(SIGINT, handler_argument);
++      chained_sigint_handler_ = select_chained_handler(old_sigint_handler_);
+     }
+ 
+     if (
+@@ -153,6 +184,7 @@ SignalHandler::install(SignalHandlerOptions signal_handler_options)
+       signal_handler_options == SignalHandlerOptions::All)
+     {
+       old_sigterm_handler_ = set_signal_handler(SIGTERM, handler_argument);
++      chained_sigterm_handler_ = select_chained_handler(old_sigterm_handler_);
+     }
+ 
+     signal_handler_thread_ = std::thread(&SignalHandler::deferred_signal_handler, this);
+@@ -228,9 +260,9 @@ SignalHandler::signal_handler_type
+ SignalHandler::get_old_signal_handler(int signum)
+ {
+   if (SIGINT == signum) {
+-    return old_sigint_handler_;
++    return chained_sigint_handler_;
+   } else if (SIGTERM == signum) {
+-    return old_sigterm_handler_;
++    return chained_sigterm_handler_;
+   }
+ #if defined(RCLCPP_HAS_SIGACTION)
+   SignalHandler::signal_handler_type ret;
+diff --git a/rclcpp/src/rclcpp/signal_handler.hpp b/rclcpp/src/rclcpp/signal_handler.hpp
+index db608b0d108ca5fdb7cc56815e0c6d24305d6038..2b491b58878e0418c3be95341bbb4db42e7f4a49 100644
+--- a/rclcpp/src/rclcpp/signal_handler.hpp
++++ b/rclcpp/src/rclcpp/signal_handler.hpp
+@@ -32,8 +32,10 @@
+ #include <semaphore.h>
+ #endif
+ 
+-// Determine if sigaction is available
+-#if __APPLE__ || _POSIX_C_SOURCE >= 1 || _XOPEN_SOURCE || _POSIX_SOURCE
++// OHOS exposes sigaction in strict C++ mode without defining the POSIX feature
++// macros below. Its system handlers can use SA_SIGINFO and must not be called
++// through the single-argument std::signal ABI.
++#if defined(__OHOS__) || __APPLE__ || _POSIX_C_SOURCE >= 1 || _XOPEN_SOURCE || _POSIX_SOURCE
+ #define RCLCPP_HAS_SIGACTION
+ #endif
+ 
+@@ -179,10 +181,16 @@ private:
+   signal_handler_type
+   get_old_signal_handler(int signum);
+ 
++  static signal_handler_type
++  select_chained_handler(const signal_handler_type & original);
++
+   rclcpp::SignalHandlerOptions signal_handlers_options_ = rclcpp::SignalHandlerOptions::None;
+ 
+   signal_handler_type old_sigint_handler_;
+   signal_handler_type old_sigterm_handler_;
++  // Keep the exact actions for restoration separately from callable callbacks.
++  signal_handler_type chained_sigint_handler_{};
++  signal_handler_type chained_sigterm_handler_{};
+ 
+   // logger instance
+   rclcpp::Logger logger_ = rclcpp::get_logger("rclcpp");
+diff --git a/rclcpp/test/rclcpp/CMakeLists.txt b/rclcpp/test/rclcpp/CMakeLists.txt
+index b656eb0783862da9497e85c2f4daa8ef3cfba2f9..654399dc7c387763159c3d0193809f3283c8996c 100644
+--- a/rclcpp/test/rclcpp/CMakeLists.txt
++++ b/rclcpp/test/rclcpp/CMakeLists.txt
+@@ -2,6 +2,17 @@ find_package(ament_cmake_gtest REQUIRED)
+ 
+ find_package(rmw_implementation_cmake REQUIRED)
+ 
++if(NOT WIN32)
++  ament_add_gtest(test_signal_chaining test_signal_chaining.cpp)
++  if(TARGET test_signal_chaining)
++    target_compile_definitions(test_signal_chaining PRIVATE _POSIX_C_SOURCE=200809L)
++    if(OHOS_CROSS_BUILD)
++      target_compile_definitions(test_signal_chaining PRIVATE _GNU_SOURCE)
++    endif()
++    target_link_libraries(test_signal_chaining ${PROJECT_NAME})
++  endif()
++endif()
++
+ add_definitions(-DTEST_RESOURCES_DIRECTORY="${TEST_RESOURCES_DIRECTORY}")
+ 
+ rosidl_generate_interfaces(${PROJECT_NAME}_test_msgs
+diff --git a/rclcpp/test/rclcpp/test_signal_chaining.cpp b/rclcpp/test/rclcpp/test_signal_chaining.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..01144ff483dd61297e7dd65dda465288dfc1f347
+--- /dev/null
++++ b/rclcpp/test/rclcpp/test_signal_chaining.cpp
+@@ -0,0 +1,150 @@
++// Copyright 2026 Yusheng Peng
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#include <signal.h>
++#include <unistd.h>
++#if defined(__OHOS__)
++#include <dlfcn.h>
++#include <cstdio>
++#include <cstring>
++#endif
++
++#include "gtest/gtest.h"
++#include "rclcpp/utilities.hpp"
++
++namespace
++{
++volatile sig_atomic_t calls = 0;
++volatile sig_atomic_t received_signal = 0;
++volatile sig_atomic_t received_info_signal = 0;
++volatile sig_atomic_t received_context = 0;
++
++void information_handler(int signum, siginfo_t * info, void * context)
++{
++  ++calls;
++  received_signal = signum;
++  received_info_signal = info == nullptr ? 0 : info->si_signo;
++  received_context = context == nullptr ? 0 : 1;
++}
++
++void legacy_handler(int signum)
++{
++  ++calls;
++  received_signal = signum;
++}
++
++// Run in a fresh subprocess: signal handlers and the rclcpp signal thread are
++// process-global. Fail before raising if the installed ABI is already wrong.
++int exercise(int signum, int disposition)
++{
++  rclcpp::uninstall_signal_handlers();
++  struct sigaction previous {};
++  sigemptyset(&previous.sa_mask);
++  sigaddset(&previous.sa_mask, SIGUSR1);
++  previous.sa_flags = disposition == 1 ? 0 : SA_SIGINFO;
++  if (disposition == 0) {
++    previous.sa_sigaction = information_handler;
++  } else {
++    previous.sa_handler = disposition == 1 ? legacy_handler :
++      (disposition == 2 ? SIG_IGN : SIG_DFL);
++  }
++  if (sigaction(signum, &previous, nullptr) != 0) {return 1;}
++  const auto options = signum == SIGINT ?
++    rclcpp::SignalHandlerOptions::SigInt : rclcpp::SignalHandlerOptions::SigTerm;
++  if (!rclcpp::install_signal_handlers(options)) {return 2;}
++  struct sigaction installed {};
++  if (sigaction(signum, nullptr, &installed) != 0) {return 3;}
++  if (disposition != 1 && !(installed.sa_flags & SA_SIGINFO)) {return 4;}
++  if (raise(signum) != 0) {return 5;}
++  const bool delivered = disposition == 0 ?
++    calls == 1 && received_signal == signum && received_info_signal == signum &&
++    received_context == 1 :
++    (disposition == 1 ? calls == 1 && received_signal == signum : calls == 0);
++  if (!rclcpp::uninstall_signal_handlers() || !delivered) {return 6;}
++  struct sigaction restored {};
++  if (sigaction(signum, nullptr, &restored) != 0) {return 7;}
++  if (sigismember(&restored.sa_mask, SIGUSR1) != 1) {return 8;}
++  if ((restored.sa_flags & SA_SIGINFO) != (previous.sa_flags & SA_SIGINFO)) {return 9;}
++  if (disposition == 0) {
++    if (restored.sa_sigaction != previous.sa_sigaction) {return 10;}
++  } else if (restored.sa_handler != previous.sa_handler) {
++    return 11;
++  }
++  return 0;
++}
++
++class SignalChainingDeathTest : public ::testing::Test
++{
++protected:
++  void SetUp() override {::testing::FLAGS_gtest_death_test_style = "threadsafe";}
++};
++}  // namespace
++
++TEST_F(SignalChainingDeathTest, PreservesSigintSiginfoArgumentsAndDisposition)
++{
++  ASSERT_EXIT(_exit(exercise(SIGINT, 0)), ::testing::ExitedWithCode(0), "");
++}
++
++TEST_F(SignalChainingDeathTest, PreservesSigtermSiginfoArgumentsAndDisposition)
++{
++  ASSERT_EXIT(_exit(exercise(SIGTERM, 0)), ::testing::ExitedWithCode(0), "");
++}
++
++TEST_F(SignalChainingDeathTest, PreservesLegacyHandlerAndSignalMask)
++{
++  ASSERT_EXIT(_exit(exercise(SIGINT, 1)), ::testing::ExitedWithCode(0), "");
++}
++
++TEST_F(SignalChainingDeathTest, DoesNotInvokeIgnoredSiginfoDisposition)
++{
++  ASSERT_EXIT(_exit(exercise(SIGINT, 2)), ::testing::ExitedWithCode(0), "");
++}
++
++TEST_F(SignalChainingDeathTest, DoesNotInvokeDefaultSiginfoDisposition)
++{
++  ASSERT_EXIT(_exit(exercise(SIGINT, 3)), ::testing::ExitedWithCode(0), "");
++}
++
++#if defined(__OHOS__)
++TEST_F(SignalChainingDeathTest, RestoresFfrtDispatcherWithoutRequeueingHandledSigint)
++{
++  ASSERT_EXIT({
++    void * library = dlopen("/system/lib64/ndk/libffrt.so", RTLD_NOW | RTLD_GLOBAL);
++    if (library == nullptr) {_exit(20);}
++    rclcpp::uninstall_signal_handlers();
++    struct sigaction previous {};
++    if (sigaction(SIGINT, nullptr, &previous) != 0) {_exit(21);}
++    Dl_info origin {};
++    if (!dladdr(reinterpret_cast<void *>(previous.sa_sigaction), &origin) ||
++    origin.dli_fname == nullptr)
++    {
++      _exit(22);
++    }
++    std::fprintf(stderr, "previous SIGINT flags=%x origin=%s\n", previous.sa_flags,
++      origin.dli_fname);
++    if (std::strcmp(origin.dli_fname, "/system/lib64/ndk/libffrt.so") != 0) {_exit(23);}
++    if (!rclcpp::install_signal_handlers(rclcpp::SignalHandlerOptions::SigInt)) {_exit(24);}
++    if (raise(SIGINT) != 0) {_exit(25);}
++    if (!rclcpp::uninstall_signal_handlers()) {_exit(26);}
++    struct sigaction restored {};
++    if (sigaction(SIGINT, nullptr, &restored) != 0 ||
++    restored.sa_sigaction != previous.sa_sigaction ||
++    (restored.sa_flags & SA_SIGINFO) != (previous.sa_flags & SA_SIGINFO))
++    {
++      _exit(27);
++    }
++    _exit(0);
++  }, ::testing::ExitedWithCode(0), "previous SIGINT");
++}
++#endif
+-- 
+2.55.0.windows.5
+
+
+From e4ea98825ea92f54173cfefb773cd4fed4d76f29 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Tue, 8 Sep 2026 11:13:30 +0800
+Subject: [PATCH 4/6] fix(rclcpp): return subscription loans when callbacks
+ throw
+
+---
+ rclcpp/doc/loan_callback_cleanup.md | 47 +++++++++++++++++++++++++++++
+ rclcpp/src/rclcpp/executor.cpp      | 27 +++++++++--------
+ 2 files changed, 62 insertions(+), 12 deletions(-)
+ create mode 100644 rclcpp/doc/loan_callback_cleanup.md
+
+diff --git a/rclcpp/doc/loan_callback_cleanup.md b/rclcpp/doc/loan_callback_cleanup.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..fe18ed81c09e12aeae36d59ae7f37e61d855e2fb
+--- /dev/null
++++ b/rclcpp/doc/loan_callback_cleanup.md
+@@ -0,0 +1,47 @@
++# Executor loan cleanup on callback exceptions
++
++Implemented and verified on dual RK3588A. The executor now installs scope-bound
++loan cleanup before taking. Normal and exceptional callback exits return any
++successfully taken loan; the null-loan check and existing error reporting remain.
++The original callback exception propagates to the caller.
++
++The regression test, written before implementation, runs a real dual-RK3588A
++rclcpp fixture through rmw_mdds and the native DSoftBus broker. The first peer callback throws a distinct exception.
++Immediately after catching it, a second RCL return attempt must report INVALID
++ARGUMENT, proving the middleware has already reclaimed that exact loan. The
++remaining four peer messages must still be received, every normal callback must
++also return its loan, and native processes, graph phases and CLI inventories must
++finish normally. A pre-fix successful second return is the required RED evidence;
++it also cleans that leaked test loan before teardown.
++
++Shared-pointer retention is a separate upstream ownership boundary. This test
++retains the address only for an immediate registry check without dereferencing
++returned storage; it does not claim shared-pointer retention is safe.
++
++Verified evidence:
++
++- RED `loan_exception_red_20260908`: both actual native peers recorded
++  `CPP_LOAN_RECLAIM 1 0 1`, proving the first callback exception leaked its loan.
++  The test's successful return cleaned the leaked object before deliberate failure.
++- GREEN `loan_exception_green_20260908`: both recorded `1 11 1`, then four
++  further successful takes/returns with exact payloads and sequence metadata.
++  Two original exceptions propagated; ten loans were reclaimed. Both graph
++  waiter phase sets, CLI node inventories and daemon/native shutdown passed.
++- The identical fixture binary was used before and after the fix:
++  `965926a93a85dfb8204a0bdbc1d8f9a765611b2279e060031f58bc99267309c8`.
++- Patched rclcpp: `8a90fd3473792806038555499687b598966812f0a1e643492378c0a6c6433a0d`.
++- RED report: `79361a8af2967b34334f41c1bb3853facb8ad975839bee5a0aeab3e0df27db3d`.
++- GREEN report: `e54c1dc02c91e58f2779607493024fc90095c02bfa9f2e9ed89788523a6d8c19`.
++- Four contract tests, eight exception receipt adversaries, ten loan receipt
++  adversaries, 11 graph adversaries, 18 generic and 11 baseline receipt tests passed.
++
++Reproduce from the ROS meta workspace with a fresh `MDDS_RUN_ID`,
++`MDDS_ROS_CPP_LOANS=1`, `MDDS_ROS_LOAN_EXCEPTIONS=1`,
++`MDDS_ROS_CLI_BATCH=graph_waiters`, `MDDS_ROS_PROFILE_MODE=implicit`, and
++`MDDS_ROS_RCLCPP_LIBRARY=build_ohos/rclcpp/librclcpp.so`, then run
++`bash scripts/run_mdds_broker_ros.sh`. Test source lives in
++`scripts/mdds_e2e/graph_waiters/graph_waiters.cpp`; validate the result with
++`check_loan_exceptions.py`.
++
++Retained shared-pointer callback ownership remains a separate open requirement.
++This fix does not establish complete middleware or ROS 2 release acceptance.
+diff --git a/rclcpp/src/rclcpp/executor.cpp b/rclcpp/src/rclcpp/executor.cpp
+index aab4341820a1d6f623975ffaf0e27406d6d64707..977439d763b32ec412a4c1497c53580c32185510 100644
+--- a/rclcpp/src/rclcpp/executor.cpp
++++ b/rclcpp/src/rclcpp/executor.cpp
+@@ -556,6 +556,21 @@ Executor::execute_subscription(rclcpp::SubscriptionBase::SharedPtr subscription)
+           // inter-process communication, given to the user for their callback,
+           // and then returned.
+           void * loaned_msg = nullptr;
++          auto loan_return = rcpputils::make_scope_exit(
++            [&]() {
++              if (nullptr != loaned_msg) {
++                rcl_ret_t ret = rcl_return_loaned_message_from_subscription(
++                  subscription->get_subscription_handle().get(), loaned_msg);
++                loaned_msg = nullptr;
++                if (RCL_RET_OK != ret) {
++                  RCLCPP_ERROR(
++                    rclcpp::get_logger("rclcpp"),
++                    "rcl_return_loaned_message_from_subscription() failed for subscription on topic "
++                    "'%s': %s",
++                    subscription->get_topic_name(), rcl_get_error_string().str);
++                }
++              }
++            });
+           // TODO(wjwwood): refactor this into methods on subscription when LoanedMessage
+           //   is extened to support subscriptions as well.
+           take_and_do_error_handling(
+@@ -576,18 +591,6 @@ Executor::execute_subscription(rclcpp::SubscriptionBase::SharedPtr subscription)
+               return true;
+             },
+             [&]() {subscription->handle_loaned_message(loaned_msg, message_info);});
+-          if (nullptr != loaned_msg) {
+-            rcl_ret_t ret = rcl_return_loaned_message_from_subscription(
+-              subscription->get_subscription_handle().get(), loaned_msg);
+-            if (RCL_RET_OK != ret) {
+-              RCLCPP_ERROR(
+-                rclcpp::get_logger("rclcpp"),
+-                "rcl_return_loaned_message_from_subscription() failed for subscription on topic "
+-                "'%s': %s",
+-                subscription->get_topic_name(), rcl_get_error_string().str);
+-            }
+-            loaned_msg = nullptr;
+-          }
+         } else {
+           // This case is taking a copy of the message data from the middleware via
+           // inter-process communication.
+-- 
+2.55.0.windows.5
+
+
+From 00451f2abfdcf9795e1ed9f331006cc259f4baba Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Tue, 8 Sep 2026 13:10:00 +0800
+Subject: [PATCH 5/6] fix(rclcpp): preserve retained subscription loan
+ ownership
+
+---
+ rclcpp/doc/loan_callback_cleanup.md           |  3 +-
+ rclcpp/doc/retained_loan_ownership.md         | 55 +++++++++++++++++++
+ rclcpp/src/rclcpp/executor.cpp                | 35 ++++++++----
+ .../src/rclcpp/node_interfaces/node_base.cpp  |  5 +-
+ rclcpp/src/rclcpp/subscription_base.cpp       | 22 +++-----
+ 5 files changed, 91 insertions(+), 29 deletions(-)
+ create mode 100644 rclcpp/doc/retained_loan_ownership.md
+
+diff --git a/rclcpp/doc/loan_callback_cleanup.md b/rclcpp/doc/loan_callback_cleanup.md
+index fe18ed81c09e12aeae36d59ae7f37e61d855e2fb..4d1961c45f2e372538d8bd4fd6610404d9fb33f9 100644
+--- a/rclcpp/doc/loan_callback_cleanup.md
++++ b/rclcpp/doc/loan_callback_cleanup.md
+@@ -43,5 +43,6 @@ Reproduce from the ROS meta workspace with a fresh `MDDS_RUN_ID`,
+ `scripts/mdds_e2e/graph_waiters/graph_waiters.cpp`; validate the result with
+ `check_loan_exceptions.py`.
+ 
+-Retained shared-pointer callback ownership remains a separate open requirement.
++Retained shared-pointer callback ownership was subsequently implemented and
++verified; see `retained_loan_ownership.md`.
+ This fix does not establish complete middleware or ROS 2 release acceptance.
+diff --git a/rclcpp/doc/retained_loan_ownership.md b/rclcpp/doc/retained_loan_ownership.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..c084f66758a1050a4be5520fd4ea72d30fecb888
+--- /dev/null
++++ b/rclcpp/doc/retained_loan_ownership.md
+@@ -0,0 +1,55 @@
++# Verified retained subscription loan ownership
++
++Executor-owned loans now use the existing owner-aware `handle_message` dispatch.
++The callback's shared pointers own the actual loan, with no message copy added.
++Its final strong owner returns the loan and releases its RCL subscription handle.
++The ownership chain is: message deleter -> RCL subscription -> RCL node -> Context.
++
++RCL node and subscription deleters explicitly release captured parents at strong
++owner exhaustion, so weak references cannot keep native entities alive. C++
++subscription destruction unregisters callbacks before destroying function storage.
++Native handles can remain alive while messages are retained, even after C++
++wrapper destruction; shutdown stops communication while retained message data
++remains valid. Last-owner release can happen on another thread.
++
++No vtable or object layout changed. Executor dispatch now uses `handle_message`
++for owned loans; direct raw `handle_loaned_message` calls remain caller-managed.
++This behavioral change and the new parent lifetime are pre-push review items.
++
++TDD and real RK3588A evidence:
++
++- `retained_loan_red_20260908` verified the forwarding RCL return interceptor,
++  then B recorded `CPP_RETAIN_HELD 1 1`: an early return. The test rejected it
++  before reading freed storage. RED report SHA256: `960dfa46f93279fb0fc502bdf1c3f64da04658e88ecedd882a28821bba49ae82`.
++- `retained_loan_green_20260908_02` verified ten held messages, subscription
++  callback removal, Context retention, cross-thread release and weak cleanup.
++- `retained_exc_reg_20260908` separately verified two non-retaining callback
++  exceptions and ten normal returns on the same RCLCPP library.
++- Final `retained_diag_20260908` also read all held payloads after subscription
++  destruction and Context shutdown, and the final payload after releasing the
++  other four. Both peers released all five loans exactly once, with no cleanup
++  errors; graph phases, CLI inventories and real process exits passed.
++- Seven host contracts, 16 retained-loan receipt adversaries, ten C++ loan
++  adversaries, 11 graph adversaries and 18 generic checks passed. The baseline
++  receipt suite passed 11 cases.
++
++RCLCPP DSO: `b08f86941986e2727665b9d9e1739e82a8c4395988a07dd4d1ec27b01314d82c`.
++Final fixture: `f5c813d5d8d5edd22722b3918117906e458760c6b92c4419360f669ab954ca12`.
++Final report: `b284a97b5dffdc1daa066c943f459b2c6832724c0cd863e5b7027c7b1dde54d6`.
++
++The first ownership run closed a custom Context before the peer ACK gate;
++a two-sided ACK-before-teardown barrier corrected that test ordering without
++relaxing assertions. A later strengthened run (`retained_payload_20260908`)
++failed during MDDS publication before reaching content checks. Its evidence is
++preserved. The final run observed real queue pressure with new bounded MDDS
++diagnostics; reliable publish admission under that pressure is still being
++investigated. Passing loan lifetime checks does not close that separate issue.
++
++Reproduce from the ROS meta workspace using a fresh `MDDS_RUN_ID`,
++`MDDS_ROS_CPP_LOANS=1`, `MDDS_ROS_RETAINED_LOANS=1`,
++`MDDS_ROS_CLI_BATCH=graph_waiters`, `MDDS_ROS_PROFILE_MODE=implicit`, and
++`MDDS_ROS_RCLCPP_LIBRARY=build_ohos/rclcpp/librclcpp.so`, then run
++`bash scripts/run_mdds_broker_ros.sh`. Use `check_retained_loans.py` for adversaries.
++
++Seven unsupported RMW APIs, reliable-admission investigation, unified release
++validation and pre-push agentic-review remain open. No full-release claim is made.
+diff --git a/rclcpp/src/rclcpp/executor.cpp b/rclcpp/src/rclcpp/executor.cpp
+index 977439d763b32ec412a4c1497c53580c32185510..b18c9d37b5ba903e16e8a6c34f49bbd78b9ab267 100644
+--- a/rclcpp/src/rclcpp/executor.cpp
++++ b/rclcpp/src/rclcpp/executor.cpp
+@@ -554,21 +554,26 @@ Executor::execute_subscription(rclcpp::SubscriptionBase::SharedPtr subscription)
+         if (subscription->can_loan_messages()) {
+           // This is the case where a loaned message is taken from the middleware via
+           // inter-process communication, given to the user for their callback,
+-          // and then returned.
++          // and returned when its final shared owner releases it.
+           void * loaned_msg = nullptr;
++          auto return_loan = [handle = subscription->get_subscription_handle()](void * message) mutable
++            {
++              rcl_ret_t ret = rcl_return_loaned_message_from_subscription(handle.get(), message);
++              if (RCL_RET_OK != ret) {
++                RCLCPP_ERROR(
++                  rclcpp::get_logger("rclcpp"),
++                  "rcl_return_loaned_message_from_subscription() failed for subscription on topic "
++                  "'%s': %s",
++                  rcl_subscription_get_topic_name(handle.get()), rcl_get_error_string().str);
++              }
++              // Weak message references may keep this deleter's control block
++              // alive. They must not keep the native subscription alive.
++              handle.reset();
++            };
+           auto loan_return = rcpputils::make_scope_exit(
+             [&]() {
+               if (nullptr != loaned_msg) {
+-                rcl_ret_t ret = rcl_return_loaned_message_from_subscription(
+-                  subscription->get_subscription_handle().get(), loaned_msg);
+-                loaned_msg = nullptr;
+-                if (RCL_RET_OK != ret) {
+-                  RCLCPP_ERROR(
+-                    rclcpp::get_logger("rclcpp"),
+-                    "rcl_return_loaned_message_from_subscription() failed for subscription on topic "
+-                    "'%s': %s",
+-                    subscription->get_topic_name(), rcl_get_error_string().str);
+-                }
++                return_loan(std::exchange(loaned_msg, nullptr));
+               }
+             });
+           // TODO(wjwwood): refactor this into methods on subscription when LoanedMessage
+@@ -590,7 +595,13 @@ Executor::execute_subscription(rclcpp::SubscriptionBase::SharedPtr subscription)
+               }
+               return true;
+             },
+-            [&]() {subscription->handle_loaned_message(loaned_msg, message_info);});
++            [&]() {
++              // shared_ptr invokes its deleter if control-block allocation
++              // fails. Disarm the raw-loan guard before transferring ownership.
++              auto owned_loan = std::shared_ptr<void>(
++                std::exchange(loaned_msg, nullptr), return_loan);
++              subscription->handle_message(owned_loan, message_info);
++            });
+         } else {
+           // This case is taking a copy of the message data from the middleware via
+           // inter-process communication.
+diff --git a/rclcpp/src/rclcpp/node_interfaces/node_base.cpp b/rclcpp/src/rclcpp/node_interfaces/node_base.cpp
+index 5648290654cc02c661d513218dd1ab01d30dffee..39d10a588852566a6124bdef28af38cd785932ac 100644
+--- a/rclcpp/src/rclcpp/node_interfaces/node_base.cpp
++++ b/rclcpp/src/rclcpp/node_interfaces/node_base.cpp
+@@ -123,7 +123,7 @@ NodeBase::NodeBase(
+ 
+   node_handle_.reset(
+     rcl_node.release(),
+-    [logging_mutex, rcl_node_options](rcl_node_t * node) -> void {
++    [logging_mutex, rcl_node_options, parent_context = context_](rcl_node_t * node) mutable -> void {
+       {
+         std::lock_guard<std::recursive_mutex> guard(*logging_mutex);
+         if (rcl_logging_rosout_enabled() && rcl_node_options.enable_rosout) {
+@@ -141,6 +141,9 @@ NodeBase::NodeBase(
+           "Error in destruction of rcl node handle: %s", rcl_get_error_string().str);
+       }
+       delete node;
++      // Native handles retained by subscriptions must keep their context valid
++      // through rcl_node_fini; weak node handles must not keep it alive afterward.
++      parent_context.reset();
+     });
+ 
+   // Create the default callback group, if needed.
+diff --git a/rclcpp/src/rclcpp/subscription_base.cpp b/rclcpp/src/rclcpp/subscription_base.cpp
+index f7c238a9105395ec7cd32c3bf1fe0deaae5f1110..b0a9ee4015e2be5d8c319c0f8aac0b2230016f57 100644
+--- a/rclcpp/src/rclcpp/subscription_base.cpp
++++ b/rclcpp/src/rclcpp/subscription_base.cpp
+@@ -54,7 +54,7 @@ SubscriptionBase::SubscriptionBase(
+   type_support_(type_support_handle),
+   delivered_message_kind_(delivered_message_kind)
+ {
+-  auto custom_deletor = [node_handle = this->node_handle_](rcl_subscription_t * rcl_subs)
++  auto custom_deletor = [node_handle = this->node_handle_](rcl_subscription_t * rcl_subs) mutable
+     {
+       if (rcl_subscription_fini(rcl_subs, node_handle.get()) != RCL_RET_OK) {
+         RCLCPP_ERROR(
+@@ -64,6 +64,8 @@ SubscriptionBase::SubscriptionBase(
+         rcl_reset_error();
+       }
+       delete rcl_subs;
++      // Dispose the parent at strong-owner exhaustion, not weak-owner exhaustion.
++      node_handle.reset();
+     };
+ 
+   subscription_handle_ = std::shared_ptr<rcl_subscription_t>(
+@@ -94,6 +96,9 @@ SubscriptionBase::SubscriptionBase(
+ 
+ SubscriptionBase::~SubscriptionBase()
+ {
++  // A retained message may outlive this C++ object while owning its RCL handle.
++  // Remove callbacks that point into this object's function storage first.
++  clear_on_new_message_callback();
+   if (!use_intra_process_) {
+     return;
+   }
+@@ -301,20 +306,7 @@ SubscriptionBase::setup_intra_process(
+ bool
+ SubscriptionBase::can_loan_messages() const
+ {
+-  bool retval = rcl_subscription_can_loan_messages(subscription_handle_.get());
+-  if (retval) {
+-    // TODO(clalancette): The loaned message interface is currently not safe to use with
+-    // shared_ptr callbacks.  If a user takes a copy of the shared_ptr, it can get freed from
+-    // underneath them via rcl_return_loaned_message_from_subscription().  The correct solution is
+-    // to return the loaned message in a custom deleter, but that needs to be carefully handled
+-    // with locking.  Warn the user about this until we fix it.
+-    RCLCPP_WARN_ONCE(
+-      this->node_logger_,
+-      "Loaned messages are only safe with const ref subscription callbacks. "
+-      "If you are using any other kind of subscriptions, "
+-      "set the ROS_DISABLE_LOANED_MESSAGES environment variable to 1 (the default).");
+-  }
+-  return retval;
++  return rcl_subscription_can_loan_messages(subscription_handle_.get());
+ }
+ 
+ rclcpp::Waitable::SharedPtr
+-- 
+2.55.0.windows.5
+
+
+From 1970abd3c7398d77d12db38730abaab38b1308ad Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Tue, 8 Sep 2026 13:45:19 +0800
+Subject: [PATCH 6/6] docs(rclcpp): link reliable admission regression evidence
+
+---
+ rclcpp/doc/retained_loan_ownership.md | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/rclcpp/doc/retained_loan_ownership.md b/rclcpp/doc/retained_loan_ownership.md
+index c084f66758a1050a4be5520fd4ea72d30fecb888..14fb6a1a438440eff2e57330aaae206cd029f1c0 100644
+--- a/rclcpp/doc/retained_loan_ownership.md
++++ b/rclcpp/doc/retained_loan_ownership.md
+@@ -42,8 +42,8 @@ a two-sided ACK-before-teardown barrier corrected that test ordering without
+ relaxing assertions. A later strengthened run (`retained_payload_20260908`)
+ failed during MDDS publication before reaching content checks. Its evidence is
+ preserved. The final run observed real queue pressure with new bounded MDDS
+-diagnostics; reliable publish admission under that pressure is still being
+-investigated. Passing loan lifetime checks does not close that separate issue.
++diagnostics; reliable publish admission under that pressure was subsequently repaired and
++validated in the MDDS `docs/reliable_publish_admission.md`. Passing loan lifetime checks does not close that separate issue.
+ 
+ Reproduce from the ROS meta workspace using a fresh `MDDS_RUN_ID`,
+ `MDDS_ROS_CPP_LOANS=1`, `MDDS_ROS_RETAINED_LOANS=1`,
+@@ -51,5 +51,5 @@ Reproduce from the ROS meta workspace using a fresh `MDDS_RUN_ID`,
+ `MDDS_ROS_RCLCPP_LIBRARY=build_ohos/rclcpp/librclcpp.so`, then run
+ `bash scripts/run_mdds_broker_ros.sh`. Use `check_retained_loans.py` for adversaries.
+ 
+-Seven unsupported RMW APIs, reliable-admission investigation, unified release
++Seven unsupported RMW APIs, unified release
+ validation and pre-push agentic-review remain open. No full-release claim is made.
 -- 
 2.55.0.windows.5
 

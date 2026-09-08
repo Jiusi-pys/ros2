@@ -1,0 +1,91 @@
+diff --git a/pybind11_vendor-extras.cmake b/pybind11_vendor-extras.cmake
+index d3a5d9f16a7b929defd5343eeef474266e040753..5f034a272a144c32e92559f5e84007ad5856fac5 100644
+--- a/pybind11_vendor-extras.cmake
++++ b/pybind11_vendor-extras.cmake
+@@ -1,3 +1,14 @@
+ # Force the PYBIND11_PYTHON_VERSION to "3", which helps pybind11 find the
+ # correct version when both Python 2 and Python 3 libraries are installed.
+ set(PYBIND11_PYTHON_VERSION "3")
++
++if(OHOS_CROSS_BUILD)
++  get_property(_ohos_target_soabi CACHE Python3_SOABI PROPERTY VALUE)
++  if(NOT _ohos_target_soabi MATCHES "^cpython-[0-9]+-aarch64-linux-ohos$")
++    message(FATAL_ERROR "OHOS requires an explicit target Python3_SOABI cache entry")
++  endif()
++  # A normal variable deliberately survives pybind11NewTools clearing the
++  # cache when it first discovers the host interpreter. Never derive target
++  # extension names from that interpreter's Windows EXT_SUFFIX.
++  set(PYTHON_MODULE_EXTENSION ".${_ohos_target_soabi}.so")
++endif()
+diff --git a/test/test_ohos_module_suffix.py b/test/test_ohos_module_suffix.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..822d6db73deb958ecd6ae62ce4edc2b06b84e082
+--- /dev/null
++++ b/test/test_ohos_module_suffix.py
+@@ -0,0 +1,66 @@
++"""Host configuration regression: pybind11 clears the suffix cache on discovery."""
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import tempfile
++import unittest
++
++
++class VendorSuffixTests(unittest.TestCase):
++    def configure(self, abi, cross=True):
++        cmake = os.environ.get('OHOS_TEST_CMAKE') or shutil.which('cmake')
++        self.assertIsNotNone(cmake)
++        ninja = Path(cmake).with_name('ninja.exe' if os.name == 'nt' else 'ninja')
++        extras = Path(__file__).resolve().parents[1] / 'pybind11_vendor-extras.cmake'
++        with tempfile.TemporaryDirectory() as directory:
++            root = Path(directory)
++            (root / 'CMakeLists.txt').write_text('''
++cmake_minimum_required(VERSION 3.20)
++project(vendor_suffix LANGUAGES NONE)
++set(Python3_SOABI "cp312-win_amd64")
++set(PYTHON_MODULE_EXTENSION ".cp312-win_amd64.pyd" CACHE INTERNAL "" FORCE)
++include("''' + extras.as_posix() + '''")
++# pybind11NewTools does this when PYBIND11_PYTHON_EXECUTABLE_LAST changes.
++unset(PYTHON_MODULE_EXTENSION CACHE)
++if(NOT DEFINED PYTHON_MODULE_EXTENSION)
++  set(PYTHON_MODULE_EXTENSION ".cp312-win_amd64.pyd" CACHE INTERNAL "")
++endif()
++# The actual pybind11_extension contract, used by every add_module target.
++foreach(name _codec _transport _rclpy_pybind11)
++  add_library(${name} MODULE IMPORTED)
++  set_target_properties(${name} PROPERTIES PREFIX "" SUFFIX "${PYTHON_MODULE_EXTENSION}")
++  get_target_property(suffix ${name} SUFFIX)
++  file(APPEND "${CMAKE_BINARY_DIR}/suffix.txt" "${suffix}\n")
++endforeach()
++''', encoding='utf-8')
++            command = [cmake, '-G', 'Ninja', '-DCMAKE_MAKE_PROGRAM=' + str(ninja),
++                       '-S', str(root), '-B', str(root / 'build'),
++                       '-DOHOS_CROSS_BUILD=' + ('ON' if cross else 'OFF')]
++            if abi is not None:
++                command.append('-DPython3_SOABI=' + abi)
++            result = subprocess.run(command, capture_output=True, text=True)
++            output = root / 'build/suffix.txt'
++            return result, output.read_text().splitlines() if output.exists() else []
++
++    def test_target_normal_variable_survives_cache_reset(self):
++        result, values = self.configure('cpython-312-aarch64-linux-ohos')
++        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertEqual(values, ['.cpython-312-aarch64-linux-ohos.so'] * 3)
++
++    def test_missing_target_abi_rejected(self):
++        result, _ = self.configure(None)
++        self.assertNotEqual(result.returncode, 0)
++
++    def test_host_target_abi_rejected(self):
++        result, _ = self.configure('cp312-win_amd64')
++        self.assertNotEqual(result.returncode, 0)
++
++    def test_native_behavior_unchanged(self):
++        result, values = self.configure(None, False)
++        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertEqual(values, ['.cp312-win_amd64.pyd'] * 3)
++
++
++if __name__ == '__main__':
++    unittest.main(verbosity=2)

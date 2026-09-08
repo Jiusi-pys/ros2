@@ -47,6 +47,8 @@ SOURCE_SHA="$(pixi run python -c 'import json,sys; print(json.load(open(sys.argv
 SDK_SHA="$(pixi run python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sdk"]["fingerprint_sha256"])' "$PROVENANCE" | tr -d '\r\n')"
 ARCHIVE_SHA="$(pixi run python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["artifact"]["archive_sha256"])' "$PROVENANCE" | tr -d '\r\n')"
 EXPECTED_RMW="$(pixi run python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["selected_rmw"])' "$PROVENANCE" | tr -d '\r\n')"
+DEPLOYED_DEFAULT_RMW="$EXPECTED_RMW"
+EXPECTED_RMW="${ROS2_ACCEPTANCE_RMW:-$DEPLOYED_DEFAULT_RMW}"
 readarray -t PYTHON_BINDING < <(pixi run python - "$PROVENANCE" <<'PY' | tr -d '\r'
 import json, sys
 p = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -66,6 +68,7 @@ done
 for digest in "$PROVENANCE_SHA" "$SOURCE_SHA" "$SDK_SHA" "$ARCHIVE_SHA"; do
   [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "ERROR: malformed provenance digest" >&2; exit 2; }
 done
+case "$DEPLOYED_DEFAULT_RMW" in rmw_fastrtps_cpp|rmw_cyclonedds_cpp) ;; *) echo "ERROR: unsupported built default RMW" >&2; exit 2 ;; esac
 case "$EXPECTED_RMW" in rmw_fastrtps_cpp|rmw_cyclonedds_cpp) ;; *) echo "ERROR: unsupported provenance RMW" >&2; exit 2 ;; esac
 
 # Capture one exact OS identity per serial before creating any test process.
@@ -75,7 +78,7 @@ declare -A BOARD_PRODUCT=()
 declare -A BOARD_VERSION=()
 declare -A BOARD_ARCH=()
 for board in "$BOARD_A" "$BOARD_B"; do
-  identity="$(remote_shell "$board" "product=\$(param get const.product.name 2>/dev/null | tr -d ' \\r\\n'); version=\$(param get const.product.software.version 2>/dev/null | tr -d ' \\r\\n'); arch=\$(uname -m 2>/dev/null | tr -d ' \\r\\n'); printf '%s|%s|%s' \"\$product\" \"\$version\" \"\$arch\"" | tr -d '\r\n')"
+  identity="$(remote_shell "$board" "product=\$(param get const.product.name 2>/dev/null | sed 's/[[:space:]]//g'); version=\$(param get const.product.software.version 2>/dev/null | sed 's/[[:space:]]//g'); arch=\$(uname -m 2>/dev/null | sed 's/[[:space:]]//g'); printf '%s|%s|%s' \"\$product\" \"\$version\" \"\$arch\"" | tr -d '\r\n')"
   if [[ ! "$identity" =~ ^([A-Za-z0-9_.-]+)\|([A-Za-z0-9_.-]+)\|([A-Za-z0-9_.-]+)$ ]]; then
     echo "ERROR: malformed board identity for $board: ${identity:-MISSING}" >&2
     exit 2
@@ -110,6 +113,8 @@ printf 'ROS2_ACCEPTANCE V=1\nRUN_ID=%s\nBOARD_A=%s\nBOARD_A_OS=%s/%s/%s\nBOARD_B
   "$PROVENANCE_SHA" "$SOURCE_SHA" "$SDK_SHA" "$ARCHIVE_SHA" > "$RUN_RECORD"
 printf 'BUILD_RECEIPT_SHA256=%s\nPYTHON_RUNTIME_ARCHIVE_SHA256=%s\nPYTHON_RUNTIME_TREE_SHA256=%s\nPYTHON_STAGE_TREE_SHA256=%s\n' \
   "$RECEIPT_SHA" "$PYTHON_ARCHIVE_SHA" "$PYTHON_RUNTIME_TREE_SHA" "$PYTHON_STAGE_TREE_SHA" >> "$RUN_RECORD"
+
+printf 'DEPLOYED_DEFAULT_RMW=%s\n' "$DEPLOYED_DEFAULT_RMW" >> "$RUN_RECORD"
 
 finish() {
   local rc="$1"
@@ -147,7 +152,7 @@ run_case() {
   printf 'ROS2_CASE_START RUN_ID=%s CASE=%s BOARD=%s START_UTC=%s COMMAND_SHA256=%s\n' \
     "$ROS2_RUN_ID" "$name" "$board" "$started_utc" "$command_sha" > "$output"
   MSYS2_ARG_CONV_EXCL='*' timeout "$CASE_TIMEOUT" "$HDC" -t "$board" shell \
-    ". '$DEVICE_DIR/env.sh' || exit 70; export ROS_DOMAIN_ID='$DOMAIN'; export ROS_LOCALHOST_ONLY=0; product=\$(param get const.product.name 2>/dev/null | tr -d ' \\r\\n'); version=\$(param get const.product.software.version 2>/dev/null | tr -d ' \\r\\n'); arch=\$(uname -m 2>/dev/null | tr -d ' \\r\\n'); if test \"\$product\" = '$product' && test \"\$version\" = '$version' && test \"\$arch\" = '$arch'; then ( $command ); rc=\$?; else rc=71; fi; printf '\\nROS2_CASE_TERMINAL RUN_ID=$ROS2_RUN_ID CASE=$name BOARD=$board PRODUCT=%s VERSION=%s ARCH=%s RC=%s RMW=%s SOURCE_SHA256=%s SDK_SHA256=%s ARCHIVE_SHA256=%s PROVENANCE_SHA256=%s\\n' \"\$product\" \"\$version\" \"\$arch\" \"\$rc\" \"\$RMW_IMPLEMENTATION\" \"\$ROS2_SOURCE_SNAPSHOT_SHA256\" \"\$ROS2_SDK_FINGERPRINT_SHA256\" \"\$ROS2_ARCHIVE_SHA256\" \"\$ROS2_RELEASE_PROVENANCE_SHA256\"" \
+    ". '$DEVICE_DIR/env.sh' || exit 70; export RMW_IMPLEMENTATION='$EXPECTED_RMW'; export ROS_DOMAIN_ID='$DOMAIN'; export ROS_LOCALHOST_ONLY=0; product=\$(param get const.product.name 2>/dev/null | sed 's/[[:space:]]//g'); version=\$(param get const.product.software.version 2>/dev/null | sed 's/[[:space:]]//g'); arch=\$(uname -m 2>/dev/null | sed 's/[[:space:]]//g'); if test \"\$product\" = '$product' && test \"\$version\" = '$version' && test \"\$arch\" = '$arch'; then ( $command ); rc=\$?; else rc=71; fi; printf '\\nROS2_CASE_TERMINAL RUN_ID=$ROS2_RUN_ID CASE=$name BOARD=$board PRODUCT=%s VERSION=%s ARCH=%s RC=%s RMW=%s SOURCE_SHA256=%s SDK_SHA256=%s ARCHIVE_SHA256=%s PROVENANCE_SHA256=%s\\n' \"\$product\" \"\$version\" \"\$arch\" \"\$rc\" \"\$RMW_IMPLEMENTATION\" \"\$ROS2_SOURCE_SNAPSHOT_SHA256\" \"\$ROS2_SDK_FINGERPRINT_SHA256\" \"\$ROS2_ARCHIVE_SHA256\" \"\$ROS2_RELEASE_PROVENANCE_SHA256\"" \
     </dev/null >> "$output" 2>&1 || rc=$?
   ended_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '\nROS2_CASE_END RUN_ID=%s CASE=%s BOARD=%s END_UTC=%s HDC_RC=%s\n' \
@@ -221,12 +226,13 @@ print("ACTION_RESULT_MATCH result=PASS")
 PY
 }
 
-# Fail closed on stale generic ROS graph processes.  Existing unrelated
+# Fail closed on pre-existing users of the candidate prefix only.
 # services (including a session daemon from an older test) are recorded but
 # never killed by this run.
 for board in "$BOARD_A" "$BOARD_B"; do
+  SCOPED_SCAN_COMMAND="$(ros2_scoped_process_command "$DEVICE_DIR")"
   process_log="$LOGDIR/${board}.preexisting_processes.log"
-  remote_shell "$board" "ps -ef | grep -E '[d]emo_nodes|[a]ction_tutorials|[r]osbag2_transport/(player|recorder)|[t]urtlesim_node|[r]viz2|[i]ox-roudi|[r]os2 daemon' || true" | tr -d '\r' > "$process_log"
+  remote_shell "$board" "$SCOPED_SCAN_COMMAND" | tr -d '\r' > "$process_log"
   if [[ -s "$process_log" ]]; then
     echo "ERROR: board $board has pre-existing ROS acceptance processes; refusing to kill them" >&2
     exit 2
@@ -236,13 +242,16 @@ done
 ros2_owned_init generic_acceptance "$BOARD_A" "$BOARD_B"
 owned_env() { # <board> <explicit|compiled-default>
   local board="$1" mode="$2" suffix="" code
+  if [[ "$mode" == compiled-default && "$EXPECTED_RMW" != "$DEPLOYED_DEFAULT_RMW" ]]; then
+    mode=explicit
+  fi
   [[ "$mode" == explicit || "$mode" == compiled-default ]] || return 2
   if [[ "$mode" == compiled-default ]]; then
     # Exercise Fast DDS' compiled transport defaults as well as RMW selection;
     # an environment-only UDP workaround must not stand in for the core fix.
     suffix='unset RMW_IMPLEMENTATION FASTDDS_BUILTIN_TRANSPORTS;'
   fi
-  code=". '$DEVICE_DIR/env.sh' || exit 70; export ROS_DOMAIN_ID='$DOMAIN'; export ROS_LOCALHOST_ONLY=0; product=\$(param get const.product.name 2>/dev/null | tr -d ' \r\n'); version=\$(param get const.product.software.version 2>/dev/null | tr -d ' \r\n'); arch=\$(uname -m 2>/dev/null | tr -d ' \r\n'); test \"\$product\" = '${BOARD_PRODUCT[$board]}' && test \"\$version\" = '${BOARD_VERSION[$board]}' && test \"\$arch\" = '${BOARD_ARCH[$board]}' || exit 71; printf 'ROS2_PROCESS_BINDING RUN_ID=$ROS2_RUN_ID BOARD=$board PRODUCT=%s VERSION=%s ARCH=%s RMW_SELECTED=%s REQUEST_MODE=$mode SOURCE_SHA256=%s SDK_SHA256=%s ARCHIVE_SHA256=%s PROVENANCE_SHA256=%s\\n' \"\$product\" \"\$version\" \"\$arch\" \"\$RMW_IMPLEMENTATION\" \"\$ROS2_SOURCE_SNAPSHOT_SHA256\" \"\$ROS2_SDK_FINGERPRINT_SHA256\" \"\$ROS2_ARCHIVE_SHA256\" \"\$ROS2_RELEASE_PROVENANCE_SHA256\"; $suffix"
+  code=". '$DEVICE_DIR/env.sh' || exit 70; export RMW_IMPLEMENTATION='$EXPECTED_RMW'; export ROS_DOMAIN_ID='$DOMAIN'; export ROS_LOCALHOST_ONLY=0; product=\$(param get const.product.name 2>/dev/null | sed 's/[[:space:]]//g'); version=\$(param get const.product.software.version 2>/dev/null | sed 's/[[:space:]]//g'); arch=\$(uname -m 2>/dev/null | sed 's/[[:space:]]//g'); test \"\$product\" = '${BOARD_PRODUCT[$board]}' && test \"\$version\" = '${BOARD_VERSION[$board]}' && test \"\$arch\" = '${BOARD_ARCH[$board]}' || exit 71; printf 'ROS2_PROCESS_BINDING RUN_ID=$ROS2_RUN_ID BOARD=$board PRODUCT=%s VERSION=%s ARCH=%s RMW_SELECTED=%s REQUEST_MODE=$mode SOURCE_SHA256=%s SDK_SHA256=%s ARCHIVE_SHA256=%s PROVENANCE_SHA256=%s\\n' \"\$product\" \"\$version\" \"\$arch\" \"\$RMW_IMPLEMENTATION\" \"\$ROS2_SOURCE_SNAPSHOT_SHA256\" \"\$ROS2_SDK_FINGERPRINT_SHA256\" \"\$ROS2_ARCHIVE_SHA256\" \"\$ROS2_RELEASE_PROVENANCE_SHA256\"; $suffix"
   printf '%s' "$code"
 }
 ENV_A_EXPLICIT="$(owned_env "$BOARD_A" explicit)"
@@ -251,7 +260,7 @@ ENV_A_DEFAULT="$(owned_env "$BOARD_A" compiled-default)"
 ENV_B_DEFAULT="$(owned_env "$BOARD_B" compiled-default)"
 
 for board in "$BOARD_A" "$BOARD_B"; do
-  metadata_command="product=\$(param get const.product.name 2>/dev/null | tr -d ' \\r\\n'); version=\$(param get const.product.software.version 2>/dev/null | tr -d ' \\r\\n'); arch=\$(uname -m | tr -d ' \\r\\n'); provenance=\$(sha256sum '$DEVICE_DIR/release_provenance.json' | cut -d ' ' -f1); test \"\$product\" = KaihongOS && test \"\$arch\" = aarch64 && test \"\$provenance\" = '$PROVENANCE_SHA' && test \"\$RMW_IMPLEMENTATION\" = '$EXPECTED_RMW' && test \"\$ROS2_SOURCE_SNAPSHOT_SHA256\" = '$SOURCE_SHA' && test \"\$ROS2_SDK_FINGERPRINT_SHA256\" = '$SDK_SHA' && test \"\$ROS2_ARCHIVE_SHA256\" = '$ARCHIVE_SHA' && printf 'RUNTIME_BINDING BOARD=%s PRODUCT=%s VERSION=%s ARCH=%s RMW=%s SOURCE_SHA256=%s SDK_SHA256=%s ARCHIVE_SHA256=%s PROVENANCE_SHA256=%s\\n' '$board' \"\$product\" \"\$version\" \"\$arch\" \"\$RMW_IMPLEMENTATION\" \"\$ROS2_SOURCE_SNAPSHOT_SHA256\" \"\$ROS2_SDK_FINGERPRINT_SHA256\" \"\$ROS2_ARCHIVE_SHA256\" \"\$provenance\""
+  metadata_command="product=\$(param get const.product.name 2>/dev/null | sed 's/[[:space:]]//g'); version=\$(param get const.product.software.version 2>/dev/null | sed 's/[[:space:]]//g'); arch=\$(uname -m | sed 's/[[:space:]]//g'); provenance=\$(sha256sum '$DEVICE_DIR/release_provenance.json' | cut -d ' ' -f1); test \"\$product\" = KaihongOS && test \"\$arch\" = aarch64 && test \"\$provenance\" = '$PROVENANCE_SHA' && test \"\$RMW_IMPLEMENTATION\" = '$EXPECTED_RMW' && test \"\$ROS2_SOURCE_SNAPSHOT_SHA256\" = '$SOURCE_SHA' && test \"\$ROS2_SDK_FINGERPRINT_SHA256\" = '$SDK_SHA' && test \"\$ROS2_ARCHIVE_SHA256\" = '$ARCHIVE_SHA' && printf 'RUNTIME_BINDING BOARD=%s PRODUCT=%s VERSION=%s ARCH=%s RMW=%s SOURCE_SHA256=%s SDK_SHA256=%s ARCHIVE_SHA256=%s PROVENANCE_SHA256=%s\\n' '$board' \"\$product\" \"\$version\" \"\$arch\" \"\$RMW_IMPLEMENTATION\" \"\$ROS2_SOURCE_SNAPSHOT_SHA256\" \"\$ROS2_SDK_FINGERPRINT_SHA256\" \"\$ROS2_ARCHIVE_SHA256\" \"\$provenance\""
   run_case "$board" metadata "$metadata_command"
   run_case "$board" artifact_tree "cd '$DEVICE_DIR' && sha256sum -c deploy_manifest.sha256 >/dev/null"
   run_case "$board" python_tree "python3.12 -I -B \$ROS2_HOME/share/ros2_ohos/verify_board_python.py --receipt \$ROS2_HOME/build_receipt.json --receipt-sha256 '$RECEIPT_SHA' --prefix \$ROS2_PYTHON_REMOTE_PREFIX --board '$board' --full-tree"
@@ -264,13 +273,20 @@ grep -Fq 'PYTHON_ACCEPTANCE 3.12.7 cpython-312-aarch64-linux-ohos' "$LOGDIR/${BO
 grep -Fq 'PYTHON_ACCEPTANCE 3.12.7 cpython-312-aarch64-linux-ohos' "$LOGDIR/${BOARD_B}.python_imports.log"
 
 # Exercise the compiled/default selection path itself.  The deployed profile
+# Verify the loaded implementation, not merely its requested environment value.
+for board in "$BOARD_A" "$BOARD_B"; do
+  run_case "$board" active_rmw "python3.12 -c 'import rclpy; actual=rclpy.get_rmw_implementation_identifier(); assert actual == \"$EXPECTED_RMW\", actual; print(\"RMW_ACTIVE\", actual)'"
+  grep -Fq "RMW_ACTIVE $EXPECTED_RMW" "$LOGDIR/${board}.active_rmw.log"
+done
+
+# Exercise the compiled/default selection path itself. The deployed profile
 # normally pins its accepted RMW, so this command deliberately removes that
 # override in a subshell and asks rclpy which implementation the loader chose.
-default_rmw_command="unset RMW_IMPLEMENTATION; python3.12 -c 'import rclpy; actual=rclpy.get_rmw_implementation_identifier(); assert actual == \"$EXPECTED_RMW\", actual; print(\"DEFAULT_RMW\", actual)'"
+default_rmw_command="unset RMW_IMPLEMENTATION; python3.12 -c 'import rclpy; actual=rclpy.get_rmw_implementation_identifier(); assert actual == \"$DEPLOYED_DEFAULT_RMW\", actual; print(\"DEFAULT_RMW\", actual)'"
 run_case "$BOARD_A" default_rmw "$default_rmw_command"
 run_case "$BOARD_B" default_rmw "$default_rmw_command"
-grep -Fq "DEFAULT_RMW $EXPECTED_RMW" "$LOGDIR/${BOARD_A}.default_rmw.log"
-grep -Fq "DEFAULT_RMW $EXPECTED_RMW" "$LOGDIR/${BOARD_B}.default_rmw.log"
+grep -Fq "DEFAULT_RMW $DEPLOYED_DEFAULT_RMW" "$LOGDIR/${BOARD_A}.default_rmw.log"
+grep -Fq "DEFAULT_RMW $DEPLOYED_DEFAULT_RMW" "$LOGDIR/${BOARD_B}.default_rmw.log"
 
 # These exact executables were included before closing the build receipt and
 # are covered by the deployment manifest. No MDDS/token wrapper participates.
@@ -480,7 +496,7 @@ ros2_owned_finish
 ROS2_OWNED_LOCK_BOARDS=()
 
 for board in "$BOARD_A" "$BOARD_B"; do
-  run_case "$board" cleanup "test -z \"\$(ps -ef | grep -E '[d]emo_nodes|[a]ction_tutorials|[r]osbag2_transport/(player|recorder)|[t]urtlesim_node|[r]viz2|[i]ox-roudi|[r]os2 daemon' || true)\""
+  run_case "$board" cleanup "test -z \"\$( $SCOPED_SCAN_COMMAND )\""
   run_case "$board" artifact_tree_final "cd '$DEVICE_DIR' && sha256sum -c deploy_manifest.sha256 >/dev/null"
   run_case "$board" python_tree_final "python3.12 -I -B \$ROS2_HOME/share/ros2_ohos/verify_board_python.py --receipt \$ROS2_HOME/build_receipt.json --receipt-sha256 '$RECEIPT_SHA' --prefix \$ROS2_PYTHON_REMOTE_PREFIX --board '$board' --full-tree"
 done

@@ -1,0 +1,101 @@
+diff --git a/rclpy/CMakeLists.txt b/rclpy/CMakeLists.txt
+index f6c8d255eec31fd19eee80372b87228930bd5cc1..ad5f9d5e3b239e4abc7bad612328189ed9bb1a66 100644
+--- a/rclpy/CMakeLists.txt
++++ b/rclpy/CMakeLists.txt
+@@ -134,6 +134,8 @@ target_link_libraries(_rclpy_pybind11 PRIVATE
+   rosidl_runtime_c::rosidl_runtime_c
+ )
+ configure_build_install_location(_rclpy_pybind11)
++include(cmake/ohos_python_extension.cmake)
++configure_ohos_python_extension(_rclpy_pybind11)
+ 
+ if(NOT WIN32)
+   ament_environment_hooks(
+diff --git a/rclpy/cmake/ohos_python_extension.cmake b/rclpy/cmake/ohos_python_extension.cmake
+new file mode 100644
+index 0000000000000000000000000000000000000000..b31e48575b37d84d5a99a8784c679ecb75b21df3
+--- /dev/null
++++ b/rclpy/cmake/ohos_python_extension.cmake
+@@ -0,0 +1,14 @@
++# Keep target extension naming independent of host pybind11 discovery.
++function(configure_ohos_python_extension target)
++  if(NOT OHOS_CROSS_BUILD)
++    return()
++  endif()
++  # pybind11 may overwrite PYTHON_MODULE_EXTENSION as an INTERNAL cache entry
++  # and shadow Python3_SOABI with the host value. The explicit cross-build
++  # Python3_SOABI cache entry still carries the verified target ABI.
++  get_property(target_soabi CACHE Python3_SOABI PROPERTY VALUE)
++  if(NOT target_soabi MATCHES "^cpython-[0-9]+-aarch64-linux-ohos$")
++    message(FATAL_ERROR "OHOS requires an explicit target Python3_SOABI cache entry")
++  endif()
++  set_target_properties(${target} PROPERTIES SUFFIX ".${target_soabi}.so")
++endfunction()
+diff --git a/rclpy/test/test_ohos_extension_suffix.py b/rclpy/test/test_ohos_extension_suffix.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..edec9b7c3fd98f2575a44b72b0fdfeb6f428de71
+--- /dev/null
++++ b/rclpy/test/test_ohos_extension_suffix.py
+@@ -0,0 +1,62 @@
++"""Test OHOS extension naming against a clobbered host pybind11 suffix."""
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import tempfile
++import unittest
++
++
++class ExtensionSuffixTests(unittest.TestCase):
++    def configure(self, abi, cross=True):
++        cmake = os.environ.get('OHOS_TEST_CMAKE') or shutil.which('cmake')
++        self.assertIsNotNone(cmake)
++        helper = Path(__file__).resolve().parents[1] / 'cmake/ohos_python_extension.cmake'
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            (root / 'CMakeLists.txt').write_text('''
++cmake_minimum_required(VERSION 3.20)
++project(suffix_contract LANGUAGES NONE)
++add_library(probe MODULE IMPORTED)
++set_target_properties(probe PROPERTIES SUFFIX ".cp312-win_amd64.pyd")
++# Simulate the host Python/pybind11 discovery clobbering these variables.
++set(PYTHON_MODULE_EXTENSION ".cp312-win_amd64.pyd" CACHE INTERNAL "" FORCE)
++set(Python3_SOABI "cp312-win_amd64")
++include("''' + helper.as_posix() + '''" OPTIONAL)
++if(COMMAND configure_ohos_python_extension)
++  configure_ohos_python_extension(probe)
++endif()
++get_target_property(actual probe SUFFIX)
++file(WRITE "${CMAKE_BINARY_DIR}/suffix.txt" "${actual}")
++''', encoding='utf-8')
++            ninja = Path(cmake).with_name('ninja.exe' if os.name == 'nt' else 'ninja')
++            command = [cmake, '-G', 'Ninja', '-DCMAKE_MAKE_PROGRAM=' + str(ninja),
++                       '-S', str(root), '-B', str(root / 'build'),
++                       '-DOHOS_CROSS_BUILD=' + ('ON' if cross else 'OFF')]
++            if abi is not None:
++                command.append('-DPython3_SOABI=' + abi)
++            result = subprocess.run(command, capture_output=True, text=True)
++            output = root / 'build/suffix.txt'
++            return result, output.read_text() if output.exists() else None
++
++    def test_target_cache_wins_over_host_discovery(self):
++        result, suffix = self.configure('cpython-312-aarch64-linux-ohos')
++        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertEqual(suffix, '.cpython-312-aarch64-linux-ohos.so')
++
++    def test_missing_target_abi_is_rejected(self):
++        result, _ = self.configure(None)
++        self.assertNotEqual(result.returncode, 0)
++
++    def test_host_abi_is_rejected(self):
++        result, _ = self.configure('cp312-win_amd64')
++        self.assertNotEqual(result.returncode, 0)
++
++    def test_native_build_is_unchanged(self):
++        result, suffix = self.configure(None, cross=False)
++        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++        self.assertEqual(suffix, '.cp312-win_amd64.pyd')
++
++
++if __name__ == '__main__':
++    unittest.main(verbosity=2)

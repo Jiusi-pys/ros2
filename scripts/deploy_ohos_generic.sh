@@ -2,7 +2,11 @@
 # Build a provenance-bound generic ROS 2 archive and atomically deploy it to
 # KaihongOS/RK3588A boards without requiring any MDDS launcher or artifact.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+DEPLOY_CONTROLLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+DEPLOY_CONTROLLER_FILE="$DEPLOY_CONTROLLER_DIR/$(basename "${BASH_SOURCE[0]}")"
+# A corrected deployment controller may deploy an immutable build workspace
+# without changing the source snapshot recorded by that build.
+cd "${ROS2_DEPLOY_WORKSPACE:-$(dirname "$0")/..}"
 
 usage() {
   cat <<'EOF'
@@ -67,6 +71,14 @@ done
   echo "ERROR: install_ohos must be a non-symlink directory" >&2
   exit 2
 }
+runtime_bootstrap="$DEPLOY_CONTROLLER_DIR/runtime_config/sitecustomize.py"
+[[ -f "$runtime_bootstrap" && ! -L "$runtime_bootstrap" ]] || {
+  echo 'ERROR: ROS Python runtime bootstrap is missing' >&2; exit 2;
+}
+bootstrap_sha="$(sha256sum "$runtime_bootstrap" | cut -d ' ' -f1)"
+controller_sha="$(sha256sum "$DEPLOY_CONTROLLER_FILE" | cut -d ' ' -f1)"
+bootstrap_dir="/data/local/tmp/ros2-core-config/python-$bootstrap_sha"
+bootstrap_remote="$bootstrap_dir/sitecustomize.py"
 [[ -f scripts/env_ohos_generic.template.sh && ! -L scripts/env_ohos_generic.template.sh ]] || {
   echo "ERROR: generic environment template is missing" >&2
   exit 2
@@ -143,6 +155,7 @@ collector=(
   --output "$provenance"
 )
 "${collector[@]}"
+pixi run python "$DEPLOY_CONTROLLER_DIR/runtime_config_binding.py" "$provenance" "$bootstrap_sha" "$controller_sha"
 provenance_sha="$(sha256sum "$provenance" | cut -d ' ' -f1)"
 readarray -t provenance_fields < <(pixi run python - "$provenance" <<'PY' | tr -d '\r'
 import json
@@ -257,6 +270,18 @@ marker="ROS2_DEPLOY_COMPLETE V=1 RUN_ID=$run_id RMW=$RMW ARCHIVE_SHA256=$archive
   printf 'export ROS2_PYTHON_SOURCE_LOCK_SHA256=%q\n' "$python_source_lock_sha"
   printf 'export ROS2_PYTHON_SOURCE_BUILD_RECIPE_SHA256=%q\n' "$python_source_recipe_sha"
   cat scripts/env_ohos_generic.template.sh
+  printf 'export ROS2_PYTHON_BOOTSTRAP_DIR=%q\n' "$bootstrap_dir"
+  printf 'export ROS2_PYTHON_BOOTSTRAP_SHA256=%q\n' "$bootstrap_sha"
+  cat <<'BOOTSTRAP_ENV'
+if [ ! -f "$ROS2_PYTHON_BOOTSTRAP_DIR/sitecustomize.py" ] || \
+   [ -L "$ROS2_PYTHON_BOOTSTRAP_DIR/sitecustomize.py" ] || \
+   [ "$(sha256sum "$ROS2_PYTHON_BOOTSTRAP_DIR/sitecustomize.py" | cut -d ' ' -f1)" != "$ROS2_PYTHON_BOOTSTRAP_SHA256" ]; then
+  echo 'ERROR: ROS Python bootstrap differs from deployment provenance' >&2
+  return 70 2>/dev/null || exit 70
+fi
+export PYTHONPATH="$ROS2_PYTHON_BOOTSTRAP_DIR:$PYTHONPATH"
+export ROS_DISTRO=jazzy ROS_VERSION=2 ROS_PYTHON_VERSION=3
+BOOTSTRAP_ENV
 } > "$env_file"
 env_sha="$(sha256sum "$env_file" | cut -d ' ' -f1)"
 
@@ -311,6 +336,7 @@ send_verified() {
 
 deploy_one() {
   local board="$1" nonce owner stage backup archive_remote manifest_remote provenance_remote receipt_remote env_remote out commit_state
+  local bootstrap_setup bootstrap_stage
   nonce="${run_id}_${board}"
   owner="ROS2_GENERIC_DEPLOY V=1 RUN_ID=$run_id BOARD=$board"
   stage="$device_parent/.ros2-generic-stage-$nonce"
@@ -320,6 +346,14 @@ deploy_one() {
   provenance_remote="$device_parent/.ros2-generic-$nonce.provenance.json"
   receipt_remote="$device_parent/.ros2-generic-$nonce.build-receipt.json"
   env_remote="$device_parent/.ros2-generic-$nonce.env.sh"
+  bootstrap_stage="$bootstrap_dir/.sitecustomize-$nonce.py"
+  bootstrap_setup="$(remote "$board" "if test -L /data/local/tmp/ros2-core-config || test -L '$bootstrap_dir'; then printf BOOTSTRAP_UNSAFE; elif mkdir -p '$bootstrap_dir'; then printf BOOTSTRAP_READY; else printf BOOTSTRAP_FAILED; fi" | tr -d '\r\n')"
+  [[ "$bootstrap_setup" == BOOTSTRAP_READY ]] || { echo 'ERROR: cannot prepare ROS bootstrap directory' >&2; return 1; }
+  if [[ "$(remote_sha "$board" "$bootstrap_remote")" != "$bootstrap_sha" ]]; then
+    send_verified "$board" "$runtime_bootstrap" "$bootstrap_stage" "$bootstrap_sha" || return 1
+    bootstrap_setup="$(remote "$board" "if test -e '$bootstrap_remote' || test -L '$bootstrap_remote'; then printf BOOTSTRAP_CONFLICT; elif chmod 644 '$bootstrap_stage' && mv '$bootstrap_stage' '$bootstrap_remote'; then printf BOOTSTRAP_INSTALLED; else printf BOOTSTRAP_FAILED; fi" | tr -d '\r\n')"
+    [[ "$bootstrap_setup" == BOOTSTRAP_INSTALLED ]] || { echo 'ERROR: ROS bootstrap activation failed' >&2; return 1; }
+  fi
 
   out="$(remote "$board" "if test -e '$global_lock' || test -L '$global_lock'; then printf ROS2_DEPLOY_LOCK_BUSY; elif (umask 077; mkdir '$global_lock') && (umask 077; set -C; printf '%s\\n' '$owner' > '$global_lock/owner') 2>/dev/null && test \"\$(cat '$global_lock/owner' 2>/dev/null)\" = '$owner'; then printf ROS2_DEPLOY_LOCK_ACQUIRED; else printf ROS2_DEPLOY_LOCK_FAILED; fi" || true)"
   out="$(remote_line "$out" || true)"
@@ -353,7 +387,7 @@ deploy_one() {
     return 1
   fi
 
-  out="$(remote "$board" "if test \"\$(wc -c < '$archive_remote' 2>/dev/null | tr -d ' ')\" != '$archive_bytes'; then printf ROS2_DEPLOY_ARCHIVE_SIZE_BAD; elif ! tar -xzf '$archive_remote' -C '$stage'; then printf ROS2_DEPLOY_EXTRACT_FAILED; elif ! cp '$manifest_remote' '$stage/deploy_manifest.sha256' || ! cp '$provenance_remote' '$stage/release_provenance.json' || ! cp '$receipt_remote' '$stage/build_receipt.json' || ! cp '$env_remote' '$stage/env.sh'; then printf ROS2_DEPLOY_CONTROL_COPY_FAILED; elif test \"\$(sha256sum '$stage/release_provenance.json' | cut -d ' ' -f1)\" != '$provenance_sha' || test \"\$(sha256sum '$stage/build_receipt.json' | cut -d ' ' -f1)\" != '$build_receipt_sha' || test \"\$(sha256sum '$stage/env.sh' | cut -d ' ' -f1)\" != '$env_sha'; then printf ROS2_DEPLOY_CONTROL_HASH_BAD; elif ! (cd '$stage' && sha256sum -c deploy_manifest.sha256 >/dev/null 2>&1); then printf ROS2_DEPLOY_TREE_HASH_BAD; elif ! test -f '$stage/Lib/demo_nodes_cpp/talker' || ! test -f '$stage/Lib/demo_nodes_cpp/listener' || ! test -f '$stage/Lib/librmw_fastrtps_cpp.so' || ! test -f '$stage/Lib/librmw_cyclonedds_cpp.so' || ! test -f '$stage/Lib/site-packages/rclpy/__init__.py' || ! test -f '$stage/Lib/site-packages/ros2cli/__init__.py'; then printf ROS2_DEPLOY_REQUIRED_MISSING; elif ! find '$stage/Lib' -type f -exec chmod +x {} + || ! find '$stage/bin' -type f -exec chmod +x {} + || ! chmod +x '$stage/env.sh'; then printf ROS2_DEPLOY_CHMOD_FAILED; elif { test -e '$stage/lib' || test -L '$stage/lib'; } && ! test -L '$stage/lib'; then printf ROS2_DEPLOY_LIB_CONFLICT; elif ! test -e '$stage/lib' && ! test -L '$stage/lib' && ! ln -s Lib '$stage/lib'; then printf ROS2_DEPLOY_LIB_LINK_FAILED; elif ! (umask 077; set -C; printf '%s\\n' '$marker' > '$stage/.ros2_deploy_complete') 2>/dev/null; then printf ROS2_DEPLOY_MARKER_FAILED; else printf ROS2_DEPLOY_STAGE_VERIFIED; fi" || true)"
+  out="$(remote "$board" "set -- \$(wc -c < '$archive_remote' 2>/dev/null); if test \"\$1\" != '$archive_bytes'; then printf ROS2_DEPLOY_ARCHIVE_SIZE_BAD; elif ! tar -xzf '$archive_remote' -C '$stage'; then printf ROS2_DEPLOY_EXTRACT_FAILED; elif ! cp '$manifest_remote' '$stage/deploy_manifest.sha256' || ! cp '$provenance_remote' '$stage/release_provenance.json' || ! cp '$receipt_remote' '$stage/build_receipt.json' || ! cp '$env_remote' '$stage/env.sh'; then printf ROS2_DEPLOY_CONTROL_COPY_FAILED; elif test \"\$(sha256sum '$stage/release_provenance.json' | cut -d ' ' -f1)\" != '$provenance_sha' || test \"\$(sha256sum '$stage/build_receipt.json' | cut -d ' ' -f1)\" != '$build_receipt_sha' || test \"\$(sha256sum '$stage/env.sh' | cut -d ' ' -f1)\" != '$env_sha'; then printf ROS2_DEPLOY_CONTROL_HASH_BAD; elif ! (cd '$stage' && sha256sum -c deploy_manifest.sha256 >/dev/null 2>&1); then printf ROS2_DEPLOY_TREE_HASH_BAD; elif ! test -f '$stage/Lib/demo_nodes_cpp/talker' || ! test -f '$stage/Lib/demo_nodes_cpp/listener' || ! test -f '$stage/Lib/librmw_fastrtps_cpp.so' || ! test -f '$stage/Lib/librmw_cyclonedds_cpp.so' || ! test -f '$stage/Lib/site-packages/rclpy/__init__.py' || ! test -f '$stage/Lib/site-packages/ros2cli/__init__.py'; then printf ROS2_DEPLOY_REQUIRED_MISSING; elif ! find '$stage/Lib' -type f -exec chmod +x {} + || ! find '$stage/bin' -type f -exec chmod +x {} + || ! chmod +x '$stage/env.sh'; then printf ROS2_DEPLOY_CHMOD_FAILED; elif { test -e '$stage/lib' || test -L '$stage/lib'; } && ! test -L '$stage/lib'; then printf ROS2_DEPLOY_LIB_CONFLICT; elif ! test -e '$stage/lib' && ! test -L '$stage/lib' && ! ln -s Lib '$stage/lib'; then printf ROS2_DEPLOY_LIB_LINK_FAILED; elif ! (umask 077; set -C; printf '%s\\n' '$marker' > '$stage/.ros2_deploy_complete') 2>/dev/null; then printf ROS2_DEPLOY_MARKER_FAILED; else printf ROS2_DEPLOY_STAGE_VERIFIED; fi" || true)"
   out="$(remote_line "$out" || true)"
   if [[ "$out" != ROS2_DEPLOY_STAGE_VERIFIED ]]; then
     remote "$board" "rm -rf '$stage'; rm -f '$archive_remote' '$manifest_remote' '$provenance_remote' '$receipt_remote' '$env_remote'" >/dev/null 2>&1 || true
@@ -374,6 +408,9 @@ deploy_one() {
   post="$(remote "$board" "if test \"\$(cat '$device_dir/.ros2_deploy_complete' 2>/dev/null)\" = '$marker' && test \"\$(sha256sum '$device_dir/release_provenance.json' | cut -d ' ' -f1)\" = '$provenance_sha' && (cd '$device_dir' && sha256sum -c deploy_manifest.sha256 >/dev/null 2>&1) && . '$device_dir/env.sh' >/dev/null 2>&1 && test \"\$RMW_IMPLEMENTATION\" = '$RMW' && python3.12 -c 'import rclpy, ros2cli' >/dev/null 2>&1; then printf ROS2_DEPLOY_POSTCHECK_OK; else printf ROS2_DEPLOY_POSTCHECK_FAILED; fi" || true)"
   post="$(remote_line "$post" || true)"
   if [[ "$post" != ROS2_DEPLOY_POSTCHECK_OK ]]; then
+    # Retain the actual environment/import error before rollback removes a new
+    # failed prefix. A failed boolean alone is insufficient porting evidence.
+    remote "$board" ". '$device_dir/env.sh'; env_rc=\$?; printf 'ROS2_POSTCHECK_ENV_RC=%s\\n' \"\$env_rc\"; if test \"\$env_rc\" = 0; then python3.12 -B -c 'import rclpy, ros2cli'; printf 'ROS2_POSTCHECK_IMPORT_RC=%s\\n' \"\$?\"; fi" >&2 || true
     if [[ "$commit_state" == ROS2_DEPLOY_COMMITTED_WITH_BACKUP ]]; then
       rollback="$(remote "$board" "failed='$device_parent/.ros2-generic-failed-$nonce'; if test -d '$backup' && test ! -L '$backup' && ! test -e \"\$failed\" && ! test -L \"\$failed\" && mv '$device_dir' \"\$failed\" && mv '$backup' '$device_dir'; then rm -rf \"\$failed\"; printf ROS2_DEPLOY_ROLLED_BACK; else printf ROS2_DEPLOY_ROLLBACK_FAILED; fi" || true)"
     else

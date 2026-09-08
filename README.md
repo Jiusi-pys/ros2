@@ -19,7 +19,14 @@ Current generic-port verification is deliberately reported by layer:
 
 See [the support matrix](docs/kaihongos_support_matrix.md) for evidence limits.
 
-### Fast DDS RK3588A evidence candidate
+The 2026-09-08 core candidate completed both Fast DDS and Cyclone DDS
+two-board acceptance. Start with the [other-machine reuse guide](docs/rk3588a_core_reproduction.md)
+and [immutable delivery record](docs/rk3588a_core_delivery_20260908.md).
+They distinguish rebuilding from fixed sources, transferring local artifacts,
+and installing the automatic global CLI. The binary/evidence bundle is not
+stored in Git; a local commit is not a published GitHub release.
+
+### Historical focused Fast DDS RK3588A evidence candidate
 
 Fast-DDS commit `e66e90fd7b1e7a14d80129002474c68bc16da2bb`
 (`fix(ohos): anchor topic RTTI and use matching bundled TinyXML2`) has been
@@ -85,7 +92,7 @@ pixi run python scripts/python_target.py verify-stage --site python_target/sitep
 
 # Requires an absent install prefix and no downloaded/extracted dependency cache.
 ./target_deps_src/build_all_clean_ohos.sh
-OHOS_REQUIRE_CLEAN=1 ./scripts/build_ohos.sh
+OHOS_BUILD_MDDS=OFF OHOS_REQUIRE_CLEAN=1 ./scripts/build_ohos.sh
 
 # Use the COMPLETE receipt path printed by the build; never substitute a log.
 export OHOS_BUILD_RECEIPT=/absolute/path/to/ohos_build_receipt.json
@@ -99,7 +106,14 @@ PYTHON_REQUIRE_RUNTIME_ARTIFACT=1 \
   ./scripts/install_board_python_deps.sh BOARD_A BOARD_B
 ./scripts/deploy_ohos_generic.sh BOARD_A BOARD_B
 ROS2_BOARD_A=BOARD_A ROS2_BOARD_B=BOARD_B ./scripts/run_ohos_generic_acceptance.sh
+ROS2_BOARD_A=BOARD_A ROS2_BOARD_B=BOARD_B ROS2_ACCEPTANCE_RMW=rmw_cyclonedds_cpp \
+  ./scripts/run_ohos_generic_acceptance.sh
 ```
+
+The commands above deploy the isolated runtime, not `/usr/local/bin/ros2`.
+For automatic environment setup in a new board shell, also complete the
+[global CLI and offline doctor provisioning](docs/rk3588a_core_reproduction.md#4-global-cli-and-offline-doctor)
+before final handover. Do not reuse the historical MDDS launcher for this profile.
 
 The locked interface, full runtime artifact, source-build receipt and Python
 overlay must first be materialized and verified. Do not obtain an arbitrary

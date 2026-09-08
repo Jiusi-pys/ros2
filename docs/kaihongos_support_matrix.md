@@ -24,15 +24,22 @@ The status below is the current evidence verdict for this repaired input set,
 not an aspirational feature list. A row may move to **Verified supported** only
 when the required gate is present in the hash-bound release evidence.
 
+Core verdict updated on 2026-09-08 for archive
+`2ab1a4a02c405ee98b5c27377f7f74cb355f5d4d56e80ecd6b4f49c64a807dfd`
+on two KaihongOS 6.1.0.04 RK3588A boards. See
+`rk3588a_core_delivery_20260908.md` for exact source/SDK/runtime hashes, test
+counts, retained skips and rollback locations. Verification is limited to that
+documented acceptance matrix, not the entire upstream test suite.
+
 | Capability | Current status | Configuration boundary | Required acceptance evidence |
 | --- | --- | --- | --- |
-| `rcl`, `rclcpp`, parameters, lifecycle | Pending support gate | aarch64-linux-ohos, musl | clean lock replay and full cross-build; package CTests; C++ pub/sub, service and action round trips; clean shutdown |
-| CPython 3.12, `rclpy`, `ros2cli` | Pending support gate | Official CPython 3.12.7 plus fixed `Jiusi-pys/python` OHOS configuration; target SOABI `cpython-312-aarch64-linux-ohos` | Python source-build receipt and import gate; Python pub/sub and service/action; `ros2 --help`, node/topic/service/action CLI on a clean board |
-| CycloneDDS UDP | Pending support gate | multicast or the checked-in peer profile | RMW suite plus single-board and two-board C++/Python communication from the same release archive |
-| Fast DDS UDPv4 | Pending support gate | `SHM_TRANSPORT_DEFAULT=OFF`; generic environment selects UDPv4 | focused repair verified: content-filter 1/1, subscription 31/31, cpp/dynamic RMW suites 16/16 each, default A-to-B pub/sub; full clean-release acceptance still required |
-| Default RMW | Pending support gate | `rmw_fastrtps_cpp`, compiled into `rmw_implementation` | focused two-board run with `RMW_IMPLEMENTATION` unset passed; complete generic commands must pass from the same clean-release archive |
-| rosbag2 SQLite3 | Pending support gate | local board storage | record, inspect and replay C++ and Python messages; output digest retained |
-| LTTng/`ros2 trace` | Pending support gate | tracked LTTng UST musl patch; non-interactive start/stop | clean dependency build; sessiond/consumer startup; trace start/stop and non-empty CTF event decode |
+| `rcl`, `rclcpp`, parameters, lifecycle | Verified supported | aarch64-linux-ohos, musl | clean replay/build; recorded native API and signal tests; C++ pub/sub, services/actions, lifecycle and shutdown passed |
+| CPython 3.12, `rclpy`, `ros2cli` | Verified supported | Fixed-source CPython 3.12.7; target SOABI `cpython-312-aarch64-linux-ohos` | source receipt, full Python-tree checks, service-lifetime tests, Python messaging/services/actions and cold default CLI passed |
+| CycloneDDS UDP | Verified supported | `rmw_cyclonedds_cpp`; SHM disabled | both boards: 131 native API cases passed, 4 positive loan cases capability-skipped; C++/Python end-to-end matrix passed |
+| Fast DDS UDPv4 | Verified supported | `rmw_fastrtps_cpp`; `SHM_TRANSPORT_DEFAULT=OFF` | both boards: 135 native API cases passed; full C++/Python end-to-end matrix passed |
+| Default RMW | Verified supported | `rmw_fastrtps_cpp`, compiled into `rmw_implementation` | native default identifier and cross-board communication with RMW/transport environment overrides unset passed |
+| rosbag2 SQLite3 | Verified supported | local storage; hash-bound ROS-only Python global-RTTI policy | C++/Python record, inspect, replay and shutdown passed under both RMWs |
+| LTTng/`ros2 trace` | Verified supported | tracked musl patch; non-interactive, private mount namespace | clean dependency build; session/consumer lifecycle, real CTF ROS event decode and cleanup passed for both RMWs |
 | Qt5/PyQt5/rqt/turtlesim, headless | Experimental | `offscreen` QPA only; no screen or input-device claim | deterministic Qt/PyQt recipe, widget smoke, plugin discovery and bounded offscreen runs |
 | Qt/RViz visible GUI | Out of scope | no supported X11/Wayland or native window-system integration is supplied | none; offscreen process survival is not visible rendering evidence |
 | RViz2/OGRE GLES2, headless | Experimental | Mali EGL pbuffer/offscreen; no visual-reference guarantee | clean OGRE build, process-survival gate, Ogre exception scan and topic/TF activity |

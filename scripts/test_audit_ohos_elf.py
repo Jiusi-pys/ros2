@@ -33,6 +33,37 @@ class ElfAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "non-AArch64"):
             audit(self.root, Path("readelf"))
 
+    def test_host_python_suffix_is_rejected_even_for_aarch64_elf(self):
+        for name in ('_rclpy.cp312-win_amd64.pyd',
+                     '_module.cpython-312-x86_64-linux-gnu.so'):
+            with self.subTest(name=name), self.output(''):
+                path = self.root / name
+                path.write_bytes(self.header)
+                try:
+                    with self.assertRaisesRegex(RuntimeError, 'Python extension suffix'):
+                        audit(self.root, Path('readelf'))
+                finally:
+                    path.unlink()
+
+    def test_unavailable_launcher_interpreter_is_rejected(self):
+        package = self.root / 'Lib/demo_nodes_py'
+        package.mkdir(parents=True)
+        payload = b'#!/usr/bin/env python3.12\nprint(1)\n'
+        (package / 'talker-script.py').write_bytes(payload)
+        (package / 'talker').write_bytes(payload)
+        with self.output(''):
+            with self.assertRaisesRegex(RuntimeError, 'launcher interpreter'):
+                audit(self.root, Path('readelf'))
+
+    def test_available_launcher_interpreter_is_accepted(self):
+        package = self.root / 'Lib/demo_nodes_py'
+        package.mkdir(parents=True)
+        payload = b'#!/bin/env python3.12\nprint(1)\n'
+        (package / 'talker-script.py').write_bytes(payload)
+        (package / 'talker').write_bytes(payload)
+        with self.output(''):
+            self.assertEqual(audit(self.root, Path('readelf')), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

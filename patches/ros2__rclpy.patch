@@ -1,8 +1,8 @@
 From c776d763e5962f30324218d760f7b230ecab6d33 Mon Sep 17 00:00:00 2001
 From: Yusheng Peng <jiusi0519@gmail.com>
 Date: Thu, 27 Aug 2026 17:03:07 +0800
-Subject: [PATCH] rclpy: do not link -latomic with the OHOS NDK clang (musl has
- no separate libatomic)
+Subject: [PATCH 1/2] rclpy: do not link -latomic with the OHOS NDK clang (musl
+ has no separate libatomic)
 
 The NDK musl sysroot has no standalone libatomic (atomic builtins are in
 libc), so the Clang branch now also requires NOT OHOS_CROSS_BUILD.
@@ -24,7 +24,7 @@ Reuse notes (cross-building rclpy / rosidl_generator_py extensions):
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/rclpy/CMakeLists.txt b/rclpy/CMakeLists.txt
-index 06c08de..f53023b 100644
+index 06c08deb09574e23f4bc75512d8b4fbcf3c7f89d..f53023bb38290726691593e29437397f404c0b71 100644
 --- a/rclpy/CMakeLists.txt
 +++ b/rclpy/CMakeLists.txt
 @@ -112,7 +112,9 @@ pybind11_add_module(_rclpy_pybind11
@@ -38,6 +38,306 @@ index 06c08de..f53023b 100644
    target_link_libraries(_rclpy_pybind11 PRIVATE atomic)
  endif()
  
+-- 
+2.55.0.windows.5
+
+
+From e4c7d49c2a437ecd0b1876671c16eb6e8dd40117 Mon Sep 17 00:00:00 2001
+From: Yusheng Peng <jiusi0519@gmail.com>
+Date: Sun, 6 Sep 2026 13:55:19 +0800
+Subject: [PATCH 2/2] fix(rclpy): finalize shared type description services
+
+Own the native type-description service with a Node-capturing finalizer so the last implementation copy calls rcl_service_fini before releasing its Node. This removes leaked request/response endpoints without premature destruction of retained copies. Two real RK3588A lifetime regressions pass after RED with identical Python/MDDS/RMW inputs and only the native extension changed; the full local broker Context/process graph and ACK gate also passes.
+---
+ rclpy/CMakeLists.txt                          |   1 +
+ .../docs/type_description_service_lifetime.md |  67 ++++++++
+ rclpy/src/rclpy/type_description_service.cpp  |  22 ++-
+ .../test_type_description_service_lifetime.py | 150 ++++++++++++++++++
+ 4 files changed, 239 insertions(+), 1 deletion(-)
+ create mode 100644 rclpy/docs/type_description_service_lifetime.md
+ create mode 100644 rclpy/test/test_type_description_service_lifetime.py
+
+diff --git a/rclpy/CMakeLists.txt b/rclpy/CMakeLists.txt
+index f53023bb38290726691593e29437397f404c0b71..f6c8d255eec31fd19eee80372b87228930bd5cc1 100644
+--- a/rclpy/CMakeLists.txt
++++ b/rclpy/CMakeLists.txt
+@@ -214,6 +214,7 @@ if(BUILD_TESTING)
+       test/test_timer.py
+       test/test_topic_or_service_is_hidden.py
+       test/test_topic_endpoint_info.py
++      test/test_type_description_service_lifetime.py
+       test/test_type_support.py
+       test/test_type_hash.py
+       test/test_utilities.py
+diff --git a/rclpy/docs/type_description_service_lifetime.md b/rclpy/docs/type_description_service_lifetime.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..19409dc344f065ac0f1820ec043cafbb829dbeab
+--- /dev/null
++++ b/rclpy/docs/type_description_service_lifetime.md
+@@ -0,0 +1,67 @@
++# Type-description service ownership
++
++The native type-description service previously used a default-deleting
++`shared_ptr<rcl_service_t>`. Releasing its last `Service` wrapper freed that
++small handle without calling `rcl_service_fini()`, leaving the request reader
++and response writer alive after their node disappeared.
++
++The shared object now owns a finalizer that retains a native `Node` copy,
++calls `rcl_service_fini()`, then deletes the service handle. `get_impl()` copies
++share this lifetime; destroying one wrapper cannot finalize a service still
++owned by another. Zero initialization precedes shared-pointer construction,
++so initialization or later allocation failure also uses the same cleanup path.
++
++`test/test_type_description_service_lifetime.py` runs two independent unittest
++cases, each with alpha and observer in one live Context. Both keep the default
++type-description service enabled. The tests check global service discovery,
++the native request-reader/response-writer pair, and observer/Context validity
++after node destruction and after release of the last retained `get_impl()` copy.
++The assertions do not use `Context.destroy()` or garbage collection.
++
++## Local RK3588A evidence, 2026-09-06
++
++The ROS workspace contains the complete artifacts under
++`ohos_test_logs/type_description_lifetime/<run>/`. Each run records the actual
++Python child's exit, loaded library paths/hashes, fixture hash and graph phases.
++
++| Run | Result | `lifetime.log` SHA-256 |
++| --- | --- | --- |
++| `td_lifetime_red_20260906_01` | Both cases fail: service and both endpoints remain after final release; actual exit 1 | `742594cc1f679a21944839824fb684c6149c643b80512388a8553f4d1288c7fd` |
++| `td_lifetime_green_20260906_01` | Both cases pass, all five graph phases match; actual exit 0 | `83bca57ca7568e8c81bc0295fdc3255e98a298a9d7c1f16266b3ad54b4533465` |
++
++Both `host_verification.json` files report valid evidence with no evidence
++errors; GREEN also reports no functional errors. The unchanged test SHA-256 is
++`73060118067f7e0f28adde885c9befedd99886585c90c7b44fa207ce7bab8b92`.
++The packaged Python files, MDDS/RMW libraries, profile and test are identical
++between RED and GREEN. Only the rclpy native extension in `rclpy_overlay.tar`
++differs; its bytes were checked against `rclpy_package.json` and the process's
++recorded before/after mappings:
++
++- RED: `_rclpy_pybind11.cpython-312-aarch64-linux-ohos.so` SHA-256
++  `474a481d1934c7d719a433051afcc2f1abcc0f633afe717e2d046da346b722bd`,
++  matching the existing `install_ohos/Lib/site-packages/rclpy` extension.
++- GREEN: the extension SHA-256 is
++  `e95eb339d4f8e0da438be2bbdfeb8fb34fd96163efbf3467d3e44b6039efcdc7`,
++  matching `build_ohos/rclpy/test_rclpy` and loaded from the run's private
++  `/data/local/tmp/ros2/.mdds-owned-runs/td_lifetime_green_20260906_01/python/rclpy/`.
++
++This verifies same-Context ownership on KaihongOS using `rmw_mdds`, domain 51
++and the `ohos_dsoftbus` profile. Allocation-failure cleanup is covered by ownership
++design, not by fault-injection evidence in these two tests.
++
++The separate complete local broker integration also passed in
++`ohos_test_logs/broker_local/bl_fixed_rclpy_20260906_01/`. Two contexts exchanged
++five samples in each direction and completed ACK waits; alpha retirement removed
++its graph state, and beta then communicated with a fresh gamma context. The two
++independent worker processes passed their exact-payload and explicit completion
++barriers, including beta observing alpha's retirement. All three ROS children
++and the daemon exited 0, with daemon cleanup passing. Before/after process maps
++verified the same repaired native extension in the run's private rclpy package.
++The `contexts.log` SHA-256 is
++`99e8443e79275f4f8e893c6c9837c53b4181f1e3067715671b2ba3e3afd05c1d`;
++the sibling `alpha.log`, `beta.log`, status JSON and `evidence.sha256` retain the
++independent-process evidence.
++
++The broker run explicitly records `physical_dsoftbus_proven=false`; these local
++gates do not establish cross-board data delivery. Neither private-overlay run
++replaced the shared installed native extension.
+diff --git a/rclpy/src/rclpy/type_description_service.cpp b/rclpy/src/rclpy/type_description_service.cpp
+index 8dc354f130989d97ecf665e03a9f7fcf6a2a132d..95e03470384adc38d56ac264376017c2bf0ce4a5 100644
+--- a/rclpy/src/rclpy/type_description_service.cpp
++++ b/rclpy/src/rclpy/type_description_service.cpp
+@@ -14,6 +14,11 @@
+ 
+ #include <pybind11/pybind11.h>
+ 
++#include <rcl/error_handling.h>
++#include <rcl/service.h>
++
++#include <memory>
++
+ #include "type_description_service.hpp"
+ #include "utils.hpp"
+ 
+@@ -22,7 +27,22 @@ namespace rclpy
+ 
+ TypeDescriptionService::TypeDescriptionService(Node & node)
+ {
+-  auto srv_ptr = std::make_shared<rcl_service_t>();
++  // Every get_impl() value shares this service and its finalizer. Keep the
++  // native node alive until rcl_service_fini has removed both RMW endpoints,
++  // including when the Python Node has already requested destruction.
++  auto srv_ptr = std::shared_ptr<rcl_service_t>(
++    new rcl_service_t(rcl_get_zero_initialized_service()),
++    [node](rcl_service_t * service)
++    {
++      const rcl_ret_t ret = rcl_service_fini(service, node.rcl_ptr());
++      if (RCL_RET_OK != ret) {
++        PyErr_WarnFormat(
++          PyExc_RuntimeWarning, 1, "Failed to fini type description service: %s",
++          rcl_get_error_string().str);
++        rcl_reset_error();
++      }
++      delete service;
++    });
+   rcl_ret_t ret = rcl_node_type_description_service_init(srv_ptr.get(), node.rcl_ptr());
+   if (RCL_RET_OK != ret) {
+     throw RCLError("Failed to initialize type description service");
+diff --git a/rclpy/test/test_type_description_service_lifetime.py b/rclpy/test/test_type_description_service_lifetime.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7c758c58ee8afef2cbfa5cfd067117163fb3b521
+--- /dev/null
++++ b/rclpy/test/test_type_description_service_lifetime.py
+@@ -0,0 +1,150 @@
++# Copyright 2026 Yusheng Peng
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Observe native service ownership while its Context remains initialized.
++
++Run directly with ``python3.12 test_type_description_service_lifetime.py -v``.
++The harness supplies the RMW/profile/domain; these tests never replace transport.
++Both nodes retain the default enabled type-description service. Native rq/rr
++endpoint queries additionally verify its request-reader/response-writer pair.
++"""
++
++from collections import Counter
++import json
++import os
++import time
++import unittest
++
++import rclpy
++from rclpy.context import Context
++from rclpy.signals import SignalHandlerOptions
++
++
++class TestTypeDescriptionServiceLifetime(unittest.TestCase):
++
++    def setUp(self):
++        self.context = None
++        self.observer = None
++        self.alpha = None
++        self.alpha_destroyed = False
++        self.held_service = None
++        self.addCleanup(self._cleanup)
++        self.context = Context()
++        rclpy.init(context=self.context, signal_handler_options=SignalHandlerOptions.NO)
++        self.namespace = f'/rclpy_type_lifetime_{os.getpid()}/{self._testMethodName}'
++        self.observer = rclpy.create_node(
++            'observer', namespace=self.namespace, context=self.context)
++        self.alpha = rclpy.create_node(
++            'alpha', namespace=self.namespace, context=self.context)
++        self.service_name = self.namespace + '/alpha/get_type_description'
++        self.request_topic = 'rq' + self.service_name + 'Request'
++        self.response_topic = 'rr' + self.service_name + 'Reply'
++
++    def _cleanup(self):
++        # Cleanup runs only after the live-context assertions. No Context.destroy
++        # or garbage collection can hide a service left behind by node teardown.
++        if self.held_service is not None:
++            self.held_service.destroy_when_not_in_use()
++            self.held_service = None
++        if self.alpha is not None:
++            if not self.alpha_destroyed:
++                self.alpha.destroy_node()
++            self.alpha = None
++        if self.observer is not None:
++            self.observer.destroy_node()
++            self.observer = None
++        if self.context is not None:
++            self.context.try_shutdown()
++            self.context = None
++
++    def _state(self):
++        requests = self.observer.get_subscriptions_info_by_topic(
++            self.request_topic, no_mangle=True)
++        replies = self.observer.get_publishers_info_by_topic(
++            self.response_topic, no_mangle=True)
++        services = dict(self.observer.get_service_names_and_types())
++        return {
++            'context_ok': self.context.ok(),
++            'node_names': sorted(name for name, namespace in
++                                 self.observer.get_node_names_and_namespaces()
++                                 if namespace == self.namespace),
++            'service_count': self.observer.count_services(self.service_name),
++            'service_types': services.get(self.service_name, []),
++            'request_readers': len(requests),
++            'response_writers': len(replies),
++            'request_gids': [list(info.endpoint_gid) for info in requests],
++            'response_gids': [list(info.endpoint_gid) for info in replies],
++            'observer_service_count': self.observer.count_services(
++                self.namespace + '/observer/get_type_description'),
++        }
++
++    def _expect_state(self, phase, service_count, node_names):
++        deadline = time.monotonic() + 3.0
++        while True:
++            state = self._state()
++            good = (
++                state['context_ok'] and state['observer_service_count'] == 1 and
++                Counter(state['node_names']) == Counter(node_names) and
++                state['service_count'] == service_count and
++                state['request_readers'] == service_count and
++                state['response_writers'] == service_count and
++                state['service_types'] == (
++                    ['type_description_interfaces/srv/GetTypeDescription']
++                    if service_count else []))
++            if good or time.monotonic() >= deadline:
++                print('TYPE_DESCRIPTION_LIFETIME_OBSERVED ' + json.dumps(
++                    dict(state, case=self._testMethodName, phase=phase,
++                         service_name=self.service_name, expected_count=service_count,
++                         matched=good), sort_keys=True), flush=True)
++                self.assertTrue(good, f'{phase}: live-context graph mismatch: {state}')
++                if service_count:
++                    self.assertTrue(all(any(gid) for gid in state['request_gids']))
++                    self.assertTrue(all(any(gid) for gid in state['response_gids']))
++                return
++            # Poll an observable graph predicate until a fixed deadline; this
++            # does not rely on sleeping long enough to assume destruction ran.
++            time.sleep(0.01)
++
++    def _destroy_alpha(self):
++        self.alpha.destroy_node()
++        self.alpha_destroyed = True
++        self.assertEqual(0, self.alpha.handle.pointer)
++        self.assertTrue(self.context.ok())
++
++    def test_node_destroy_retires_type_description_service_and_both_endpoints(self):
++        self._expect_state('before_node_destroy', 1, ['alpha', 'observer'])
++        self._destroy_alpha()
++        self._expect_state('after_node_destroy', 0, ['observer'])
++        self.assertEqual('observer', self.observer.get_name())
++
++    def test_last_native_impl_copy_owns_service_until_explicit_release(self):
++        self._expect_state('before_copy', 1, ['alpha', 'observer'])
++        # get_impl returns a real C++ Service value sharing the rcl_service_t.
++        # Exercise that ownership boundary, not another same-name service.
++        native = self.alpha._type_description_service._type_description_srv
++        self.held_service = native.impl
++        self.assertNotEqual(0, self.held_service.pointer)
++        del native
++        self._destroy_alpha()
++        self.assertNotEqual(0, self.held_service.pointer)
++        self._expect_state('copy_retains_service', 1, ['alpha', 'observer'])
++        self.held_service.destroy_when_not_in_use()
++        self.assertEqual(0, self.held_service.pointer)
++        self.held_service = None
++        self._expect_state('after_last_copy_release', 0, ['observer'])
++        self.assertEqual('observer', self.observer.get_name())
++
++
++if __name__ == '__main__':
++    unittest.main()
 -- 
 2.55.0.windows.5
 

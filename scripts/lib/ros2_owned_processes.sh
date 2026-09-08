@@ -10,6 +10,15 @@ ROS2_OWNED_LABEL=""
 ROS2_OWNED_RUN_ID=""
 ROS2_OWNED_LOCK_DIR="${DEVICE_DIR%/*}/.ros2-generic-deploy.lock"
 
+# Observe only processes mapping the candidate prefix. Independent MDDS and
+# system services outside that prefix neither block nor get cleaned by a gate.
+ros2_scoped_process_command() {
+  local prefix="$1" proc_root="${2:-/proc}"
+  [[ "$prefix" =~ ^/data/local/tmp/ros2-[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || return 2
+  [[ "$proc_root" =~ ^/[A-Za-z0-9_./-]+$ ]] || return 2
+  printf '%s' "test -r '$proc_root/self/maps' || { printf ROS2_SCOPE_SCAN_ERROR; exit 1; }; for p in '$proc_root'/[0-9]*; do test -r \"\$p/maps\" || continue; if grep -Fq ' $prefix/' \"\$p/maps\" 2>/dev/null; then printf 'ROS2_SCOPED_PID=%s\\n' \"\${p##*/}\"; fi; done"
+}
+
 ros2_owned_quote() {
   printf "'%s'" "${1//\'/\'\\\'\'}"
 }

@@ -1,0 +1,75 @@
+{
+  "schema": "mdds.java-host-tooling-lock/v1",
+  "approval_bundle_sha256": "D63735E9CDFB485D789358B34081F0193897BE378E35402E8921114703E30A82",
+  "sources": {
+    "ros2_java_seed": {
+      "url": "https://github.com/EGAlberts/ros2_java.git",
+      "commit": "9f344d7657e1d2a81f872957eafdb1539f08eb9b",
+      "workspace_path": "src/Jiusi-pys/ros2_java"
+    },
+    "ros2_java_upstream": {
+      "url": "https://github.com/ros2-java/ros2_java.git",
+      "commit": "d0e4e952bad1977ce9818d00b520d3ad0aeafd8d",
+      "workspace_path": null
+    },
+    "ament_java": {
+      "url": "https://github.com/ros2-java/ament_java.git",
+      "commit": "c430324f0e8aa12106e67799795994b8aede10a9",
+      "workspace_path": "src/ros2-java/ament_java"
+    },
+    "ament_gradle_plugin": {
+      "url": "https://github.com/EGAlberts/ament_gradle_plugin.git",
+      "commit": "f1addd56b7ae1d8182e0aac23759313d5f354894",
+      "workspace_path": "src/Jiusi-pys/ament_gradle_plugin"
+    },
+    "ros2_java_examples": {
+      "url": "https://github.com/EGAlberts/ros2_java_examples.git",
+      "commit": "7e965265c17c81ab28f3c93b84f2af8c60da5b7c",
+      "workspace_path": "src/Jiusi-pys/ros2_java_examples"
+    }
+  },
+  "tools": {
+    "jdk": {
+      "version": "jdk-21.0.12+8",
+      "distribution": "Temurin/OpenJDK",
+      "artifact": {
+        "filename": "OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.zip",
+        "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.zip",
+        "size": 205069442,
+        "sha256": "9ba963ee2371874a74185d18bc7bb2ab9407df7683300855ed7606e0662321d0"
+      }
+    },
+    "gradle": {
+      "version": "8.5.0",
+      "distribution": "Gradle",
+      "artifact": {
+        "filename": "gradle-8.5-bin.zip",
+        "url": "https://services.gradle.org/distributions/gradle-8.5-bin.zip",
+        "sha256": "9d926787066a081739e8200858338b4a69e837c3a821a33aca9db09dd4a41026"
+      }
+    }
+  },
+  "dependency_locks": [
+    {
+      "path": "src/ros2-java/ament_java/f089.dependencies.lock.json",
+      "sha256": "280a8cf4cd6571685073079d5b131382ff58319f4c7e6c501567167988acb137"
+    },
+    {
+      "path": "src/Jiusi-pys/ament_gradle_plugin/f089.dependencies.lock.json",
+      "sha256": "543b094ceb940dabc5d569da7697eb74aaf52e28fb142cd4a7967e65dc49270d"
+    }
+  ],
+  "replay": {
+    "ament_java_lock": "src/ros2-java/ament_java/f089.dependencies.lock.json",
+    "ament_gradle_plugin_lock": "src/Jiusi-pys/ament_gradle_plugin/f089.dependencies.lock.json",
+    "consumer": "src/Jiusi-pys/ros2_java/rcljava_common/src/main/java",
+    "consumer_sources": [
+      "org/ros2/rcljava/exceptions/RCLException.java",
+      "org/ros2/rcljava/exceptions/RCLReturn.java",
+      "org/ros2/rcljava/interfaces/ActionDefinition.java",
+      "org/ros2/rcljava/interfaces/Disposable.java",
+      "org/ros2/rcljava/interfaces/MessageDefinition.java",
+      "org/ros2/rcljava/interfaces/ServiceDefinition.java"
+    ]
+  }
+}

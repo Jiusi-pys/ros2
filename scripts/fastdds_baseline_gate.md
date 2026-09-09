@@ -8,7 +8,7 @@ failure:
 test_rmw_implementation/test_subscription__rmw_fastrtps_cpp
 ```
 
-It does **not** invoke `run_mdds_gw.sh`.  It asks the ordinary board-test
+It does **not** invoke `run_ros2_gw.sh`.  It asks the ordinary board-test
 stager to replay exactly that CTest entry with `rmw_fastrtps_cpp` in the
 selected board's existing ROS 2 image, then verifies the board runner's
 run/nonce binding, terminal record, archive controls, captured archive hash,
@@ -26,7 +26,7 @@ From `ros2/` in Git Bash:
 ```
 
 The default output root is `ohos_test_logs/fastdds_baseline`.  Set
-`MDDS_RUN_ID`, `MDDS_FASTDDS_BASELINE_NONCE`, and `FASTDDS_BASELINE_LOGROOT`
+`ROS2_RUN_ID`, `ROS2_FASTDDS_BASELINE_NONCE`, and `FASTDDS_BASELINE_LOGROOT`
 when a collector needs a caller-controlled evidence location.  Reusing a
 run-ID/nonce directory is rejected.
 

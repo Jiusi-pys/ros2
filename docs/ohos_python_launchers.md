@@ -22,19 +22,7 @@ Real-board evidence from 2026-09-07:
   The script existed, had execute permission and the wrong `/usr/bin/env`
   header. Fourteen raw failure artifacts were fetched with matching hashes in
   `../verification_evidence/goal1_20260906/run_languages_01_failure`.
-- `cli_run_languages_20260907_02` used the corrected generated launcher.
-  Both actual Python `ros2 run` processes returned 0, published through the
-  private rmw_mdds/MDDS DSoftBus broker, and exited. Their interpreter argv
-  begins `python3.12` followed by the run-owned `demo_nodes_py/talker` path.
-  The overall CLI gate still failed because C++ and Python retirement records
-  lacked distinct identities. That evidence gap is separate work; this run
-  is not a complete CLI acceptance claim.
 
-The full multi-language run regression is maintained by the process CLI
-acceptance harness. This launcher fix does not imply a completed unified
-deployment or a complete ROS 2/graph release.
-
-Follow-up: `cli_run_languages_20260907_03` passed the complete two-language
-CLI gate and all 20 process receipt adversaries after retirement identity was
-added. Its manifest SHA-256 is
-`02df7caf15524e891f1b003614a59c971c9afeca3f303d44ffb06106ec69778c`.
+The generic runtime acceptance suite must validate the generated launchers
+with the selected middleware and deployment. This launcher fix alone does not
+establish a complete ROS 2 or graph release.

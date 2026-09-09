@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Build a provenance-bound generic ROS 2 archive and atomically deploy it to
-# KaihongOS/RK3588A boards without requiring any MDDS launcher or artifact.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -9,7 +9,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BASH = os.environ.get('MDDS_TEST_BASH', 'C:/Program Files/Git/bin/bash.exe')
+BASH = os.environ.get('ROS2_TEST_BASH', 'C:/Program Files/Git/bin/bash.exe')
 
 
 def function(name):
@@ -32,8 +32,8 @@ class ReadyPaths(unittest.TestCase):
     def accepted_host(self, path):
         # Windows command-line parsing can split an unquoted newline argument.
         # Preserve hostile path bytes in an environment value instead.
-        return bash(function('safe_relative_path') + '\nsafe_relative_path "$MDDS_TEST_RELATIVE"',
-                    environment={'MDDS_TEST_RELATIVE': path}).returncode == 0
+        return bash(function('safe_relative_path') + '\nsafe_relative_path "$ROS2_TEST_RELATIVE"',
+                    environment={'ROS2_TEST_RELATIVE': path}).returncode == 0
 
     def test_cpp_runtime_names_are_valid_relative_paths(self):
         for path in ['libc++_shared.so', 'runtime/libc++_shared.so.1', 'test/test_case.cpp']:
@@ -55,7 +55,7 @@ class ReadyPaths(unittest.TestCase):
             payload = b'frozen c++ runtime bytes\n'
             (runtime / 'libc++_shared.so').write_bytes(payload + (b'changed' if corrupt else b''))
             manifest = root / 'manifest'
-            manifest.write_text('MDDS_BOARDTEST_MANIFEST V=1 RUN_ID=path_test NONCE=n_one PACKAGE=demo\n'
+            manifest.write_text('ROS2_BOARDTEST_MANIFEST V=1 RUN_ID=path_test NONCE=n_one PACKAGE=demo\n'
                                 f'SHA256={hashlib.sha256(payload).hexdigest()} PATH={relative}\n',
                                 encoding='utf-8', newline='\n')
             posix = bash('cygpath -au "$1"', root).stdout.strip()
@@ -76,7 +76,7 @@ verify_remote_ready_and_create "$1" demo "$2" "$3"
         result, ready = self.remote_ready('runtime/libc++_shared.so')
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIsNotNone(ready)
-        self.assertTrue(ready.startswith(b'MDDS_BOARDTEST_READY RUN_ID=path_test '))
+        self.assertTrue(ready.startswith(b'ROS2_BOARDTEST_READY RUN_ID=path_test '))
 
     def test_remote_validator_still_rejects_changed_bytes_and_traversal(self):
         for relative, corrupt in [('runtime/libc++_shared.so', True),

@@ -55,3 +55,6 @@ __pycache__
 # Ignore everything in src except a .gitkeep file
 src/*
 !src/.gitkeep
+
+# Retain local probe artifacts after retiring the tracked probe sources.
+/serdes_probe/

@@ -9,8 +9,8 @@ RUN_ID="phase1_$(date +%Y%m%dT%H%M%S)_$$"
 case "$RUN_ID" in *[!A-Za-z0-9_.-]*|'') exit 70 ;; esac
 VLOG="$ROS2_HOME/verify_logs/$RUN_ID"
 mkdir -p "$VLOG" || exit 70
-ACTIVITY_LOCK="$ROS2_HOME/.mdds-activity-lock"
-ACTIVITY_OWNER="MDDS_ACTIVITY_LOCK MODE=TEST RUN_ID=$RUN_ID OWNER=verify_phase1_board"
+ACTIVITY_LOCK="$ROS2_HOME/.ros2-activity-lock"
+ACTIVITY_OWNER="ROS2_ACTIVITY_LOCK MODE=TEST RUN_ID=$RUN_ID OWNER=verify_phase1_board"
 listener_record="$VLOG/vfy_listener.pid"
 talker_record="$VLOG/vfy_talker.pid"
 lock_held=0
@@ -19,11 +19,11 @@ overall=0
 lock_result="$(if (umask 077; mkdir "$ACTIVITY_LOCK") 2>/dev/null && \
     (umask 077; set -C; printf '%s\n' "$ACTIVITY_OWNER" > "$ACTIVITY_LOCK/owner") 2>/dev/null && \
     test "$(cat "$ACTIVITY_LOCK/owner" 2>/dev/null)" = "$ACTIVITY_OWNER"; then
-  printf MDDS_ACTIVITY_LOCK_ACQUIRED
+  printf ROS2_ACTIVITY_LOCK_ACQUIRED
 else
-  printf MDDS_ACTIVITY_LOCK_BUSY_OR_FAILED
+  printf ROS2_ACTIVITY_LOCK_BUSY_OR_FAILED
 fi)"
-if [ "$lock_result" != MDDS_ACTIVITY_LOCK_ACQUIRED ]; then
+if [ "$lock_result" != ROS2_ACTIVITY_LOCK_ACQUIRED ]; then
   # If mkdir succeeded but owner creation failed, remove only an empty lock or
   # the exact owner written by this transaction. Any foreign content remains.
   rmdir "$ACTIVITY_LOCK" 2>/dev/null || {
@@ -44,7 +44,7 @@ stop_owned()
   [ -e "$record" ] || return 0
   [ -f "$record" ] && [ ! -L "$record" ] || return 1
   IFS=' ' read -r kind run_field pid_field start_field extra < "$record" || return 1
-  [ "$kind" = MDDS_PHASE1_PROCESS ] && [ "$run_field" = "RUN_ID=$RUN_ID" ] && \
+  [ "$kind" = ROS2_PHASE1_PROCESS ] && [ "$run_field" = "RUN_ID=$RUN_ID" ] && \
     [ -z "${extra:-}" ] || return 1
   pid=${pid_field#PID=}
   start=${start_field#START=}
@@ -81,12 +81,12 @@ start_owned()
   shift 3
   [ ! -e "$record" ] && [ ! -L "$record" ] && \
     [ ! -e "$log" ] && [ ! -L "$log" ] || return 1
-  nohup "$MDDS_TOKEN_EXEC" -- "$program" "$@" > "$log" 2>&1 &
+  nohup "$program" "$@" > "$log" 2>&1 &
   pid=$!
   start=$(cut -d ' ' -f22 "/proc/$pid/stat" 2>/dev/null)
   case "$pid" in ''|*[!0-9]*) kill "$pid" 2>/dev/null || true; return 1 ;; esac
   case "$start" in ''|*[!0-9]*) kill "$pid" 2>/dev/null || true; return 1 ;; esac
-  (umask 077; set -C; printf 'MDDS_PHASE1_PROCESS RUN_ID=%s PID=%s START=%s\n' \
+  (umask 077; set -C; printf 'ROS2_PHASE1_PROCESS RUN_ID=%s PID=%s START=%s\n' \
     "$RUN_ID" "$pid" "$start" > "$record") 2>/dev/null || {
       kill "$pid" 2>/dev/null || true
       return 1
@@ -101,11 +101,11 @@ release_lock()
       [ "$(cat "$ACTIVITY_LOCK/owner" 2>/dev/null)" = "$ACTIVITY_OWNER" ] && \
       [ "$(find "$ACTIVITY_LOCK" -mindepth 1 -maxdepth 1)" = "$ACTIVITY_LOCK/owner" ] && \
       rm -f "$ACTIVITY_LOCK/owner" && rmdir "$ACTIVITY_LOCK"; then
-    printf MDDS_ACTIVITY_LOCK_RELEASED
+    printf ROS2_ACTIVITY_LOCK_RELEASED
   else
-    printf MDDS_ACTIVITY_LOCK_NOT_OWNED
+    printf ROS2_ACTIVITY_LOCK_NOT_OWNED
   fi)"
-  [ "$result" = MDDS_ACTIVITY_LOCK_RELEASED ] || return 1
+  [ "$result" = ROS2_ACTIVITY_LOCK_RELEASED ] || return 1
   lock_held=0
 }
 
@@ -157,7 +157,7 @@ ros2 pkg list 2>/dev/null | grep -x tf2_bullet && echo "TF2BULLET_OK" || {
 }
 
 echo "== 4. image_tools cam2image (burger mode, no camera) =="
-timeout 12 "$MDDS_TOKEN_EXEC" -- "$ROS2_HOME/Lib/image_tools/cam2image" \
+timeout 12 "$ROS2_HOME/Lib/image_tools/cam2image" \
   --ros-args -p burger_mode:=true -p width:=64 -p height:=64 \
   > "$VLOG/cam2image.txt" 2>&1
 grep -q "Publishing image" "$VLOG/cam2image.txt" && echo "CAM2IMAGE_OK" || {

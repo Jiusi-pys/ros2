@@ -6,7 +6,7 @@ This repository is the **source distribution workspace for ROS 2**. It does not 
 
 - **Repository**: `https://github.com/ros2/ros2.git`
 - **Default upstream branch**: `rolling`
-- **Current workspace branch**: `jazzy_ohos` (ROS 2 Jazzy Jalisco + OpenHarmony port)
+- **Current workspace branch**: `stand` (based on the ROS 2 Jazzy Jalisco + OpenHarmony `jazzy_ohos` port)
 - **Platform focus**: Cross-platform, with the pinned dependency workspace (`pixi.toml`) targeting Windows (`win-64`)
 - **Language mix**: C++, Python, and small amounts of CMake, interface definition, and Rust tooling
 - **Build system**: CMake packages are built with [colcon](https://colcon.readthedocs.io/); package metadata is handled by [ament](https://github.com/ament)
@@ -166,7 +166,7 @@ the exact base and result tree IDs.  `scripts/freeze_ros2_repos.py` then writes
 series base for repositories whose HEAD is not published):
 
 - `./scripts/export_patches.sh` — regenerate commit series and exact dirty
-  snapshots from every imported repository, including the two owned repos.
+  snapshots from every imported repository listed in the manifest.
 - `python scripts/freeze_ros2_repos.py` — regenerate the exact, fetchable lock
   manifest after exporting patches.
 - `./scripts/apply_patches.sh` — apply series and then snapshots onto a clean
@@ -189,19 +189,8 @@ vcs pull src/                     # update/rebase each development port branch
 python scripts/freeze_ros2_repos.py
 ```
 
-Two subrepos are owned by Jiusi-pys and registered in `ros2.repos`:
-
-- `src/Jiusi-pys/mdds` — the mdds core library, `git@github.com:Jiusi-pys/mdds.git`.
-- `src/ros2/rmw_mdds` — the `rmw_mdds` + `mdds_gateway` ROS packages,
-  `git@github.com:Jiusi-pys/rmw_mdds.git`.
-
-Their unpublished state is included in the patch/snapshot fallback like every
-other repository, so a fresh checkout does not silently depend on an unpushed
-branch.  Publishing those branches remains a separate human-controlled release
-gate; the scripts never commit or push on the user's behalf.
-
 This meta repository lives at `git@github.com:Jiusi-pys/ros2.git` (`origin`,
-branch `jazzy_ohos`); `https://github.com/ros2/ros2.git` is `upstream` for
+branch `stand`); `https://github.com/ros2/ros2.git` is `upstream` for
 syncing. If a subrepo's port grows too large for a patch series (many
 commits, heavy divergence), fork that one repo and point its `ros2.repos`
 entry at your fork instead - the rest stays patch-based.
@@ -223,7 +212,6 @@ non-colcon dependencies are cross-built by the scripts in `target_deps_src/`
 ./scripts/install_board_python_deps.sh   # one-time per board: numpy/pyyaml/psutil/...
 ./scripts/deploy_ohos.sh                 # pack install_ohos/ and push to both boards
 ./scripts/smoke_loopback.sh [board_id]   # same-board talker/listener check
-./scripts/run_bidirectional_test.sh      # compatibility entry; hardened domain-0 smoke
 ./scripts/run_board_tests.sh [board_id] [pkg...]  # run package ctest suites on the board
 ```
 
@@ -236,10 +224,11 @@ Key facts:
   is required: class_loader/pluginlib use cross-DSO `dynamic_cast` on weak
   template typeinfo, which fails unless executables export their weak symbols
   (otherwise "Could not create instance of type ...").
-- `build_ohos.sh` passes `--base-paths src` to colcon: the default scan root
-  is the workspace root, which would otherwise pick up `target_deps_src/*` as
-  plain cmake packages and install a non-PIC static tinyxml2 that breaks
-  rosbag2_storage/urdfdom. `target_deps_src/COLCON_IGNORE` is a fallback.
+- `build_ohos.sh` obtains explicit repository roots from
+  `scripts/manifest_source_roots.py --manifest <manifest> --source-root <src>`
+  and passes those roots as colcon `--base-paths`. Discovery therefore follows
+  the selected manifest rather than scanning unrelated directories under
+  `src/` or `target_deps_src/`. `target_deps_src/COLCON_IGNORE` is a fallback.
 - Skipped packages: Connext RMW, Rust generator, mimick_vendor
   (aarch64 trampoline asm); rviz_* ported in Phase 6f (prebuilt GLES2 OGRE,
   see the rviz/OGRE section below); all other
@@ -252,8 +241,8 @@ Key facts:
   `scripts/run_board_tests.sh [board] [pkg...]` pushes each package's ctest
   executables + helper libs and runs them under a tmpfs `/tmp` (gtest's vendor
   copy hardcodes `/tmp` for death-test capture). Known permanent SKIP:
-  rcutils/test_shared_library_in_run_paths; `__rmw_mdds` tests are excluded on
-  both ends. Test-binary detection must accept PIE executables (`file` reports
+  rcutils/test_shared_library_in_run_paths. Test-binary detection must accept
+  PIE executables (`file` reports
   them as "shared object ... interpreter /lib/ld-musl-..." - match on
   `interpreter`, not only on `executable`); the generated driver puts the
   test dir on LD_LIBRARY_PATH (helper libs like librviz_rendering_test_utils.so
@@ -264,11 +253,6 @@ Key facts:
   (upstream logic: no DISPLAY on the Windows host); the
   `*_visual_test` screenshot comparisons need `-DEnableVisualTests=True` and
   reference images captured on the same GPU - left SKIPPED on the Mali board.
-  The default package set includes `mdds`: its two token-boundary CTests use
-  the explicit `MDDS_BOARDTEST_TOKEN_MODE` marker to prove an unprivileged
-  fail-closed startup followed, on the same isolated domain, by the just-built
-  package launcher's authorized startup. Their raw logs/verdicts and order are
-  subject to the same exact archive inventory gate.
   Foreign ROS processes on the board (auto-spawned ros2 daemon, leftover rqt /
   demo nodes) hold participants on domain 0 and make graph/timing tests flaky
   or hanging. Hardened runners fail closed when they detect such processes;
@@ -345,9 +329,9 @@ Key facts:
 - Runtime on the board: first require
   `. /data/local/tmp/ros2/env.sh || exit 70` in automation (or put subsequent
   interactive commands inside `if . /data/local/tmp/ros2/env.sh; then ...; fi`), then
-  `mdds_exec "$ROS2_TALKER_RAW"` / `mdds_exec "$ROS2_LISTENER_RAW"` (C++) or
-  `mdds_exec python3.12 "$ROS2_PY_TALKER_RAW"` /
-  `mdds_exec python3.12 "$ROS2_PY_LISTENER_RAW"`
+  `"$ROS2_TALKER_RAW"` / `"$ROS2_LISTENER_RAW"` (C++) or
+  `python3.12 "$ROS2_PY_TALKER_RAW"` /
+  `python3.12 "$ROS2_PY_LISTENER_RAW"`
   (demo_nodes_py; colcon on a Windows host writes setuptools `*-script.py`
   entry scripts into `lib/<pkg>/`, the `.exe` launchers are unusable). `ros2`
   is an env.sh shell function wrapping `ros2cli.cli:main`. Board-to-board

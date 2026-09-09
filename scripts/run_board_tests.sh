@@ -56,7 +56,7 @@ case "$BOARD" in
 esac
 PKGS=("$@")
 if [ ${#PKGS[@]} -eq 0 ]; then
-  PKGS=(mdds rcutils rcpputils rosidl_runtime_c rosidl_runtime_cpp rmw
+  PKGS=(rcutils rcpputils rosidl_runtime_c rosidl_runtime_cpp rmw
         rcl_yaml_param_parser rcl rcl_action rcl_lifecycle rclcpp test_msgs)
 fi
 
@@ -66,14 +66,14 @@ fi
 # retain their exact meaning.  Do not accept a selector together with multiple
 # packages: that would make a missing selector look like an unrelated package
 # pass or failure.
-ONLY_TEST="${MDDS_BOARDTEST_ONLY_TEST:-}"
+ONLY_TEST="${ROS2_BOARDTEST_ONLY_TEST:-}"
 if [[ -n "$ONLY_TEST" ]]; then
   if ! [[ "$ONLY_TEST" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
-    echo "ERROR: MDDS_BOARDTEST_ONLY_TEST must be one safe exact CTest name" >&2
+    echo "ERROR: ROS2_BOARDTEST_ONLY_TEST must be one safe exact CTest name" >&2
     exit 2
   fi
   if [ ${#PKGS[@]} -ne 1 ]; then
-    echo "ERROR: MDDS_BOARDTEST_ONLY_TEST requires exactly one package" >&2
+    echo "ERROR: ROS2_BOARDTEST_ONLY_TEST requires exactly one package" >&2
     exit 2
   fi
 fi
@@ -99,29 +99,29 @@ ROS2_HOME=/data/local/tmp/ros2
 # and the DS/GW launchers.  A test must never copy a binary or start a board
 # payload while a cooperating deployment is staging, committing, or rolling
 # back that board.
-ACTIVITY_LOCK_DIR="$ROS2_HOME/.mdds-activity-lock"
+ACTIVITY_LOCK_DIR="$ROS2_HOME/.ros2-activity-lock"
 # Keep a verbatim board-side archive for each package.  A final verification
 # manifest can therefore include the gtest XML/log bytes that produced each
 # summarized BOARDTEST line, instead of treating the summary as raw evidence.
-RUN_ID="${MDDS_RUN_ID:-board_$(date +%Y%m%d_%H%M%S)_$RANDOM}"
-RUN_NONCE="${MDDS_BOARDTEST_RUN_NONCE:-test_$(date +%Y%m%d%H%M%S)_${RANDOM}_${RANDOM}_$$}"
-LOGROOT="${MDDS_BOARDTEST_LOGROOT:-ohos_test_logs/board_tests}"
+RUN_ID="${ROS2_RUN_ID:-board_$(date +%Y%m%d_%H%M%S)_$RANDOM}"
+RUN_NONCE="${ROS2_BOARDTEST_RUN_NONCE:-test_$(date +%Y%m%d%H%M%S)_${RANDOM}_${RANDOM}_$$}"
+LOGROOT="${ROS2_BOARDTEST_LOGROOT:-ohos_test_logs/board_tests}"
 case "$RUN_ID" in
   *[!A-Za-z0-9_.-]*|'')
-    echo "ERROR: MDDS_RUN_ID must contain only A-Za-z0-9_.-" >&2
+    echo "ERROR: ROS2_RUN_ID must contain only A-Za-z0-9_.-" >&2
     exit 2
     ;;
 esac
 case "$RUN_NONCE" in
   *[!A-Za-z0-9_.-]*|'')
-    echo "ERROR: MDDS_BOARDTEST_RUN_NONCE must contain only A-Za-z0-9_.-" >&2
+    echo "ERROR: ROS2_BOARDTEST_RUN_NONCE must contain only A-Za-z0-9_.-" >&2
     exit 2
     ;;
 esac
 # Every component is constrained above before interpolation into a remote
 # shell command.  The nonce makes this owner record unique even for repeated
 # RUN_ID values; release is permitted only for this exact full record.
-ACTIVITY_LOCK_OWNER="MDDS_ACTIVITY_LOCK MODE=TEST RUN_ID=$RUN_ID NONCE=$RUN_NONCE OWNER=run_board_tests"
+ACTIVITY_LOCK_OWNER="ROS2_ACTIVITY_LOCK MODE=TEST RUN_ID=$RUN_ID NONCE=$RUN_NONCE OWNER=run_board_tests"
 ACTIVITY_LOCK_HELD=0
 # HDC does not reliably propagate the remote driver's exit state.  Retain the
 # shared lock unless every driver that we attempted is later proven to have
@@ -137,24 +137,24 @@ if ! (umask 077; mkdir -p "$LOGDIR"); then
   echo "ERROR: cannot create board evidence directory $LOGDIR" >&2
   exit 2
 fi
-ARCHIVE_MAX_BYTES="${MDDS_BOARDTEST_MAX_ARCHIVE_BYTES:-268435456}"
+ARCHIVE_MAX_BYTES="${ROS2_BOARDTEST_MAX_ARCHIVE_BYTES:-268435456}"
 if ! is_canonical_positive_decimal "$ARCHIVE_MAX_BYTES" || ! decimal_leq "$ARCHIVE_MAX_BYTES" 1073741824; then
-  echo "ERROR: MDDS_BOARDTEST_MAX_ARCHIVE_BYTES must be a decimal value from 1 to 1073741824" >&2
+  echo "ERROR: ROS2_BOARDTEST_MAX_ARCHIVE_BYTES must be a decimal value from 1 to 1073741824" >&2
   exit 2
 fi
-ARCHIVE_STREAM_TIMEOUT_SEC="${MDDS_BOARDTEST_ARCHIVE_STREAM_TIMEOUT_SEC:-600}"
+ARCHIVE_STREAM_TIMEOUT_SEC="${ROS2_BOARDTEST_ARCHIVE_STREAM_TIMEOUT_SEC:-600}"
 if ! is_canonical_positive_decimal "$ARCHIVE_STREAM_TIMEOUT_SEC" || ! decimal_leq "$ARCHIVE_STREAM_TIMEOUT_SEC" 3600; then
-  echo "ERROR: MDDS_BOARDTEST_ARCHIVE_STREAM_TIMEOUT_SEC must be a decimal value from 1 to 3600" >&2
+  echo "ERROR: ROS2_BOARDTEST_ARCHIVE_STREAM_TIMEOUT_SEC must be a decimal value from 1 to 3600" >&2
   exit 2
 fi
-TRANSFER_VERIFY_ATTEMPTS="${MDDS_BOARDTEST_TRANSFER_VERIFY_ATTEMPTS:-10}"
+TRANSFER_VERIFY_ATTEMPTS="${ROS2_BOARDTEST_TRANSFER_VERIFY_ATTEMPTS:-10}"
 if ! is_canonical_positive_decimal "$TRANSFER_VERIFY_ATTEMPTS" || ! decimal_leq "$TRANSFER_VERIFY_ATTEMPTS" 60; then
-  echo "ERROR: MDDS_BOARDTEST_TRANSFER_VERIFY_ATTEMPTS must be a decimal value from 1 to 60" >&2
+  echo "ERROR: ROS2_BOARDTEST_TRANSFER_VERIFY_ATTEMPTS must be a decimal value from 1 to 60" >&2
   exit 2
 fi
-TRANSFER_VERIFY_READBACK_TIMEOUT_SEC="${MDDS_BOARDTEST_TRANSFER_VERIFY_READBACK_TIMEOUT_SEC:-5}"
+TRANSFER_VERIFY_READBACK_TIMEOUT_SEC="${ROS2_BOARDTEST_TRANSFER_VERIFY_READBACK_TIMEOUT_SEC:-5}"
 if ! is_canonical_positive_decimal "$TRANSFER_VERIFY_READBACK_TIMEOUT_SEC" || ! decimal_leq "$TRANSFER_VERIFY_READBACK_TIMEOUT_SEC" 30; then
-  echo "ERROR: MDDS_BOARDTEST_TRANSFER_VERIFY_READBACK_TIMEOUT_SEC must be a decimal value from 1 to 30" >&2
+  echo "ERROR: ROS2_BOARDTEST_TRANSFER_VERIFY_READBACK_TIMEOUT_SEC must be a decimal value from 1 to 30" >&2
   exit 2
 fi
 if ! command -v base64 >/dev/null 2>&1; then
@@ -318,8 +318,8 @@ wait_remote_regular_sha() { # <remote-path> <expected-sha256>
 
 remote_mkdir_verified() { # <remote-directory> <label>
   local directory="$1" label="$2" out
-  out="$(shell "if mkdir -p '$directory' && test -d '$directory' && test ! -L '$directory'; then printf MDDS_BOARDTEST_DIR_READY; else printf MDDS_BOARDTEST_DIR_FAILED; fi" | tr -d '\r\n')"
-  if [[ "$out" != "MDDS_BOARDTEST_DIR_READY" ]]; then
+  out="$(shell "if mkdir -p '$directory' && test -d '$directory' && test ! -L '$directory'; then printf ROS2_BOARDTEST_DIR_READY; else printf ROS2_BOARDTEST_DIR_FAILED; fi" | tr -d '\r\n')"
+  if [[ "$out" != "ROS2_BOARDTEST_DIR_READY" ]]; then
     echo "ERROR: remote mkdir verification failed for $label: ${out:-NO_MARKER}" >&2
     return 1
   fi
@@ -337,7 +337,7 @@ TERMINAL_LINE=""
 DRIVER_TERMINAL_RC=""
 DRIVER_TERMINAL_RECORD_VALID=0
 CAPTURED_ARCHIVE=""
-ARCHIVE_REMOTE_PARENT="$ROS2_HOME/.mdds-board-evidence"
+ARCHIVE_REMOTE_PARENT="$ROS2_HOME/.ros2-board-evidence"
 ARCHIVE_REMOTE_RUN_DIR="$ARCHIVE_REMOTE_PARENT/$RUN_ID"
 ARCHIVE_REMOTE_DIR="$ARCHIVE_REMOTE_RUN_DIR/$RUN_NONCE"
 ARCHIVE_STREAM_READY=0
@@ -378,14 +378,14 @@ add_ready_manifest_file() { # <relative-path> <local-path>
 
 write_ready_manifest() { # <package>
   local pkg="$1" temporary manifest digest
-  manifest="$LOGDIR/${pkg}.mdds_ready_manifest_${RUN_ID}_${RUN_NONCE}"
+  manifest="$LOGDIR/${pkg}.ros2_ready_manifest_${RUN_ID}_${RUN_NONCE}"
   if [[ -e "$manifest" || -L "$manifest" ]]; then
     echo "ERROR: refusing pre-existing local READY manifest for $pkg: $manifest" >&2
     return 1
   fi
   temporary="$(mktemp "$LOGDIR/.${pkg}.ready_manifest.XXXXXX")" || return 1
   if ! {
-    printf 'MDDS_BOARDTEST_MANIFEST V=1 RUN_ID=%s NONCE=%s PACKAGE=%s\n' "$RUN_ID" "$RUN_NONCE" "$pkg"
+    printf 'ROS2_BOARDTEST_MANIFEST V=1 RUN_ID=%s NONCE=%s PACKAGE=%s\n' "$RUN_ID" "$RUN_NONCE" "$pkg"
     for relative in "${READY_MANIFEST_PATHS[@]}"; do
       printf 'SHA256=%s PATH=%s\n' "${READY_MANIFEST_SHA[$relative]}" "$relative"
     done | LC_ALL=C sort
@@ -438,19 +438,19 @@ precheck_remote_controls() { # <package-root> <manifest> <ready> <terminal> <pac
   out="$(shell "if test -e '$package_root' || test -L '$package_root'; then
     if test -d '$package_root' && test ! -L '$package_root'; then
       if test -e '$manifest' || test -L '$manifest' || test -e '$ready' || test -L '$ready' || test -e '$terminal' || test -L '$terminal'; then
-        printf MDDS_BOARDTEST_CONTROL_PREEXISTS
+        printf ROS2_BOARDTEST_CONTROL_PREEXISTS
       else
-        printf MDDS_BOARDTEST_CONTROL_ABSENT
+        printf ROS2_BOARDTEST_CONTROL_ABSENT
       fi
     else
-      printf MDDS_BOARDTEST_PACKAGE_ROOT_INVALID
+      printf ROS2_BOARDTEST_PACKAGE_ROOT_INVALID
     fi
   else
-    printf MDDS_BOARDTEST_CONTROL_ABSENT
+    printf ROS2_BOARDTEST_CONTROL_ABSENT
   fi" | tr -d '\r\n')"
   printf 'BOARDTEST_CONTROL_PRECHECK package=%s manifest=%s ready=%s terminal=%s result=%s\n' \
     "$pkg" "$manifest" "$ready" "$terminal" "${out:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"
-  if [[ "$out" != "MDDS_BOARDTEST_CONTROL_ABSENT" ]]; then
+  if [[ "$out" != "ROS2_BOARDTEST_CONTROL_ABSENT" ]]; then
     echo "ERROR: refusing stale, unreadable, or symlinked READY controls for $pkg: ${out:-NO_MARKER}" >&2
     return 1
   fi
@@ -461,8 +461,8 @@ prepare_remote_package() { # <package-root> <package>
   # Precheck ran before this removal, so a reused RUN_ID/NONCE cannot erase and
   # then recreate a stale hidden READY/terminal marker.  The path is derived
   # from a validated package component and stays inside the test root.
-  out="$(shell "if test -d '$ROS2_HOME' && test ! -L '$ROS2_HOME' && mkdir -p '$tests_root' && test -d '$tests_root' && test ! -L '$tests_root' && rm -rf '$package_root' && mkdir -p '$package_root' && test -d '$package_root' && test ! -L '$package_root'; then printf MDDS_BOARDTEST_PACKAGE_READY; else printf MDDS_BOARDTEST_PACKAGE_SETUP_FAILED; fi" | tr -d '\r\n')"
-  if [[ "$out" != "MDDS_BOARDTEST_PACKAGE_READY" ]]; then
+  out="$(shell "if test -d '$ROS2_HOME' && test ! -L '$ROS2_HOME' && mkdir -p '$tests_root' && test -d '$tests_root' && test ! -L '$tests_root' && rm -rf '$package_root' && mkdir -p '$package_root' && test -d '$package_root' && test ! -L '$package_root'; then printf ROS2_BOARDTEST_PACKAGE_READY; else printf ROS2_BOARDTEST_PACKAGE_SETUP_FAILED; fi" | tr -d '\r\n')"
+  if [[ "$out" != "ROS2_BOARDTEST_PACKAGE_READY" ]]; then
     echo "ERROR: failed to reset and verify remote package directory for $pkg: ${out:-NO_MARKER}" >&2
     return 1
   fi
@@ -486,7 +486,7 @@ transfer_ready_manifest() { # <remote-manifest-path> <package>
 
 verify_remote_ready_and_create() { # <package-root> <package> <manifest> <ready>
   local package_root="$1" pkg="$2" manifest="$3" ready="$4" remote_cmd out ready_line ready_line_sha header
-  ready_line="MDDS_BOARDTEST_READY RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$READY_MANIFEST_SHA256"
+  ready_line="ROS2_BOARDTEST_READY RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$READY_MANIFEST_SHA256"
   # The board's /bin/sh does not provide tr.  Bind the control record to the
   # SHA-256 of its exact expected bytes (including the one LF written by
   # printf) instead of normalizing CR/LF away.  This rejects CR, a missing
@@ -496,16 +496,16 @@ verify_remote_ready_and_create() { # <package-root> <package> <manifest> <ready>
     echo "ERROR: failed to derive exact READY record digest for $pkg" >&2
     return 1
   fi
-  header="MDDS_BOARDTEST_MANIFEST V=1 RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg"
+  header="ROS2_BOARDTEST_MANIFEST V=1 RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg"
   # Parse the exact hash-verified manifest on the board rather than expanding
   # one shell predicate per file on the host.  That keeps large packages below
   # HDC command-length limits while still re-hashing every driver/exe/lib/
   # fixture entry before a READY record can exist.
-  remote_cmd="valid=1; entries=0; if test -f '$manifest' && test ! -L '$manifest' && test \"\$(sha256sum '$manifest' 2>/dev/null | cut -d ' ' -f1)\" = '$READY_MANIFEST_SHA256' && exec 3< '$manifest'; then IFS= read -r manifest_header <&3 || valid=0; test \"\$manifest_header\" = '$header' || valid=0; while IFS= read -r manifest_entry <&3; do case \"\$manifest_entry\" in SHA256=*' PATH='*) manifest_sha=\${manifest_entry#SHA256=}; manifest_sha=\${manifest_sha%% PATH=*}; manifest_path=\${manifest_entry#* PATH=} ;; *) valid=0; break ;; esac; case \"\$manifest_sha\" in ''|*[!0-9a-f]*) valid=0 ;; esac; test \${#manifest_sha} -eq 64 || valid=0; case \"\$manifest_path\" in ''|/*|*'//'*|.|..|./*|../*|*/.|*/..|*/./*|*/../*|*[!A-Za-z0-9._/+-]*) valid=0 ;; esac; if test \"\$valid\" = 1 && test -f '$package_root/'\"\$manifest_path\" && test ! -L '$package_root/'\"\$manifest_path\" && test \"\$(sha256sum '$package_root/'\"\$manifest_path\" 2>/dev/null | cut -d ' ' -f1)\" = \"\$manifest_sha\"; then entries=\$((entries + 1)); else valid=0; fi; done; exec 3<&-; if test \"\$valid\" = 1 && test \"\$entries\" -gt 0; then if (umask 077; set -C; printf '%s\\n' '$ready_line' > '$ready') 2>/dev/null && test -f '$ready' && test ! -L '$ready' && test \"\$(sha256sum '$ready' 2>/dev/null | cut -d ' ' -f1)\" = '$ready_line_sha'; then printf MDDS_BOARDTEST_READY_OK; else printf MDDS_BOARDTEST_READY_WRITE_FAILED; fi; else printf MDDS_BOARDTEST_READY_INPUT_HASH_BAD; fi; else printf MDDS_BOARDTEST_READY_MANIFEST_HASH_BAD; fi"
+  remote_cmd="valid=1; entries=0; if test -f '$manifest' && test ! -L '$manifest' && test \"\$(sha256sum '$manifest' 2>/dev/null | cut -d ' ' -f1)\" = '$READY_MANIFEST_SHA256' && exec 3< '$manifest'; then IFS= read -r manifest_header <&3 || valid=0; test \"\$manifest_header\" = '$header' || valid=0; while IFS= read -r manifest_entry <&3; do case \"\$manifest_entry\" in SHA256=*' PATH='*) manifest_sha=\${manifest_entry#SHA256=}; manifest_sha=\${manifest_sha%% PATH=*}; manifest_path=\${manifest_entry#* PATH=} ;; *) valid=0; break ;; esac; case \"\$manifest_sha\" in ''|*[!0-9a-f]*) valid=0 ;; esac; test \${#manifest_sha} -eq 64 || valid=0; case \"\$manifest_path\" in ''|/*|*'//'*|.|..|./*|../*|*/.|*/..|*/./*|*/../*|*[!A-Za-z0-9._/+-]*) valid=0 ;; esac; if test \"\$valid\" = 1 && test -f '$package_root/'\"\$manifest_path\" && test ! -L '$package_root/'\"\$manifest_path\" && test \"\$(sha256sum '$package_root/'\"\$manifest_path\" 2>/dev/null | cut -d ' ' -f1)\" = \"\$manifest_sha\"; then entries=\$((entries + 1)); else valid=0; fi; done; exec 3<&-; if test \"\$valid\" = 1 && test \"\$entries\" -gt 0; then if (umask 077; set -C; printf '%s\\n' '$ready_line' > '$ready') 2>/dev/null && test -f '$ready' && test ! -L '$ready' && test \"\$(sha256sum '$ready' 2>/dev/null | cut -d ' ' -f1)\" = '$ready_line_sha'; then printf ROS2_BOARDTEST_READY_OK; else printf ROS2_BOARDTEST_READY_WRITE_FAILED; fi; else printf ROS2_BOARDTEST_READY_INPUT_HASH_BAD; fi; else printf ROS2_BOARDTEST_READY_MANIFEST_HASH_BAD; fi"
   out="$(shell "$remote_cmd" | tr -d '\r\n')"
   printf 'BOARDTEST_READY_REMOTE package=%s manifest_sha256=%s result=%s\n' \
     "$pkg" "$READY_MANIFEST_SHA256" "${out:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"
-  if [[ "$out" != "MDDS_BOARDTEST_READY_OK" ]]; then
+  if [[ "$out" != "ROS2_BOARDTEST_READY_OK" ]]; then
     echo "ERROR: remote READY verification/create failed for $pkg: ${out:-NO_MARKER}" >&2
     return 1
   fi
@@ -514,7 +514,7 @@ verify_remote_ready_and_create() { # <package-root> <package> <manifest> <ready>
 
 verify_remote_ready_record() { # <package> <ready-path>
   local pkg="$1" ready="$2" expected expected_sha remote_sha result
-  expected="MDDS_BOARDTEST_READY RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$READY_MANIFEST_SHA256"
+  expected="ROS2_BOARDTEST_READY RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$READY_MANIFEST_SHA256"
   # The control record is an exact byte contract: its one canonical line plus
   # exactly one LF.  Do not accept a parsed-looking readback after stripping
   # CR/LF, because that would make CRLF, a missing LF, or appended records
@@ -557,7 +557,7 @@ verify_archive_controls() { # <package> <archive> <manifest> <ready> <terminal>
     echo "ERROR: archive READY manifest hash mismatch for $pkg: expected=$READY_MANIFEST_SHA256 got=${manifest_digest:-MISSING}" >&2
     return 1
   fi
-  expected_ready="MDDS_BOARDTEST_READY RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$READY_MANIFEST_SHA256"
+  expected_ready="ROS2_BOARDTEST_READY RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$READY_MANIFEST_SHA256"
   expected_ready_sha="$(printf '%s\n' "$expected_ready" | sha256sum | cut -d ' ' -f1)"
   expected_terminal_sha="$(printf '%s\n' "$TERMINAL_LINE" | sha256sum | cut -d ' ' -f1)"
   ready_digest="$(local_archive_tar -xOf "$archive" "$ready_member" | sha256sum | cut -d ' ' -f1)" || return 1
@@ -582,7 +582,6 @@ verify_archive_verdicts() { # <package> <archive> <driver-stdout> <local-driver>
   local xml_count=0 expected_xml_count=0 xml_bytes
   local -A expected_names=()
   local -A expected_xml=()
-  local -A expected_token_mode=()
   local -A seen_verdicts=()
   local -a expected_order=()
   local -a verdict_order=()
@@ -611,15 +610,6 @@ verify_archive_verdicts() { # <package> <archive> <driver-stdout> <local-driver>
     fi
     expected_xml["$name"]=1
     expected_xml_count=$((expected_xml_count + 1))
-  done < "$driver"
-  while IFS= read -r line; do
-    [[ "$line" =~ ^\#\ BOARDTEST_TOKEN_MODE\ ([A-Za-z0-9][A-Za-z0-9_.-]*)\ (REQUIRED|BYPASS_EXPECT_UNAUTHORIZED|LAUNCHER_UNDER_TEST)$ ]] || continue
-    name="${BASH_REMATCH[1]}"
-    if [[ -z "${expected_names[$name]+present}" || -n "${expected_token_mode[$name]+present}" ]]; then
-      echo "ERROR: unknown or duplicate BOARDTEST token-mode plan entry for $pkg/$name" >&2
-      return 1
-    fi
-    expected_token_mode["$name"]="${BASH_REMATCH[2]}"
   done < "$driver"
 
   while IFS= read -r line; do
@@ -680,19 +670,11 @@ verify_archive_verdicts() { # <package> <archive> <driver-stdout> <local-driver>
     fi
     status="${line#BOARDTEST $name }"
     if [[ "$status" == SKIP ]]; then
-      if [[ -n "${expected_token_mode[$name]+present}" ]]; then
-        echo "ERROR: skipped test unexpectedly has a token-mode execution plan for $pkg/$name" >&2
-        return 1
-      fi
       if local_archive_tar -tf "$archive" | tr -d '\r' | grep -Fxq "$pkg/$name.log"; then
         echo "ERROR: skipped test unexpectedly has a raw log for $pkg/$name" >&2
         return 1
       fi
     else
-      if [[ -z "${expected_token_mode[$name]+present}" ]]; then
-        echo "ERROR: executed test lacks an explicit token-mode plan for $pkg/$name" >&2
-        return 1
-      fi
       expected_log_count=$((expected_log_count + 1))
       if [ "$(local_archive_tar -tf "$archive" | tr -d '\r' | grep -Fxc "$pkg/$name.log")" != 1 ]; then
         echo "ERROR: executed test lacks exactly one raw log for $pkg/$name" >&2
@@ -735,22 +717,22 @@ acquire_activity_lock() {
       test -f '$ACTIVITY_LOCK_DIR/owner' && test ! -L '$ACTIVITY_LOCK_DIR/owner' && \\
       test \"\$(cat '$ACTIVITY_LOCK_DIR/owner' 2>/dev/null)\" = '$ACTIVITY_LOCK_OWNER' && \\
       test \"\$(find '$ACTIVITY_LOCK_DIR' -mindepth 1 -maxdepth 1)\" = '$ACTIVITY_LOCK_DIR/owner'; then
-      printf MDDS_ACTIVITY_LOCK_ACQUIRED
+      printf ROS2_ACTIVITY_LOCK_ACQUIRED
     else
-      printf MDDS_ACTIVITY_LOCK_OWNER_WRITE_FAILED
+      printf ROS2_ACTIVITY_LOCK_OWNER_WRITE_FAILED
     fi
   else
-    printf MDDS_ACTIVITY_LOCK_BUSY_OR_MALFORMED
+    printf ROS2_ACTIVITY_LOCK_BUSY_OR_MALFORMED
   fi" | tr -d '\r\n')"
   printf 'BOARDTEST_ACTIVITY_LOCK board=%s owner=%s result=%s\n' \
     "$BOARD" "$ACTIVITY_LOCK_OWNER" "${out:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"
-  if [[ "$out" != "MDDS_ACTIVITY_LOCK_ACQUIRED" ]]; then
-    if [[ "$out" == "MDDS_ACTIVITY_LOCK_OWNER_WRITE_FAILED" ]]; then
-      cleanup_out="$(shell "if test -d '$ACTIVITY_LOCK_DIR' && test ! -L '$ACTIVITY_LOCK_DIR' && test -f '$ACTIVITY_LOCK_DIR/owner' && test ! -L '$ACTIVITY_LOCK_DIR/owner' && test \"\$(cat '$ACTIVITY_LOCK_DIR/owner' 2>/dev/null)\" = '$ACTIVITY_LOCK_OWNER' && test \"\$(find '$ACTIVITY_LOCK_DIR' -mindepth 1 -maxdepth 1)\" = '$ACTIVITY_LOCK_DIR/owner'; then rm -f '$ACTIVITY_LOCK_DIR/owner' && rmdir '$ACTIVITY_LOCK_DIR' && printf MDDS_ACTIVITY_LOCK_RELEASED; else printf MDDS_ACTIVITY_LOCK_NOT_OWNED; fi" | tr -d '\r\n')"
+  if [[ "$out" != "ROS2_ACTIVITY_LOCK_ACQUIRED" ]]; then
+    if [[ "$out" == "ROS2_ACTIVITY_LOCK_OWNER_WRITE_FAILED" ]]; then
+      cleanup_out="$(shell "if test -d '$ACTIVITY_LOCK_DIR' && test ! -L '$ACTIVITY_LOCK_DIR' && test -f '$ACTIVITY_LOCK_DIR/owner' && test ! -L '$ACTIVITY_LOCK_DIR/owner' && test \"\$(cat '$ACTIVITY_LOCK_DIR/owner' 2>/dev/null)\" = '$ACTIVITY_LOCK_OWNER' && test \"\$(find '$ACTIVITY_LOCK_DIR' -mindepth 1 -maxdepth 1)\" = '$ACTIVITY_LOCK_DIR/owner'; then rm -f '$ACTIVITY_LOCK_DIR/owner' && rmdir '$ACTIVITY_LOCK_DIR' && printf ROS2_ACTIVITY_LOCK_RELEASED; else printf ROS2_ACTIVITY_LOCK_NOT_OWNED; fi" | tr -d '\r\n')"
       printf 'BOARDTEST_ACTIVITY_LOCK_PARTIAL_RELEASE board=%s owner=%s result=%s\n' \
         "$BOARD" "$ACTIVITY_LOCK_OWNER" "${cleanup_out:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"
     fi
-    echo "ERROR: MDDS activity lock is held, malformed, or could not be created on $BOARD: ${out:-NO_MARKER}" >&2
+    echo "ERROR: ROS2 activity lock is held, malformed, or could not be created on $BOARD: ${out:-NO_MARKER}" >&2
     return 1
   fi
   ACTIVITY_LOCK_HELD=1
@@ -766,14 +748,14 @@ release_activity_lock() {
   out="$(shell "if test -d '$ACTIVITY_LOCK_DIR' && test ! -L '$ACTIVITY_LOCK_DIR' && \\
       test -f '$ACTIVITY_LOCK_DIR/owner' && test ! -L '$ACTIVITY_LOCK_DIR/owner' && \\
       test \"\$(cat '$ACTIVITY_LOCK_DIR/owner' 2>/dev/null)\" = '$ACTIVITY_LOCK_OWNER'; then
-    rm -f '$ACTIVITY_LOCK_DIR/owner' && rmdir '$ACTIVITY_LOCK_DIR' && printf MDDS_ACTIVITY_LOCK_RELEASED
+    rm -f '$ACTIVITY_LOCK_DIR/owner' && rmdir '$ACTIVITY_LOCK_DIR' && printf ROS2_ACTIVITY_LOCK_RELEASED
   else
-    printf MDDS_ACTIVITY_LOCK_NOT_OWNED
+    printf ROS2_ACTIVITY_LOCK_NOT_OWNED
   fi" | tr -d '\r\n')"
   printf 'BOARDTEST_ACTIVITY_LOCK_RELEASE board=%s owner=%s result=%s\n' \
     "$BOARD" "$ACTIVITY_LOCK_OWNER" "${out:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"
-  if [[ "$out" != "MDDS_ACTIVITY_LOCK_RELEASED" ]]; then
-    echo "ERROR: could not release this run's MDDS activity lock on $BOARD: ${out:-NO_MARKER}" >&2
+  if [[ "$out" != "ROS2_ACTIVITY_LOCK_RELEASED" ]]; then
+    echo "ERROR: could not release this run's ROS2 activity lock on $BOARD: ${out:-NO_MARKER}" >&2
     return 1
   fi
   ACTIVITY_LOCK_HELD=0
@@ -815,11 +797,11 @@ trap 'handle_activity_signal HUP' HUP
 # stderr are retained as diagnostics, not accepted as integrity authority.
 prepare_archive_stream_dir() {
   local raw out
-  raw="$(shell "if command -v base64 >/dev/null 2>&1 && command -v head >/dev/null 2>&1 && head -c 0 /dev/null >/dev/null 2>&1; then ensure_mdds_dir() { dir=\$1; if test -e \"\$dir\" || test -L \"\$dir\"; then test -d \"\$dir\" && test ! -L \"\$dir\"; else (umask 077; mkdir \"\$dir\") && test -d \"\$dir\" && test ! -L \"\$dir\"; fi; }; parent='$ARCHIVE_REMOTE_PARENT'; run_dir='$ARCHIVE_REMOTE_RUN_DIR'; nonce_dir='$ARCHIVE_REMOTE_DIR'; if ensure_mdds_dir \"\$parent\" && ensure_mdds_dir \"\$run_dir\"; then if test -e \"\$nonce_dir\" || test -L \"\$nonce_dir\"; then printf MDDS_BOARDTEST_ARCHIVE_RUN_PREEXISTS; elif (umask 077; mkdir \"\$nonce_dir\") && test -d \"\$nonce_dir\" && test ! -L \"\$nonce_dir\"; then printf MDDS_BOARDTEST_ARCHIVE_STREAM_READY; else printf MDDS_BOARDTEST_ARCHIVE_RUN_CREATE_FAILED; fi; else printf MDDS_BOARDTEST_ARCHIVE_PARENT_INVALID; fi; else printf MDDS_BOARDTEST_ARCHIVE_STREAM_UNAVAILABLE; fi" || true)"
+  raw="$(shell "if command -v base64 >/dev/null 2>&1 && command -v head >/dev/null 2>&1 && head -c 0 /dev/null >/dev/null 2>&1; then ensure_ros2_dir() { dir=\$1; if test -e \"\$dir\" || test -L \"\$dir\"; then test -d \"\$dir\" && test ! -L \"\$dir\"; else (umask 077; mkdir \"\$dir\") && test -d \"\$dir\" && test ! -L \"\$dir\"; fi; }; parent='$ARCHIVE_REMOTE_PARENT'; run_dir='$ARCHIVE_REMOTE_RUN_DIR'; nonce_dir='$ARCHIVE_REMOTE_DIR'; if ensure_ros2_dir \"\$parent\" && ensure_ros2_dir \"\$run_dir\"; then if test -e \"\$nonce_dir\" || test -L \"\$nonce_dir\"; then printf ROS2_BOARDTEST_ARCHIVE_RUN_PREEXISTS; elif (umask 077; mkdir \"\$nonce_dir\") && test -d \"\$nonce_dir\" && test ! -L \"\$nonce_dir\"; then printf ROS2_BOARDTEST_ARCHIVE_STREAM_READY; else printf ROS2_BOARDTEST_ARCHIVE_RUN_CREATE_FAILED; fi; else printf ROS2_BOARDTEST_ARCHIVE_PARENT_INVALID; fi; else printf ROS2_BOARDTEST_ARCHIVE_STREAM_UNAVAILABLE; fi" || true)"
   out="$(strict_hdc_single_line "$raw")" || out=""
   printf 'BOARDTEST_ARCHIVE_TRANSPORT board=%s run_id=%s nonce=%s result=%s\n' \
     "$BOARD" "$RUN_ID" "$RUN_NONCE" "${out:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"
-  if [[ "$out" != "MDDS_BOARDTEST_ARCHIVE_STREAM_READY" ]]; then
+  if [[ "$out" != "ROS2_BOARDTEST_ARCHIVE_STREAM_READY" ]]; then
     echo "ERROR: cannot create isolated Base64 archive directory on $BOARD: ${out:-NO_MARKER}" >&2
     return 1
   fi
@@ -835,7 +817,7 @@ parse_archive_metadata() { # <raw-output> <package>
   line="$(strict_hdc_single_line "$raw")" || return 1
   read -r -a fields <<< "$line"
   if [[ "${#fields[@]}" -ne 7 ||
-        "${fields[0]}" != "MDDS_BOARDTEST_ARCHIVE_META" ||
+        "${fields[0]}" != "ROS2_BOARDTEST_ARCHIVE_META" ||
         "${fields[1]}" != "V=1" ||
         "${fields[2]}" != "RUN_ID=$RUN_ID" ||
         "${fields[3]}" != "NONCE=$RUN_NONCE" ||
@@ -849,7 +831,7 @@ parse_archive_metadata() { # <raw-output> <package>
   valid_sha256 "$sha" || return 1
   is_canonical_positive_decimal "$bytes" || return 1
   decimal_leq "$bytes" "$ARCHIVE_MAX_BYTES" || return 1
-  [[ "$line" == "MDDS_BOARDTEST_ARCHIVE_META V=1 RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg SHA256=$sha BYTES=$bytes" ]] || return 1
+  [[ "$line" == "ROS2_BOARDTEST_ARCHIVE_META V=1 RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg SHA256=$sha BYTES=$bytes" ]] || return 1
   ARCHIVE_METADATA_SHA="$sha"
   ARCHIVE_METADATA_BYTES="$bytes"
   ARCHIVE_METADATA_LINE="$line"
@@ -881,7 +863,7 @@ capture_package_evidence() { # <package>
     echo "ERROR: cannot create exclusive archive-create diagnostics for $pkg" >&2
     return 1
   fi
-  timeout "$ARCHIVE_STREAM_TIMEOUT_SEC" "$HDC" -t "$BOARD" shell "archive='$remote_archive'; if test -e \"\$archive\" || test -L \"\$archive\"; then exit 70; fi; tar -C '$ROS2_HOME/tests' -cf \"\$archive\" '$pkg' || exit 70; test -f \"\$archive\" && test ! -L \"\$archive\" || exit 70; archive_sha=\$(sha256sum \"\$archive\" 2>/dev/null | cut -d ' ' -f1) || exit 70; case \"\$archive_sha\" in ''|*[!0-9a-f]*) exit 70 ;; esac; test \${#archive_sha} -eq 64 || exit 70; set -- \$(wc -c < \"\$archive\") || exit 70; archive_bytes=\$1; case \"\$archive_bytes\" in ''|0|0*|*[!0-9]*) exit 70 ;; esac; printf 'MDDS_BOARDTEST_ARCHIVE_META V=1 RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg SHA256=%s BYTES=%s' \"\$archive_sha\" \"\$archive_bytes\"" \
+  timeout "$ARCHIVE_STREAM_TIMEOUT_SEC" "$HDC" -t "$BOARD" shell "archive='$remote_archive'; if test -e \"\$archive\" || test -L \"\$archive\"; then exit 70; fi; tar -C '$ROS2_HOME/tests' -cf \"\$archive\" '$pkg' || exit 70; test -f \"\$archive\" && test ! -L \"\$archive\" || exit 70; archive_sha=\$(sha256sum \"\$archive\" 2>/dev/null | cut -d ' ' -f1) || exit 70; case \"\$archive_sha\" in ''|*[!0-9a-f]*) exit 70 ;; esac; test \${#archive_sha} -eq 64 || exit 70; set -- \$(wc -c < \"\$archive\") || exit 70; archive_bytes=\$1; case \"\$archive_bytes\" in ''|0|0*|*[!0-9]*) exit 70 ;; esac; printf 'ROS2_BOARDTEST_ARCHIVE_META V=1 RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg SHA256=%s BYTES=%s' \"\$archive_sha\" \"\$archive_bytes\"" \
     </dev/null > "$metadata_out" 2> "$metadata_err" || metadata_rc=$?
   metadata_out_bytes="$(local_regular_bytes "$metadata_out")" || return 1
   metadata_out_sha="$(local_regular_sha "$metadata_out")" || return 1
@@ -968,7 +950,7 @@ verify_driver_terminal() { # <package> <terminal-path> <manifest-sha256>
   # the remote file itself is never normalized before its digest is checked.
   raw="$(shell "if test -f '$terminal_path' && test ! -L '$terminal_path'; then IFS= read -r terminal_line < '$terminal_path' || :; printf '%s' \"\$terminal_line\"; fi" || true)"
   line="${raw%$'\r'}"
-  prefix="MDDS_BOARDTEST_TERMINAL RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$manifest_sha RC="
+  prefix="ROS2_BOARDTEST_TERMINAL RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$manifest_sha RC="
   case "$line" in
     "$prefix"*)
       rc=${line#"$prefix"}
@@ -1025,11 +1007,11 @@ if ! shell "printf BOARDTEST_HDC_READY" | tr -d '\r' | grep -Fxq BOARDTEST_HDC_R
   echo "ERROR: cannot contact selected board $BOARD through $HDC" >&2
   exit 2
 fi
-archive_capability_raw="$(shell "if command -v base64 >/dev/null 2>&1 && command -v head >/dev/null 2>&1 && head -c 0 /dev/null >/dev/null 2>&1; then printf MDDS_BOARDTEST_ARCHIVE_STREAM_READY; else printf MDDS_BOARDTEST_ARCHIVE_STREAM_UNAVAILABLE; fi" || true)"
+archive_capability_raw="$(shell "if command -v base64 >/dev/null 2>&1 && command -v head >/dev/null 2>&1 && head -c 0 /dev/null >/dev/null 2>&1; then printf ROS2_BOARDTEST_ARCHIVE_STREAM_READY; else printf ROS2_BOARDTEST_ARCHIVE_STREAM_UNAVAILABLE; fi" || true)"
 archive_capability="$(strict_hdc_single_line "$archive_capability_raw")" || archive_capability=""
 printf 'BOARDTEST_ARCHIVE_CAPABILITY board=%s result=%s\n' \
   "$BOARD" "${archive_capability:-NO_MARKER}" | tee -a "$LOGDIR/run.txt"
-if [[ "$archive_capability" != "MDDS_BOARDTEST_ARCHIVE_STREAM_READY" ]]; then
+if [[ "$archive_capability" != "ROS2_BOARDTEST_ARCHIVE_STREAM_READY" ]]; then
   echo "ERROR: selected board $BOARD lacks usable base64/head -c archive streaming before payload transfer" >&2
   exit 2
 fi
@@ -1092,9 +1074,9 @@ for pkg in "${PKGS[@]}"; do
 
   reset_ready_manifest
   package_root="$ROS2_HOME/tests/$pkg"
-  manifest_path="$package_root/.mdds_boardtest_manifest_${RUN_ID}_${RUN_NONCE}"
-  ready_path="$package_root/.mdds_boardtest_ready_${RUN_ID}_${RUN_NONCE}"
-  terminal_path="$package_root/.mdds_boardtest_terminal_${RUN_ID}_${RUN_NONCE}"
+  manifest_path="$package_root/.ros2_boardtest_manifest_${RUN_ID}_${RUN_NONCE}"
+  ready_path="$package_root/.ros2_boardtest_ready_${RUN_ID}_${RUN_NONCE}"
+  terminal_path="$package_root/.ros2_boardtest_terminal_${RUN_ID}_${RUN_NONCE}"
   tmpfix=""
   package_setup_failed=0
 
@@ -1171,16 +1153,16 @@ for pkg in "${PKGS[@]}"; do
   # test/ fixtures via a symlink
   if [ "$package_setup_failed" -eq 0 ] && [ "$has_fixtures" -eq 1 ]; then
     abssrc="$(cd "$srcdir" && (pwd -W 2>/dev/null || pwd))"
-    setup_out="$(shell "if mkdir -p '$package_root/$abssrc' && test -d '$package_root/$abssrc' && test ! -L '$package_root/$abssrc' && ln -s '$package_root/test' '$package_root/$abssrc/test' && test -L '$package_root/$abssrc/test'; then printf MDDS_BOARDTEST_SOURCE_MIRROR_READY; else printf MDDS_BOARDTEST_SOURCE_MIRROR_FAILED; fi" | tr -d '\r\n')"
-    if [[ "$setup_out" != "MDDS_BOARDTEST_SOURCE_MIRROR_READY" ]]; then
+    setup_out="$(shell "if mkdir -p '$package_root/$abssrc' && test -d '$package_root/$abssrc' && test ! -L '$package_root/$abssrc' && ln -s '$package_root/test' '$package_root/$abssrc/test' && test -L '$package_root/$abssrc/test'; then printf ROS2_BOARDTEST_SOURCE_MIRROR_READY; else printf ROS2_BOARDTEST_SOURCE_MIRROR_FAILED; fi" | tr -d '\r\n')"
+    if [[ "$setup_out" != "ROS2_BOARDTEST_SOURCE_MIRROR_READY" ]]; then
       echo "ERROR: failed to create source fixture mirror for $pkg: ${setup_out:-NO_MARKER}" >&2
       package_setup_failed=1
     fi
   fi
   # hdc file send does not preserve the exec bit
   if [ "$package_setup_failed" -eq 0 ]; then
-    setup_out="$(shell "if cd '$package_root' && find . -type f -exec chmod +x {} +; then printf MDDS_BOARDTEST_CHMOD_READY; else printf MDDS_BOARDTEST_CHMOD_FAILED; fi" | tr -d '\r\n')"
-    if [[ "$setup_out" != "MDDS_BOARDTEST_CHMOD_READY" ]]; then
+    setup_out="$(shell "if cd '$package_root' && find . -type f -exec chmod +x {} +; then printf ROS2_BOARDTEST_CHMOD_READY; else printf ROS2_BOARDTEST_CHMOD_FAILED; fi" | tr -d '\r\n')"
+    if [[ "$setup_out" != "ROS2_BOARDTEST_CHMOD_READY" ]]; then
       echo "ERROR: failed to mark transferred test files executable for $pkg: ${setup_out:-NO_MARKER}" >&2
       package_setup_failed=1
     fi
@@ -1207,7 +1189,7 @@ for pkg in "${PKGS[@]}"; do
     break
   fi
   attempted_packages=$((attempted_packages + 1))
-  out="$(shell "cd '$package_root' || exit 70; if test -f '$manifest_path' && test ! -L '$manifest_path' && test \"\$(sha256sum '$manifest_path' 2>/dev/null | cut -d ' ' -f1)\" = '$READY_MANIFEST_SHA256' && test -f '$ready_path' && test ! -L '$ready_path' && test \"\$(sha256sum '$ready_path' 2>/dev/null | cut -d ' ' -f1)\" = '$ready_record_sha'; then rc=0; sh ./run_tests_board.sh || rc=\$?; terminal_line=\"MDDS_BOARDTEST_TERMINAL RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$READY_MANIFEST_SHA256 RC=\$rc\"; terminal_sha=\"\$(printf '%s\\n' \"\$terminal_line\" | sha256sum | cut -d ' ' -f1)\"; if (umask 077; set -C; printf '%s\\n' \"\$terminal_line\" > '$terminal_path') 2>/dev/null && test -f '$terminal_path' && test ! -L '$terminal_path' && test \"\$(sha256sum '$terminal_path' 2>/dev/null | cut -d ' ' -f1)\" = \"\$terminal_sha\"; then exit \"\$rc\"; else exit 70; fi; else exit 70; fi" || true)"
+  out="$(shell "cd '$package_root' || exit 70; if test -f '$manifest_path' && test ! -L '$manifest_path' && test \"\$(sha256sum '$manifest_path' 2>/dev/null | cut -d ' ' -f1)\" = '$READY_MANIFEST_SHA256' && test -f '$ready_path' && test ! -L '$ready_path' && test \"\$(sha256sum '$ready_path' 2>/dev/null | cut -d ' ' -f1)\" = '$ready_record_sha'; then rc=0; sh ./run_tests_board.sh || rc=\$?; terminal_line=\"ROS2_BOARDTEST_TERMINAL RUN_ID=$RUN_ID NONCE=$RUN_NONCE PACKAGE=$pkg MANIFEST_SHA=$READY_MANIFEST_SHA256 RC=\$rc\"; terminal_sha=\"\$(printf '%s\\n' \"\$terminal_line\" | sha256sum | cut -d ' ' -f1)\"; if (umask 077; set -C; printf '%s\\n' \"\$terminal_line\" > '$terminal_path') 2>/dev/null && test -f '$terminal_path' && test ! -L '$terminal_path' && test \"\$(sha256sum '$terminal_path' 2>/dev/null | cut -d ' ' -f1)\" = \"\$terminal_sha\"; then exit \"\$rc\"; else exit 70; fi; else exit 70; fi" || true)"
   driver_stdout="$LOGDIR/${pkg}.driver.stdout"
   driver_stdout_ok=1
   if ! (set -C; printf '%s\n' "$out" > "$driver_stdout") 2>/dev/null; then

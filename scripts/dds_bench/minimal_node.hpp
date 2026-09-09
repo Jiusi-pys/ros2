@@ -1,4 +1,4 @@
-// Service-free node interfaces following the KH rmw_mdds C++ smoke fixture.
+// Service-free node interfaces for the benchmark application.
 // Copyright (c) 2026 Kaihong Digital Industry Development Co., Ltd.
 // Licensed under the Apache License, Version 2.0.
 #pragma once

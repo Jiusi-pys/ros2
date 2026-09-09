@@ -1,8 +1,4 @@
 repositories:
-  Jiusi-pys/mdds:
-    type: git
-    url: https://github.com/Jiusi-pys/mdds.git
-    version: jazzy_ohos
   ament/ament_cmake:
     type: git
     url: https://github.com/ament/ament_cmake.git
@@ -335,10 +331,6 @@ repositories:
     type: git
     url: https://github.com/ros2/rmw_implementation.git
     version: jazzy
-  ros2/rmw_mdds:
-    type: git
-    url: https://github.com/Jiusi-pys/rmw_mdds.git
-    version: jazzy_ohos
   ros2/ros2_tracing:
     type: git
     url: https://github.com/ros2/ros2_tracing.git

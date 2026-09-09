@@ -273,7 +273,6 @@ grep -Fq "DEFAULT_RMW $EXPECTED_RMW" "$LOGDIR/${BOARD_A}.default_rmw.log"
 grep -Fq "DEFAULT_RMW $EXPECTED_RMW" "$LOGDIR/${BOARD_B}.default_rmw.log"
 
 # These exact executables were included before closing the build receipt and
-# are covered by the deployment manifest. No MDDS/token wrapper participates.
 suite_timeout="$CASE_TIMEOUT"
 CASE_TIMEOUT=210
 for suite_rmw in "$EXPECTED_RMW"; do

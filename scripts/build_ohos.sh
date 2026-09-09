@@ -13,7 +13,6 @@ COLCON_LOG_BASE="${OHOS_LOG_BASE:-log_ohos}"
 OHOS_DEFAULT_RMW="${OHOS_DEFAULT_RMW:-rmw_fastrtps_cpp}"
 OHOS_CYCLONE_SHM="${OHOS_CYCLONE_SHM:-OFF}"
 OHOS_DDS_SECURITY="${OHOS_DDS_SECURITY:-OFF}"
-OHOS_BUILD_MDDS="${OHOS_BUILD_MDDS:-OFF}"
 OHOS_REQUIRE_CLEAN="${OHOS_REQUIRE_CLEAN:-0}"
 PYTHON_LOCK="${OHOS_PYTHON_LOCK:-${WORKSPACE_ROOT}/scripts/python/ohos_python.lock.json}"
 PYTHON_RUNTIME_ARCHIVE="${OHOS_PYTHON_RUNTIME_ARCHIVE:-${WORKSPACE_ROOT}/python312_ohos_runtime.tar.gz}"
@@ -30,7 +29,6 @@ case "$OHOS_DDS_SECURITY" in
   OFF) ;;
   *) echo "error: DDS Security/TLS is outside this release profile; OHOS_DDS_SECURITY must be OFF" >&2; exit 2 ;;
 esac
-case "$OHOS_BUILD_MDDS" in ON|OFF) ;; *) echo "error: OHOS_BUILD_MDDS must be ON or OFF" >&2; exit 2 ;; esac
 case "$OHOS_REQUIRE_CLEAN" in 0|1) ;; *) echo "error: OHOS_REQUIRE_CLEAN must be 0 or 1" >&2; exit 2 ;; esac
 
 if [ "$OHOS_REQUIRE_CLEAN" = 1 ]; then
@@ -91,6 +89,16 @@ if [ "$OHOS_REQUIRE_CLEAN" = 1 ]; then
 fi
 
 export PATH="$HOME/.pixi/bin:$PATH"
+
+# Resolve once and use exactly the same discovery roots for list and build.
+if [ "$OHOS_REQUIRE_CLEAN" = 1 ]; then
+  OHOS_SOURCE_MANIFEST="${OHOS_SOURCE_MANIFEST:-${WORKSPACE_ROOT}/ros2.ohos.lock.repos}"
+else
+  OHOS_SOURCE_MANIFEST="${OHOS_SOURCE_MANIFEST:-${WORKSPACE_ROOT}/ros2.repos}"
+fi
+SOURCE_ROOT_TEXT="$(pixi run python scripts/manifest_source_roots.py --manifest "$OHOS_SOURCE_MANIFEST" --source-root "${WORKSPACE_ROOT}/src")" || exit 2
+mapfile -t SOURCE_ROOTS < <(printf '%s\n' "$SOURCE_ROOT_TEXT" | tr -d '\r' | sed 's|\\|/|g')
+[ "${#SOURCE_ROOTS[@]}" -gt 0 ] || exit 2
 
 # Verify the exact completed dependency inventory before adding any ROS files.
 if [ "$OHOS_REQUIRE_CLEAN" = 1 ]; then
@@ -165,23 +173,14 @@ PACKAGES_SKIP=(
   # alternative DDS vendors (Connext); Fast-DDS (fastrtps) is ported
   rmw_connextdds rmw_connextdds_common rmw_connextddsmicro rti_connext_dds_cmake_module
   rosidl_generator_dds_idl
-  # The generic release profile excludes MDDS packages unless explicitly
-  # requested with OHOS_BUILD_MDDS=ON.
   # iceoryx is built, but CycloneDDS SHM is deterministic and OFF by default;
   # the opt-in profile must set OHOS_CYCLONE_SHM=ON and pass its own runtime gate.
   # GUI packages (Qt / rqt / turtlesim / rviz) are ported (Phase 6); rviz uses
   # the prebuilt GLES2 OGRE from target_deps_src/build_ogre_ohos.sh.
 )
-if [ "$OHOS_BUILD_MDDS" = OFF ]; then
-  PACKAGES_SKIP+=(mdds mdds_gateway rmw_mdds)
-  MDDS_WITH_DSOFTBUS=OFF
-else
-  MDDS_WITH_DSOFTBUS=ON
-fi
 
-printf 'OHOS_BUILD_INPUT default_rmw=%s cyclone_shm=%s dds_security=%s build_mdds=%s target_numpy=%s log_base=%s\n' \
-  "$OHOS_DEFAULT_RMW" "$OHOS_CYCLONE_SHM" "$OHOS_DDS_SECURITY" "$OHOS_BUILD_MDDS" \
-  "$TARGET_NUMPY_INCLUDE" "$COLCON_LOG_BASE"
+printf 'OHOS_BUILD_INPUT default_rmw=%s cyclone_shm=%s dds_security=%s target_numpy=%s log_base=%s\n' \
+  "$OHOS_DEFAULT_RMW" "$OHOS_CYCLONE_SHM" "$OHOS_DDS_SECURITY" "$TARGET_NUMPY_INCLUDE" "$COLCON_LOG_BASE"
 
 BUILD_RECEIPT_BEGIN=""
 EXPECTED_PACKAGES=""
@@ -206,7 +205,7 @@ if [ "$OHOS_REQUIRE_CLEAN" = 1 ]; then
   declare -A SKIPPED_PACKAGE=()
   for package in "${PACKAGES_SKIP[@]}"; do SKIPPED_PACKAGE["$package"]=1; done
   # Do not hide a failed colcon discovery behind process substitution.
-  pixi run colcon list --base-paths src --names-only > "$LISTED_PACKAGES"
+  pixi run colcon list --base-paths "${SOURCE_ROOTS[@]}" --names-only > "$LISTED_PACKAGES"
   while IFS= read -r package; do
     package="${package%$'\r'}"
     [[ "$package" =~ ^[A-Za-z0-9_.+-]+$ ]] || {
@@ -222,13 +221,12 @@ if [ "$OHOS_REQUIRE_CLEAN" = 1 ]; then
 
   pixi run python scripts/ohos_build_receipt.py begin \
     --workspace "$WORKSPACE_ROOT" \
-    --lock "$WORKSPACE_ROOT/ros2.ohos.lock.repos" \
+    --lock "$OHOS_SOURCE_MANIFEST" \
     --sdk-root "$OHOS_NATIVE_SDK" \
     --install-root "$WORKSPACE_ROOT/install_ohos" \
     --rmw "$OHOS_DEFAULT_RMW" \
     --cyclonedds-shm "$OHOS_CYCLONE_SHM" \
     --dds-security "$OHOS_DDS_SECURITY" \
-    --build-mdds "$OHOS_BUILD_MDDS" \
     --python-lock "$PYTHON_LOCK" \
     --python-runtime-archive "$PYTHON_RUNTIME_ARCHIVE" \
     --python-runtime-manifest "$PYTHON_RUNTIME_MANIFEST" \
@@ -239,20 +237,19 @@ fi
 
 # PYTHON_MODULE_EXTENSION: pybind11 queries the HOST interpreter for
 # EXT_SUFFIX (yielding a win_amd64 .pyd name); override with the target value.
-# --base-paths src: colcon's default scan root is the workspace root, which
+# --base-paths "${SOURCE_ROOTS[@]}": colcon's default scan root is the workspace root, which
 # would pick up target_deps_src/* as plain cmake packages (a static, non-PIC
 # tinyxml2 gets installed and poisons rosbag2_storage/urdfdom).
 set +e
 pixi run colcon --log-base "$COLCON_LOG_BASE" build --merge-install \
   --build-base build_ohos --install-base install_ohos \
-  --base-paths src \
+  --base-paths "${SOURCE_ROOTS[@]}" \
   --packages-skip "${PACKAGES_SKIP[@]}" \
   --event-handlers console_direct+ \
   --cmake-args \
     -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DMDDS_WITH_DSOFTBUS="$MDDS_WITH_DSOFTBUS" \
     -DBUILD_TESTING=ON \
     -DCMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE=PRE_TEST \
     -DBUILD_EXAMPLES=OFF \
@@ -291,8 +288,8 @@ pixi run colcon --log-base "$COLCON_LOG_BASE" build --merge-install \
 COLCON_RC=$?
 set -e
 if [ "$COLCON_RC" -ne 0 ]; then
-  printf 'OHOS_BUILD_TERMINAL result=FAIL rc=%s default_rmw=%s cyclone_shm=%s dds_security=%s build_mdds=%s\n' \
-    "$COLCON_RC" "$OHOS_DEFAULT_RMW" "$OHOS_CYCLONE_SHM" "$OHOS_DDS_SECURITY" "$OHOS_BUILD_MDDS" >&2
+  printf 'OHOS_BUILD_TERMINAL result=FAIL rc=%s default_rmw=%s cyclone_shm=%s dds_security=%s\n' \
+    "$COLCON_RC" "$OHOS_DEFAULT_RMW" "$OHOS_CYCLONE_SHM" "$OHOS_DDS_SECURITY" >&2
   exit "$COLCON_RC"
 fi
 
@@ -335,7 +332,7 @@ if [ "$OHOS_REQUIRE_CLEAN" = 1 ]; then
   BUILD_RECEIPT="$COLCON_LOG_BASE/ohos_build_receipt.json"
   pixi run python scripts/ohos_build_receipt.py finish \
     --workspace "$WORKSPACE_ROOT" \
-    --lock "$WORKSPACE_ROOT/ros2.ohos.lock.repos" \
+    --lock "$OHOS_SOURCE_MANIFEST" \
     --sdk-root "$OHOS_NATIVE_SDK" \
     --begin "$BUILD_RECEIPT_BEGIN" \
     --install-root "$WORKSPACE_ROOT/install_ohos" \
@@ -343,5 +340,5 @@ if [ "$OHOS_REQUIRE_CLEAN" = 1 ]; then
     --expected-packages "$EXPECTED_PACKAGES" \
     --output "$BUILD_RECEIPT"
 fi
-printf 'OHOS_BUILD_TERMINAL result=PASS default_rmw=%s cyclone_shm=%s dds_security=%s build_mdds=%s receipt=%s\n' \
-  "$OHOS_DEFAULT_RMW" "$OHOS_CYCLONE_SHM" "$OHOS_DDS_SECURITY" "$OHOS_BUILD_MDDS" "$BUILD_RECEIPT"
+printf 'OHOS_BUILD_TERMINAL result=PASS default_rmw=%s cyclone_shm=%s dds_security=%s receipt=%s\n' \
+  "$OHOS_DEFAULT_RMW" "$OHOS_CYCLONE_SHM" "$OHOS_DDS_SECURITY" "$BUILD_RECEIPT"

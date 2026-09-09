@@ -103,8 +103,8 @@ if ! safe_component "$BOARD"; then
   exit 2
 fi
 
-RUN_ID="${MDDS_RUN_ID:-fastdds_baseline_$(date -u +%Y%m%dT%H%M%SZ)_$RANDOM}"
-RUN_NONCE="${MDDS_FASTDDS_BASELINE_NONCE:-fastdds_${RANDOM}_${RANDOM}_$$}"
+RUN_ID="${ROS2_RUN_ID:-fastdds_baseline_$(date -u +%Y%m%dT%H%M%SZ)_$RANDOM}"
+RUN_NONCE="${ROS2_FASTDDS_BASELINE_NONCE:-fastdds_${RANDOM}_${RANDOM}_$$}"
 LOGROOT="${FASTDDS_BASELINE_LOGROOT:-ohos_test_logs/fastdds_baseline}"
 if ! safe_component "$RUN_ID" || ! safe_component "$RUN_NONCE"; then
   echo "ERROR: run ID and nonce must contain only A-Za-z0-9_.-" >&2
@@ -149,10 +149,10 @@ driver_archive_rmw_binding=UNVERIFIED
 # archive protocol as the official RMW suite.  Its selector is strict: a typo
 # is an error, never a fall-through to a broader package run.
 (
-  MDDS_RUN_ID="$RUN_ID" \
-  MDDS_BOARDTEST_RUN_NONCE="$RUN_NONCE" \
-  MDDS_BOARDTEST_LOGROOT="$RUNNER_LOGROOT" \
-  MDDS_BOARDTEST_ONLY_TEST="$CTEST_SELECTOR" \
+  ROS2_RUN_ID="$RUN_ID" \
+  ROS2_BOARDTEST_RUN_NONCE="$RUN_NONCE" \
+  ROS2_BOARDTEST_LOGROOT="$RUNNER_LOGROOT" \
+  ROS2_BOARDTEST_ONLY_TEST="$CTEST_SELECTOR" \
   ./scripts/run_board_tests.sh "$BOARD" "$PACKAGE"
 ) > "$RUNNER_STDOUT" 2> "$RUNNER_STDERR"
 runner_rc=$?
@@ -217,7 +217,7 @@ if [ "$provenance_ok" -eq 1 ] && ! one_matching_line "$RUN_TXT" \
   reason=UNVERIFIED_VERDICT_SET
 fi
 if [ "$provenance_ok" -eq 1 ] && ! one_matching_line "$RUN_TXT" \
-  "^BOARDTEST_ACTIVITY_LOCK_RELEASE board=$BOARD .* result=MDDS_ACTIVITY_LOCK_RELEASED$"; then
+  "^BOARDTEST_ACTIVITY_LOCK_RELEASE board=$BOARD .* result=ROS2_ACTIVITY_LOCK_RELEASED$"; then
   provenance_ok=0
   reason=ACTIVITY_LOCK_NOT_PROVEN_RELEASED
 fi
@@ -252,11 +252,9 @@ if [ "$provenance_ok" -eq 1 ]; then
     provenance_ok=0
     reason=ARCHIVED_DRIVER_UNREADABLE
   elif [[ "$(printf '%s\n' "$archived_driver" | tr -d '\r' | grep -Ec \
-    '^env GTEST_BRIEF=1 RMW_IMPLEMENTATION=rmw_fastrtps_cpp timeout [0-9]+ "\$MDDS_TOKEN_EXEC" -- \./test_subscription( |$)' || true)" != "1" ||
+    '^env GTEST_BRIEF=1 RMW_IMPLEMENTATION=rmw_fastrtps_cpp timeout [0-9]+ \./test_subscription( |$)' || true)" != "1" ||
     "$(printf '%s\n' "$archived_driver" | tr -d '\r' | grep -Fxc \
       "# BOARDTEST_EXPECTED $CTEST_SELECTOR" || true)" != "1" ||
-    "$(printf '%s\n' "$archived_driver" | tr -d '\r' | grep -Fxc \
-      "# BOARDTEST_TOKEN_MODE $CTEST_SELECTOR REQUIRED" || true)" != "1" ||
     "$(printf '%s\n' "$archived_driver" | tr -d '\r' | grep -Fxc \
       'exit "$overall_rc"' || true)" != "1" ]]; then
     provenance_ok=0

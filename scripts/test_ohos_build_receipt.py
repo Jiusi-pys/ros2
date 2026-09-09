@@ -9,6 +9,12 @@ import ohos_build_receipt as receipt
 
 
 class BuildReceiptTests(unittest.TestCase):
+    def test_begin_receipt_has_no_optional_middleware_build_switch(self) -> None:
+        import argparse
+        begin = next(action for action in receipt.parser()._actions
+                     if isinstance(action, argparse._SubParsersAction)).choices["begin"]
+        self.assertNotIn("--build-mdds", begin.format_help())
+
     def test_clean_release_rejects_artifact_only_and_unknown_python_modes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "runtime.manifest.json"

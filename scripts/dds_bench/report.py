@@ -32,7 +32,7 @@ def make_report(root):
     out+=chart+'<h2>逐项结果</h2><table><tr>'+''.join('<th>'+x+'</th>' for x in ['编号','配置','结果','尝试','RTT样本','p1','p50','p95','p99','最大','超时','发送异常'])+'</tr>'+''.join(rows)+'</table>'
     policies=sorted({r['config'].get('network_policy','auto_interface_development_baseline') for r in results})
     out+='<p>本批网口策略：'+html.escape(', '.join(policies))+'。auto_interface 批次可能包含 Fast DDS 有线/Wi-Fi 重复发包，不能和固定 eth1 批次混合排名。</p>'
-    out+='<h2>吞吐、CPU、内存、接口与恢复详情</h2><p>吞吐为接收端首末有效到达窗口中的有效载荷速度；不等于物理线路速率。接口计数包含其他系统流量。CPU 100% 表示一个 CPU 核；内存为应用与本轮 broker 的 RSS 采样峰值，采样间隔 250 ms。</p>'
+    out+='<h2>吞吐、CPU、内存、接口与恢复详情</h2><p>吞吐为接收端首末有效到达窗口中的有效载荷速度；不等于物理线路速率。接口计数包含其他系统流量。CPU 100% 表示一个 CPU 核；内存为应用的 RSS 采样峰值，采样间隔 250 ms。</p>'
     for i,r in enumerate(results):
         out+='<details><summary>Case '+str(i)+' 详情</summary><pre>'+html.escape(json.dumps(r,ensure_ascii=False,indent=2))+'</pre></details>'
     (root/'report.html').write_text(out+'</html>',encoding='utf-8')

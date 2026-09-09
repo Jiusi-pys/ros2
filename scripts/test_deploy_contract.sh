@@ -3,13 +3,13 @@
 # or contacts a board.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-. scripts/lib/mdds_sha256_manifest.sh
+. scripts/lib/ros2_sha256_manifest.sh
 
 TMP_BASE="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-TMP_ROOT="$(mktemp -d "$TMP_BASE/mdds-manifest-test.XXXXXX")"
-case "$TMP_ROOT" in "$TMP_BASE"/mdds-manifest-test.*) ;; *) exit 70 ;; esac
+TMP_ROOT="$(mktemp -d "$TMP_BASE/ros2-manifest-test.XXXXXX")"
+case "$TMP_ROOT" in "$TMP_BASE"/ros2-manifest-test.*) ;; *) exit 70 ;; esac
 cleanup() {
-  case "$TMP_ROOT" in "$TMP_BASE"/mdds-manifest-test.*) rm -rf -- "$TMP_ROOT" ;; esac
+  case "$TMP_ROOT" in "$TMP_BASE"/ros2-manifest-test.*) rm -rf -- "$TMP_ROOT" ;; esac
 }
 trap cleanup EXIT
 
@@ -28,15 +28,15 @@ expect_rc2() { # <expected-fragment> <command...>
 }
 
 expect_rc2 "RMW must be empty or one safe implementation identifier" \
-  env 'RMW=rmw_mdds;echo_INJECTED' bash scripts/deploy_ohos.sh safe_board
+  env 'RMW=rmw_ros2;echo_INJECTED' bash scripts/deploy_ohos.sh safe_board
 expect_rc2 "duplicate board identifier: duplicate_board" \
   bash scripts/deploy_ohos.sh duplicate_board duplicate_board
 
 mkdir "$TMP_ROOT/tree"
 printf 'portable-manifest-payload\n' > "$TMP_ROOT/tree/f"
 (cd "$TMP_ROOT/tree" && sha256sum ./f) > "$TMP_ROOT/raw-1"
-mdds_normalize_sha256_manifest "$TMP_ROOT/raw-1" "$TMP_ROOT/normalized-1"
-mdds_normalize_sha256_manifest "$TMP_ROOT/raw-1" "$TMP_ROOT/normalized-2"
+ros2_normalize_sha256_manifest "$TMP_ROOT/raw-1" "$TMP_ROOT/normalized-1"
+ros2_normalize_sha256_manifest "$TMP_ROOT/raw-1" "$TMP_ROOT/normalized-2"
 cmp "$TMP_ROOT/normalized-1" "$TMP_ROOT/normalized-2"
 grep -Eq '^[0-9a-f]{64}  \./f$' "$TMP_ROOT/normalized-1"
 (cd "$TMP_ROOT/tree" && sha256sum -c "$TMP_ROOT/normalized-1" >/dev/null)
@@ -44,7 +44,7 @@ grep -Eq '^[0-9a-f]{64}  \./f$' "$TMP_ROOT/normalized-1"
 expect_manifest_reject() { # <case-number> <manifest-path>
   local number="$1" path="$2"
   printf '%064d *%s\n' 0 "$path" > "$TMP_ROOT/raw-bad-$number"
-  if mdds_normalize_sha256_manifest \
+  if ros2_normalize_sha256_manifest \
       "$TMP_ROOT/raw-bad-$number" "$TMP_ROOT/normalized-bad-$number"; then
     echo "ERROR: unsafe SHA-256 path unexpectedly normalized: $path" >&2
     exit 1
@@ -60,7 +60,7 @@ expect_manifest_reject 6 './dir//file'
 expect_manifest_reject 7 './dir\alternate-separator'
 expect_manifest_reject 8 './env.sh'
 expect_manifest_reject 9 './deploy_manifest.sha256'
-expect_manifest_reject 10 './.mdds_deploy_complete'
-expect_manifest_reject 11 './.mdds-activity-lock/owner'
+expect_manifest_reject 10 './.ros2_deploy_complete'
+expect_manifest_reject 11 './.ros2-activity-lock/owner'
 
 echo "deploy input-contract negative tests: PASS"

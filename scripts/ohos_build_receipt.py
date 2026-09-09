@@ -245,7 +245,6 @@ def begin(args: argparse.Namespace) -> None:
             "selected_rmw": args.rmw,
             "cyclonedds_shm": args.cyclonedds_shm,
             "dds_security": args.dds_security,
-            "build_mdds": args.build_mdds,
         },
         "source_snapshot_sha256": source_sha,
         "source": source,
@@ -383,7 +382,6 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("--rmw", required=True, choices=("rmw_fastrtps_cpp", "rmw_cyclonedds_cpp"))
     start.add_argument("--cyclonedds-shm", required=True, choices=("ON", "OFF"))
     start.add_argument("--dds-security", required=True, choices=("ON", "OFF"))
-    start.add_argument("--build-mdds", required=True, choices=("ON", "OFF"))
     start.add_argument("--python-lock", type=Path, required=True)
     start.add_argument("--python-runtime-manifest", type=Path, required=True)
     start.add_argument("--python-runtime-archive", type=Path, required=True)

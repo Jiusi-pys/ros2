@@ -34,8 +34,8 @@ checked_mount(b"tmpfs", b"/dev/shm", b"tmpfs", 0, b"mode=1777,size=128m")
 print("TRACE_PRIVATE_NAMESPACE " + os.readlink("/proc/self/ns/mnt"), flush=True)
 # An owned supervisor can pin this namespace before any workload starts.
 # Both pipe descriptors are inherited explicitly, and removed before exec.
-ready_fd = os.environ.pop('MDDS_NAMESPACE_READY_FD', None)
-release_fd = os.environ.pop('MDDS_NAMESPACE_RELEASE_FD', None)
+ready_fd = os.environ.pop('ROS2_NAMESPACE_READY_FD', None)
+release_fd = os.environ.pop('ROS2_NAMESPACE_RELEASE_FD', None)
 if (ready_fd is None) != (release_fd is None):
     raise SystemExit('incomplete namespace ownership handshake')
 if ready_fd is not None:

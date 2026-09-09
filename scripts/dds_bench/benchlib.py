@@ -1,30 +1,18 @@
 """Pure planning/statistics; no device access."""
 import math
 import ipaddress
-import re
 
-RMWS = ['rmw_mdds', 'rmw_fastrtps_cpp', 'rmw_cyclonedds_cpp']
+RMWS = ['rmw_fastrtps_cpp', 'rmw_cyclonedds_cpp']
 MAX_BYTES = 4*1024*1024
 SIZES = [n*1024 for n in (1, 4, 16, 32, 64, 128, 256, 512, 1024, 4096)]
 
 
-def kh_library_path(prefix):
+def runtime_library_path():
     paths=['/data/local/tmp/ros2/Lib',
         '/system/lib64/platformsdk','/system/lib64/chipset-sdk-sp',
         '/system/lib64/chipset-sdk','/system/lib64','/lib',
         '/data/python312-rk3588a/usr/lib']
-    if prefix: paths.insert(0,prefix+'/lib')
     return ':'.join(paths)
-
-
-def validate_kh_provider(p):
-    required={'bin/dds_bench_kh','lib/librmw_mdds.so','lib/libmdds_bridge_shared.z.so','lib/libddsc.z.so'}
-    return (isinstance(p,dict) and p.get('variant')=='communication_dsoftbus_kh'
-            and bool(re.fullmatch(r'[0-9a-f]{40}',p.get('source_commit','')))
-            and bool(re.fullmatch(r'/data/local/tmp/dds-kh-[0-9a-f]{16}',p.get('prefix','')))
-            and p.get('cfi_bridge') is True and p.get('cfi_ddsc') is True
-            and isinstance(p.get('files'),dict) and set(p['files'])==required
-            and all(isinstance(v,str) and re.fullmatch(r'[0-9a-f]{64}',v) for v in p['files'].values()))
 
 
 def ethernet_profile(rmw, address):
@@ -41,7 +29,7 @@ def ethernet_profile(rmw, address):
         return '''<CycloneDDS xmlns="https://cdds.io/config"><Domain Id="any"><General>
 <Interfaces><NetworkInterface name="eth1"/></Interfaces><AllowMulticast>true</AllowMulticast>
 </General></Domain></CycloneDDS>'''
-    raise ValueError('No public MDDS interface pinning setting is assumed')
+    raise ValueError('Unsupported RMW: '+str(rmw))
 
 
 def validate_config(rows, case, role, run):
@@ -79,7 +67,7 @@ def plan_cases(profile):
     result = []
     repetitions = 3 if profile in ('latency', 'throughput', 'slow') else 1
     for rep in range(repetitions):
-        for rmw in RMWS[rep % 3:]+RMWS[:rep % 3]:
+        for rmw in RMWS[rep % len(RMWS):]+RMWS[:rep % len(RMWS)]:
             for qos in ('best_effort', 'reliable'):
                 sizes = ([1024] if profile in ('smoke', 'restart') else
                          SIZES if profile == 'boundary' else

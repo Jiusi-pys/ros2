@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import time
 import uuid
-from benchlib import MAX_BYTES, plan_cases, summarize, validate_config, ethernet_profile, validate_kh_provider, kh_library_path
+from benchlib import MAX_BYTES, plan_cases, summarize, validate_config, ethernet_profile, RMWS, runtime_library_path
 
 HERE = Path(__file__).resolve().parent
 WS = HERE.parent.parent
@@ -63,10 +63,10 @@ def deploy(devices, output):
         if path.is_file(): shutil.copy2(path,sources/path.name)
     receipt = dict(directory=remote, files=hashes, boards={},
                    harness_sources={p.name:sha(p) for p in sources.iterdir()}, source_heads={})
-    for repo in ('','src/Jiusi-pys/mdds','src/ros2/rmw_mdds','src/eProsima/Fast-DDS','src/eclipse-cyclonedds/cyclonedds'):
+    for repo in ('','src/eProsima/Fast-DDS','src/eclipse-cyclonedds/cyclonedds'):
         receipt['source_heads'][repo or 'ros2']=subprocess.check_output(['git','-C',str(WS/repo),'rev-parse','HEAD'],text=True).strip()
     for d in devices:
-        if d.shell('test -e '+RUNTIME+'/.mdds-activity-lock && echo BUSY') == 'BUSY':
+        if d.shell('test -e '+RUNTIME+'/.dds-bench-activity-lock && echo BUSY') == 'BUSY':
             raise RuntimeError('device is in use; deployment refused before mutation')
         d.shell('mkdir -p '+q(remote))
         for name, path in files.items():
@@ -77,8 +77,8 @@ def deploy(devices, output):
         check = d.shell(f'. {RUNTIME}/env.sh || exit 70; {q(remote)}/dds_bench_contract_test')
         if check.strip() != 'CONTRACT_PASS':
             raise RuntimeError('native contract failed '+check)
-        fingerprint = d.shell('cat '+RUNTIME+'/.mdds_deploy_complete; sha256sum '+
-            ' '.join(RUNTIME+'/Lib/'+n for n in ('libmdds.so', 'librmw_mdds.so', 'libfastrtps.so',
+        fingerprint = d.shell('sha256sum '+
+            ' '.join(RUNTIME+'/Lib/'+n for n in ('libfastrtps.so',
                                                 'libddsc.so', 'librmw_fastrtps_cpp.so', 'librmw_cyclonedds_cpp.so', 'librclcpp.so')))
         receipt['boards'][d.serial] = dict(contract=check, runtime=fingerprint,
             environment=d.shell('uname -a; ip -4 addr; cat /proc/meminfo; cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor; for f in /sys/class/net/eth1/mtu /sys/class/net/eth1/speed /proc/sys/net/core/rmem_max /proc/sys/net/core/wmem_max; do echo "$f"; cat "$f"; done'))
@@ -102,16 +102,10 @@ def report_case(root, case, configs, statuses):
     result = dict(config=case, boards=statuses, streams={}, valid=True)
     for serial, conf in configs.items():
         for p in conf.get('streams',conf['processes']):
-            if p['name'] == 'broker':
-                continue
             rows = read_rows(root/(serial+'_'+p['name']+'.jsonl'))
             rows += read_rows(root/(serial+'_'+p['name']+'.jsonl.restart'))
             s = summarize(rows)
             s['identity_valid'] = validate_config(rows,case,p['argv'][1],int(p['argv'][-3]))
-            if case.get('kh_provider') and case['rmw']=='rmw_mdds':
-                expected=case['kh_provider']['prefix']+'/lib/librmw_mdds.so'
-                s['kh_library_valid']=any(x.get('event')=='config' and x.get('rmw_library')==expected for x in rows)
-                s['identity_valid']=s['identity_valid'] and s['kh_library_valid']
             if not s['identity_valid']: result['valid']=False
             s['endpoint_match_wait_us'] = next((x['elapsed_us'] for x in rows if x.get('event')=='discovery'), None)
             s['terminals'] = [x for x in rows if x.get('event') == 'terminal']
@@ -196,19 +190,13 @@ def report_case(root, case, configs, statuses):
 def run_case(devices, remote, root, case, index):
     if not isinstance(case.get('bytes'),int) or not 0 < case['bytes'] <= MAX_BYTES:
         raise ValueError('Current test scope permits payloads from 1 byte through 4 MiB only')
-    kh=case.get('kh_provider') if case.get('rmw')=='rmw_mdds' else None
-    if case.get('rmw')=='rmw_mdds' and not validate_kh_provider(kh):
-        raise RuntimeError('KH MDDS provider is not yet provisioned; legacy MDDS execution is disabled for this request')
-    if kh:
-        for d in devices:
-            for name,digest in kh['files'].items():
-                if d.shell('sha256sum '+q(kh['prefix']+'/'+name)).split()[0]!=digest:
-                    raise RuntimeError('KH provider hash mismatch')
+    if case.get('rmw') not in RMWS:
+        raise ValueError('Unsupported RMW: '+str(case.get('rmw')))
     root.mkdir()
     run = int(uuid.uuid4().hex[:12],16)
     configs, paths, acquired, launched = {}, {}, [], []
     owner = 'DDS_BENCH '+root.name+' '+str(run)
-    lock = RUNTIME+'/.mdds-activity-lock'
+    lock = RUNTIME+'/.dds-bench-activity-lock'
     statuses = {}
     try:
         for d in devices:
@@ -222,22 +210,19 @@ def run_case(devices, remote, root, case, index):
                 raise RuntimeError('run directory collision')
             env = dict(RMW_IMPLEMENTATION=case['rmw'], ROS_DOMAIN_ID='83',
                        ROS_AUTOMATIC_DISCOVERY_RANGE='SYSTEM_DEFAULT', ROS_LOCALHOST_ONLY='0',
-                       FASTDDS_BUILTIN_TRANSPORTS='UDPv4', MDDS_BROKER_ROOT=path+'/brokers',LD_PRELOAD='',
-                       LD_LIBRARY_PATH=kh_library_path(None))
+                       FASTDDS_BUILTIN_TRANSPORTS='UDPv4', LD_PRELOAD='',
+                       LD_LIBRARY_PATH=runtime_library_path())
             if case.get('debug_crash_trace'): env['DDS_BENCH_CRASH_TRACE']='1'
             duplex=case['direction']=='both'
             if duplex: env['DDS_BENCH_DUPLEX']='1'
-            if case['rmw']=='rmw_mdds':
-                env['LD_LIBRARY_PATH']=kh_library_path(kh['prefix'])
-            else:
-                addresses=d.shell('ip -o -4 addr show eth1').split()
-                if 'inet' not in addresses:
-                    raise RuntimeError('eth1 has no IPv4 address')
-                address=addresses[addresses.index('inet')+1].split('/')[0]
-                profile=root/(d.serial+'_ethernet.xml')
-                profile.write_text(ethernet_profile(case['rmw'],address))
-                d.send(profile,path+'/ethernet.xml')
-                env['CYCLONEDDS_URI' if case['rmw']=='rmw_cyclonedds_cpp' else 'FASTRTPS_DEFAULT_PROFILES_FILE']=path+'/ethernet.xml'
+            addresses=d.shell('ip -o -4 addr show eth1').split()
+            if 'inet' not in addresses:
+                raise RuntimeError('eth1 has no IPv4 address')
+            address=addresses[addresses.index('inet')+1].split('/')[0]
+            profile=root/(d.serial+'_ethernet.xml')
+            profile.write_text(ethernet_profile(case['rmw'],address))
+            d.send(profile,path+'/ethernet.xml')
+            env['CYCLONEDDS_URI' if case['rmw']=='rmw_cyclonedds_cpp' else 'FASTRTPS_DEFAULT_PROFILES_FILE']=path+'/ethernet.xml'
             processes = []
             streams=[]
             for lane in (('ab','ba') if case['direction']=='both' else (case['direction'],)):
@@ -251,7 +236,7 @@ def run_case(devices, remote, root, case, index):
                 args = [role,f'/dds_bench_{run}_{lane}',case['bytes'],case['qos'],case['depth'],n,
                         case['warmup'],duration,case['timeout_ms'],case['rate'],case['slow_ms'],run,
                         path+'/'+name+'.jsonl',path+'/'+name+'.ready']
-                executable=kh['prefix']+'/bin/dds_bench_kh' if kh else remote+'/dds_bench'
+                executable=remote+'/dds_bench'
                 process=dict(name=name, argv=[executable]+list(map(str,args)),
                              restart=role=='sink' and bool(case['restart_after']))
                 processes.append(process)
@@ -263,7 +248,7 @@ def run_case(devices, remote, root, case, index):
                     virtual[-2]=path+'/sink_'+other+'.jsonl'
                     streams.append(dict(name='sink_'+other,argv=virtual))
             # Start receivers before senders within each board.
-            processes.sort(key=lambda p: 0 if p['name']=='broker' else 2 if p['name'].startswith(('ping','source')) else 1)
+            processes.sort(key=lambda p: 1 if p['name'].startswith(('ping','source')) else 0)
             conf = dict(env=env, bytes=case['bytes'], processes=processes,streams=streams,
                         wall_seconds=case['seconds']+50, rss_limit_kib=3*1024*1024,
                         restart_after=case['restart_after'])
@@ -274,7 +259,7 @@ def run_case(devices, remote, root, case, index):
         # The supervisor remains responsible for deadline and cleanup if the host disappears.
         for d in reversed(devices):
             path=paths[d.serial]
-            command=f'. {RUNTIME}/env.sh || exit 70; unset MDDS_TRANSPORT MDDS_DEPLOYMENT_PROFILE CYCLONEDDS_URI FASTRTPS_DEFAULT_PROFILES_FILE; exec python3.12 {q(remote)}/board_worker.py {q(path)}'
+            command=f'. {RUNTIME}/env.sh || exit 70; unset CYCLONEDDS_URI FASTRTPS_DEFAULT_PROFILES_FILE; exec python3.12 {q(remote)}/board_worker.py {q(path)}'
             launch=f'nohup sh -c {q(command)} > {q(path)}/worker.log 2>&1 < /dev/null &'
             d.shell(launch)
             launched.append(d)
@@ -335,14 +320,14 @@ def main():
     ap.add_argument('--hdc',default=DEFAULT_HDC)
     ap.add_argument('--output',type=Path)
     ap.add_argument('--limit',type=int)
-    ap.add_argument('--only-rmw',choices=['rmw_mdds','rmw_fastrtps_cpp','rmw_cyclonedds_cpp'])
+    ap.add_argument('--only-rmw',choices=RMWS)
     ap.add_argument('--only-bytes',type=int)
     ap.add_argument('--min-bytes',type=int,default=1)
     ap.add_argument('--direction',choices=['ab','ba','both'])
     ap.add_argument('--mode',choices=['latency','stream'])
     args=ap.parse_args()
     cases=plan_cases(args.profile)
-    for c in cases: c['network_policy']='standard_dds_eth1_mdds_route_observed'
+    for c in cases: c['network_policy']='standard_dds_eth1'
     if args.only_rmw: cases=[c for c in cases if c['rmw']==args.only_rmw]
     if args.only_bytes: cases=[c for c in cases if c['bytes']==args.only_bytes]
     cases=[c for c in cases if c['bytes']>=args.min_bytes]

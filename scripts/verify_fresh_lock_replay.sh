@@ -10,7 +10,8 @@ if [ "$#" -gt 1 ]; then
   echo "Usage: ./scripts/verify_fresh_lock_replay.sh [empty-destination]" >&2
   exit 2
 fi
-LOCK="$ROOT/ros2.ohos.lock.repos"
+LOCK="${OHOS_SOURCE_MANIFEST:-$ROOT/ros2.ohos.lock.repos}"
+LOCK="$(cd "$(dirname "$LOCK")" && pwd -P)/$(basename "$LOCK")"
 [ -f "$LOCK" ] || {
   echo "ERROR: $LOCK is missing; export patches and freeze the manifest first" >&2
   exit 2
@@ -20,7 +21,7 @@ if [ "$#" -eq 1 ]; then
   DEST="$1"
   mkdir -p "$DEST"
 else
-  DEST="$(mktemp -d "${TMPDIR:-/tmp}/mdds-lock-replay.XXXXXX")"
+  DEST="$(mktemp -d "${TMPDIR:-/tmp}/ros2-lock-replay.XXXXXX")"
 fi
 DEST="$(cd "$DEST" && pwd -P)"
 if [ -n "$(find "$DEST" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
@@ -46,10 +47,10 @@ else
 fi
 
 TMP_BASE="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-INDEX_TMP="$(mktemp -d "$TMP_BASE/mdds-tree-compare.XXXXXX")"
-case "$INDEX_TMP" in "$TMP_BASE"/mdds-tree-compare.*) ;; *) exit 70 ;; esac
+INDEX_TMP="$(mktemp -d "$TMP_BASE/ros2-tree-compare.XXXXXX")"
+case "$INDEX_TMP" in "$TMP_BASE"/ros2-tree-compare.*) ;; *) exit 70 ;; esac
 cleanup_indexes() {
-  case "$INDEX_TMP" in "$TMP_BASE"/mdds-tree-compare.*) rm -rf -- "$INDEX_TMP" ;; esac
+  case "$INDEX_TMP" in "$TMP_BASE"/ros2-tree-compare.*) rm -rf -- "$INDEX_TMP" ;; esac
 }
 trap cleanup_indexes EXIT
 worktree_tree() { # <repo> <private-index> [exclude imported src]
@@ -135,8 +136,8 @@ printf 'FRESH_REPLAY_META public_base=%s local_head=%s patch_sha256=%s source_tr
 # A transient remote clone failure must be retried inside this one auditable
 # empty-directory run; `set -e` still rejects the import if any repository is
 # unavailable after the bounded retry budget.
-"${VCS[@]}" import --retry 3 --input "$DEST/ros2.ohos.lock.repos" "$DEST/src"
-expected_count="$(grep -Ec '^  [^[:space:]][^:]*:$' "$DEST/ros2.ohos.lock.repos")"
+"${VCS[@]}" import --retry 3 --input "$LOCK" "$DEST/src"
+expected_count="$(grep -Ec '^  [^[:space:]][^:]*:$' "$LOCK")"
 actual_count="$(find "$DEST/src" -maxdepth 3 -name .git -type d | wc -l | tr -d ' ')"
 if [ "$actual_count" != "$expected_count" ]; then
   echo "ERROR: locked import count mismatch: expected=$expected_count actual=$actual_count" >&2
@@ -168,11 +169,18 @@ done
 
 # `git am` needs a committer identity but the resulting commit SHA is not the
 # reproducibility contract; exact trees are. Do not mutate global/local config.
-export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-M-DDS patch replay}"
-export GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-mdds-replay@example.invalid}"
-(cd "$DEST" && bash scripts/apply_patches.sh)
+export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-ROS 2 patch replay}"
+export GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-ros2-replay@example.invalid}"
+(cd "$DEST" && OHOS_SOURCE_MANIFEST="$LOCK" bash scripts/apply_patches.sh)
 
-source_count="$(find "$ROOT/src" -maxdepth 3 -name .git -type d | wc -l | tr -d ' ')"
+source_count="$("${HOST_PYTHON[@]}" - "$LOCK" "$ROOT/src" <<'PYCOUNT'
+import sys, yaml
+from pathlib import Path
+manifest, source = map(Path, sys.argv[1:])
+repositories = yaml.safe_load(manifest.read_text())["repositories"]
+print(sum((source / name / ".git").exists() for name in repositories))
+PYCOUNT
+)"
 if [ "$source_count" != 0 ] && [ "$source_count" != "$expected_count" ]; then
   echo "ERROR: source workspace is partial: expected=0-or-$expected_count actual=$source_count" >&2
   exit 1
@@ -203,12 +211,6 @@ while IFS= read -r replay_gitdir; do
     echo "ERROR: replay tree differs for $relative: expected=$expected_tree replay=$replay_tree evidence=$evidence" >&2
     exit 1
   fi
-  case "$relative" in
-    Jiusi-pys/mdds|ros2/rmw_mdds)
-      printf 'FRESH_REPLAY_OWNED repository=%s tree=%s result=EXACT\n' \
-        "$relative" "$replay_tree"
-      ;;
-  esac
   compared=$((compared + 1))
 done < <(find "$DEST/src" -maxdepth 3 -name .git -type d | LC_ALL=C sort)
 

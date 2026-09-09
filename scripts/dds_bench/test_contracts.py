@@ -31,7 +31,7 @@ class Contracts(unittest.TestCase):
 
     def test_smoke_matrix(self):
         cases = plan_cases('smoke')
-        self.assertEqual(len(cases), 12)
+        self.assertEqual(len(cases), 8)
         self.assertEqual({x['qos'] for x in cases}, {'best_effort', 'reliable'})
         self.assertEqual({x['mode'] for x in cases}, {'latency', 'stream'})
 
@@ -42,7 +42,7 @@ class Contracts(unittest.TestCase):
     def test_4_mib_boundary_is_depth_one(self):
         cases = plan_cases('boundary')
         big = [x for x in cases if x['bytes'] == 4*1024*1024]
-        self.assertEqual(len(big), 6)
+        self.assertEqual(len(big), 4)
         self.assertTrue(all(x['depth'] == 1 and x['count'] == 1 for x in big))
 
     def test_oversize_run_rejected_before_any_mutation(self):
@@ -55,45 +55,33 @@ class Contracts(unittest.TestCase):
                 run_case([], '/unused', root, {'bytes':8*1024*1024}, 0)
             self.assertFalse(root.exists())
 
-    def test_old_mdds_cannot_silently_run_as_kh(self):
+    def test_unsupported_rmw_rejected_before_any_mutation(self):
         import tempfile
         from pathlib import Path
         from run import run_case
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp)/'must_not_exist'
-            with self.assertRaisesRegex(RuntimeError,'KH'):
-                run_case([], '/unused', root, {'bytes':1024,'rmw':'rmw_mdds'}, 0)
+            root = Path(tmp) / 'must_not_exist'
+            with self.assertRaises(ValueError):
+                run_case([], '/unused', root, {'bytes': 1024, 'rmw': 'unsupported_rmw'}, 0)
             self.assertFalse(root.exists())
 
-    def test_kh_provider_requires_pinned_artifacts_and_safe_prefix(self):
-        from benchlib import validate_kh_provider
-        p=dict(variant='communication_dsoftbus_kh',source_commit='b'*40,
-               prefix='/data/local/tmp/dds-kh-'+'a'*16,cfi_bridge=True,cfi_ddsc=True,
-               files={n:'c'*64 for n in ('bin/dds_bench_kh','lib/librmw_mdds.so',
-                    'lib/libmdds_bridge_shared.z.so','lib/libddsc.z.so')})
-        self.assertTrue(validate_kh_provider(p))
-        self.assertFalse(validate_kh_provider({**p,'prefix':'/system/lib64'}))
-        self.assertFalse(validate_kh_provider({**p,'cfi_bridge':False}))
-        self.assertFalse(validate_kh_provider({**p,'files':{}}))
-
-    def test_kh_platform_crypto_precedes_python_libraries(self):
-        from benchlib import kh_library_path
-        paths=kh_library_path('/data/local/tmp/dds-kh-'+'a'*16).split(':')
-        self.assertEqual(paths[0],'/data/local/tmp/dds-kh-'+'a'*16+'/lib')
-        self.assertLess(paths.index('/system/lib64/platformsdk'),paths.index('/data/python312-rk3588a/usr/lib'))
+    def test_platform_crypto_precedes_python_libraries(self):
+        from benchlib import runtime_library_path
+        paths = runtime_library_path().split(':')
+        self.assertLess(paths.index('/system/lib64/platformsdk'), paths.index('/data/python312-rk3588a/usr/lib'))
 
     def test_formal_balanced_directions_and_repetitions(self):
         cases = plan_cases('latency')
-        self.assertEqual(len(cases), 3*2*10*3*3)
+        self.assertEqual(len(cases), 2*2*10*3*3)
         self.assertEqual({x['direction'] for x in cases}, {'ab', 'ba', 'both'})
 
     def test_wrong_rmw_cannot_be_reported_as_selected(self):
         from benchlib import validate_config
-        case = dict(rmw='rmw_mdds', bytes=1024, qos='reliable', depth=10)
+        case = dict(rmw='rmw_cyclonedds_cpp', bytes=1024, qos='reliable', depth=10)
         row = dict(event='config', role='ping', rmw='rmw_fastrtps_cpp', bytes=1024,
                    qos='reliable', depth=10, run=7, header_bytes=40)
         self.assertFalse(validate_config([row], case, 'ping', 7))
-        row['rmw']='rmw_mdds'
+        row['rmw']='rmw_cyclonedds_cpp'
         self.assertTrue(validate_config([row], case, 'ping', 7))
         self.assertFalse(validate_config([row], case, 'ping', 8))
         self.assertFalse(validate_config([], case, 'ping', 7))
@@ -114,7 +102,7 @@ class Contracts(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from run import report_case
-        case=dict(rmw='rmw_mdds',bytes=1024,qos='reliable',depth=10,mode='stream',seconds=1)
+        case=dict(rmw='rmw_cyclonedds_cpp',bytes=1024,qos='reliable',depth=10,mode='stream',seconds=1)
         configs={}
         statuses={}
         with tempfile.TemporaryDirectory() as tmp:

@@ -21,10 +21,6 @@ from pathlib import Path
 
 ROS2_HOME = "/data/local/tmp/ros2"
 TIMEOUT = "180"
-TOKEN_MODE_ENV = "MDDS_BOARDTEST_TOKEN_MODE"
-TOKEN_MODE_REQUIRED = "REQUIRED"
-TOKEN_MODE_BYPASS = "BYPASS_EXPECT_UNAUTHORIZED"
-TOKEN_MODE_LAUNCHER_UNDER_TEST = "LAUNCHER_UNDER_TEST"
 
 def parse_args(argv):
     """Return the optional exact CTest selector without broadening execution.
@@ -94,9 +90,6 @@ def header():
     # A sourced script may `return 70`; without an explicit guard /bin/sh
     # continues into the test payload with an inherited/stale overlay.
     print(f". {ROS2_HOME}/env.sh || exit 70")
-    print(f'MDDS_TOKEN_EXEC="${{MDDS_TOKEN_EXEC:-{ROS2_HOME}/bin/mdds_token_exec}}"')
-    print("export MDDS_TOKEN_EXEC")
-    print('[ -x "$MDDS_TOKEN_EXEC" ] && [ ! -L "$MDDS_TOKEN_EXEC" ] || exit 70')
     # this gtest version hardcodes /tmp for its death-test capture files;
     # the board's /tmp is a read-only rootfs, so mount a tmpfs over it
     print("mount -t tmpfs tmpfs /tmp 2>/dev/null || true")
@@ -251,74 +244,24 @@ for m in tests:
         continue
     assignments = []
     exports = []
-    token_mode = TOKEN_MODE_REQUIRED
-    token_mode_seen = False
     for e in envs:
         k, _, v = e.partition("=")
         if not k:
-            continue
-        if k == TOKEN_MODE_ENV:
-            if token_mode_seen or v not in (
-                TOKEN_MODE_REQUIRED,
-                TOKEN_MODE_BYPASS,
-                TOKEN_MODE_LAUNCHER_UNDER_TEST,
-            ):
-                print(
-                    f"ERROR: {name} has an invalid/duplicate {TOKEN_MODE_ENV} marker",
-                    file=sys.stderr,
-                )
-                sys.exit(2)
-            token_mode = v
-            token_mode_seen = True
-            # This is a board-driver control, not child-process input.
             continue
         assignments.append(f"{k}={remap(v)}")
     for e in appends:
         k, _, v = e.partition("=")
         if not k:
             continue
-        if k == TOKEN_MODE_ENV:
-            print(
-                f"ERROR: {name} must declare {TOKEN_MODE_ENV} with --env, not --append-env",
-                file=sys.stderr,
-            )
-            sys.exit(2)
         if k in ("LD_LIBRARY_PATH", "PATH", "PYTHONPATH"):
             # env K=V does not expand $K; emit a real export so the append
             # keeps the existing value
             exports.append(f"export {k}={shlex.quote(remap(v))}\":${k}\"")
         else:
             assignments.append(f"{k}={remap(v)}")
-    normalized_cmd_args = [arg.replace("\\", "/") for arg in cmd_args]
-    if token_mode == TOKEN_MODE_BYPASS:
-        if exe != "mdds_token_boundary_probe" or normalized_cmd_args != [
-            "failure",
-            "93",
-        ]:
-            print(
-                f"ERROR: {name} bypass marker is reserved for the exact "
-                "unprivileged token-boundary probe",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-    elif token_mode == TOKEN_MODE_LAUNCHER_UNDER_TEST:
-        expected_probe = f"{pkg_build}/mdds_token_boundary_probe"
-        if exe != "mdds_token_exec" or normalized_cmd_args != [
-            "--",
-            expected_probe,
-            "success",
-            "93",
-        ]:
-            print(
-                f"ERROR: {name} launcher-under-test marker requires the exact "
-                "packaged launcher/probe contract",
-                file=sys.stderr,
-            )
-            sys.exit(2)
     env_prefix = " ".join(shlex.quote(a) for a in assignments)
     for x in exports:
         print(x)
-    print(f"# BOARDTEST_TOKEN_MODE {name} {token_mode}")
     if any(a.replace("\\", "/").startswith("--gtest_output=xml:") for a in cmd_args):
         print(f"# BOARDTEST_XML {name}")
     try:
@@ -329,12 +272,7 @@ for m in tests:
     # GTEST_BRIEF via env, not argv: tests with required positional args
     # (test_communication's message type) reject the extra argv element
     env_part = f" {env_prefix}" if env_prefix else ""
-    if token_mode == TOKEN_MODE_REQUIRED:
-        executable = f'"$MDDS_TOKEN_EXEC" -- ./{shlex.quote(exe)}'
-    else:
-        # The only supported bypass is an explicit negative authorization
-        # probe whose own exit status asserts that DSoftBus failed closed.
-        executable = f'./{shlex.quote(exe)}'
+    executable = f'./{shlex.quote(exe)}'
     cmd = (f"env GTEST_BRIEF=1{env_part} timeout {TIMEOUT} {executable}"
            f"{' ' + extra if extra else ''}")
     print(f"{cmd} > {shlex.quote(name)}.log 2>&1")

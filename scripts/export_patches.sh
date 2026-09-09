@@ -5,13 +5,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-OWNED_REPOS="Jiusi-pys/mdds ros2/rmw_mdds"
+SOURCE_MANIFEST="${OHOS_SOURCE_MANIFEST:-ros2.repos}"
+SOURCE_ROOT_TEXT="$(pixi run python scripts/manifest_source_roots.py --manifest "$SOURCE_MANIFEST" --source-root src)" || exit 2
+SOURCE_BASE="$(pixi run python -c 'from pathlib import Path; print(Path("src").resolve().as_posix())' | tr -d '\r')"
+mapfile -t EXPORT_ROOTS < <(printf '%s\n' "$SOURCE_ROOT_TEXT" | tr -d '\r' | sed 's|\\|/|g')
 mkdir -p patches
 TMP_BASE="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-TMP_ROOT="$(mktemp -d "$TMP_BASE/mdds-patch-export.XXXXXX")"
-case "$TMP_ROOT" in "$TMP_BASE"/mdds-patch-export.*) ;; *) exit 70 ;; esac
+TMP_ROOT="$(mktemp -d "$TMP_BASE/ros2-patch-export.XXXXXX")"
+case "$TMP_ROOT" in "$TMP_BASE"/ros2-patch-export.*) ;; *) exit 70 ;; esac
 cleanup() {
-  case "$TMP_ROOT" in "$TMP_BASE"/mdds-patch-export.*) rm -rf -- "$TMP_ROOT" ;; esac
+  case "$TMP_ROOT" in "$TMP_BASE"/ros2-patch-export.*) rm -rf -- "$TMP_ROOT" ;; esac
 }
 trap cleanup EXIT
 
@@ -32,7 +35,7 @@ manifest_version_for() { # <repository-key>
       print
       exit
     }
-  ' ros2.repos
+  ' "$SOURCE_MANIFEST"
 }
 
 provenance_ref_for() { # <repo> <relative-path> <local-branch>
@@ -58,9 +61,8 @@ provenance_ref_for() { # <repo> <relative-path> <local-branch>
   return 1
 }
 
-while IFS= read -r gitdir; do
-  repo="${gitdir%/.git}"
-  rel="${repo#src/}"
+for repo in "${EXPORT_ROOTS[@]}"; do
+  rel="${repo#"$SOURCE_BASE/"}"
   key="${rel//\//__}"
   branch="$(git -C "$repo" symbolic-ref --short -q HEAD || true)"
   if [ -z "$branch" ]; then
@@ -100,9 +102,6 @@ while IFS= read -r gitdir; do
       continue
     fi
     echo "== $rel: $ahead unpublished commit(s) -> patches/$key.patch"
-    case " $OWNED_REPOS " in
-      *" $rel "*) echo "   note: owned HEAD is not reachable from origin; fallback series retained" ;;
-    esac
     series_count=$((series_count + 1))
   fi
 
@@ -132,7 +131,7 @@ while IFS= read -r gitdir; do
     echo "== $rel: dirty tracked/untracked snapshot -> patches/$key.snapshot.patch"
     snapshot_count=$((snapshot_count + 1))
   fi
-done < <(find src -maxdepth 3 -name .git -type d | LC_ALL=C sort)
+done
 
 echo "exported $series_count commit series and $snapshot_count worktree snapshots"
 [ "$failed" -eq 0 ] || exit 1

@@ -16,7 +16,7 @@ artifact silently.
 Fifteen parser tests pass. New RED cases covered nested selection and complete
 plans, missing descendants, path escape, duplicate names, and a valid relative
 parent traversal; each became GREEN after implementation. Actual generated
-plans contain 32 MDDS entries, 15 RMW entries and 136 rclcpp entries. The exact
+plans for the recorded rclcpp snapshot contain 136 entries. The exact
 `test_signal_chaining` selector emits one native entry from its nested path.
 These are plan counts, not runtime pass counts.
 

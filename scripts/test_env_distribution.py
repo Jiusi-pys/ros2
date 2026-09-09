@@ -11,13 +11,11 @@ BASH='C:/Program Files/Git/bin/bash.exe'
 
 class DistributionEnvironment(unittest.TestCase):
     def source(self,inherited):
-        with tempfile.TemporaryDirectory(prefix='mdds_distro_env_') as folder:
-            prefix=Path(folder);(prefix/'bin').mkdir();(prefix/'.mdds_deploy_complete').write_text('ready\n')
-            token=prefix/'bin/mdds_token_exec';token.write_text('#!/bin/sh\nexit 0\n')
+        with tempfile.TemporaryDirectory(prefix='ros2_distro_env_') as folder:
+            prefix=Path(folder);(prefix/'bin').mkdir();(prefix/'.ros2_deploy_complete').write_text('ready\n')
             script='''
-chmod +x "$1/bin/mdds_token_exec"
 grep() { return 0; }
-export ROS2_HOME="$1" MDDS_DEPLOY_EXPECTED_MARKER=ready
+export ROS2_HOME="$1" ROS2_DEPLOY_EXPECTED_MARKER=ready
 . "$2" || exit $?
 printf '%s:%s:%s\\n' "${ROS_DISTRO:-}" "${ROS_VERSION:-}" "${ROS_PYTHON_VERSION:-}"
 '''

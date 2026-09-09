@@ -9,12 +9,21 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+SOURCE_MANIFEST="${OHOS_SOURCE_MANIFEST:-ros2.ohos.lock.repos}"
+SELECTED_ROOT_TEXT="$(pixi run python scripts/manifest_source_roots.py --manifest "$SOURCE_MANIFEST" --source-root src)" || exit 2
+SOURCE_BASE="$(pixi run python -c 'from pathlib import Path; print(Path("src").resolve().as_posix())' | tr -d '\r')"
+declare -A SELECTED_REPOSITORIES=()
+while IFS= read -r selected; do
+  SELECTED_REPOSITORIES["${selected#"$SOURCE_BASE/"}"]=1
+done < <(printf '%s\n' "$SELECTED_ROOT_TEXT" | tr -d '\r' | sed 's|\\|/|g')
 fail=0
 for p in patches/*.patch; do
   [ -f "$p" ] || continue
   [[ "$p" == *.snapshot.patch ]] && continue
   key="$(basename "$p" .patch)"
-  repo="src/${key//__//}"
+  relative="${key//__//}"
+  [ -n "${SELECTED_REPOSITORIES[$relative]+present}" ] || continue
+  repo="src/$relative"
   if [ ! -d "$repo/.git" ]; then
     echo "== $repo: not checked out (run vcs import with ros2.ohos.lock.repos first)"
     fail=1
@@ -60,10 +69,10 @@ done
 # uses another temporary index, so replay does not stage files or alter a
 # caller's real index metadata.
 TMP_BASE="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || exit 1
-SNAPSHOT_TMP="$(mktemp -d "$TMP_BASE/mdds-patch-apply.XXXXXX")" || exit 1
-case "$SNAPSHOT_TMP" in "$TMP_BASE"/mdds-patch-apply.*) ;; *) exit 70 ;; esac
+SNAPSHOT_TMP="$(mktemp -d "$TMP_BASE/ros2-patch-apply.XXXXXX")" || exit 1
+case "$SNAPSHOT_TMP" in "$TMP_BASE"/ros2-patch-apply.*) ;; *) exit 70 ;; esac
 cleanup_snapshot_tmp() {
-  case "$SNAPSHOT_TMP" in "$TMP_BASE"/mdds-patch-apply.*) rm -rf -- "$SNAPSHOT_TMP" ;; esac
+  case "$SNAPSHOT_TMP" in "$TMP_BASE"/ros2-patch-apply.*) rm -rf -- "$SNAPSHOT_TMP" ;; esac
 }
 trap cleanup_snapshot_tmp EXIT
 worktree_tree() { # <repo> <private-index>
@@ -77,7 +86,9 @@ worktree_tree() { # <repo> <private-index>
 for snapshot in patches/*.snapshot.patch; do
   [ -f "$snapshot" ] || continue
   key="$(basename "$snapshot" .snapshot.patch)"
-  repo="src/${key//__//}"
+  relative="${key//__//}"
+  [ -n "${SELECTED_REPOSITORIES[$relative]+present}" ] || continue
+  repo="src/$relative"
   if [ ! -d "$repo/.git" ]; then
     echo "== $repo: not checked out for worktree snapshot"
     fail=1

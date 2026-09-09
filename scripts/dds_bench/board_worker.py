@@ -105,25 +105,17 @@ def main(root):
         with open(root/'resources.jsonl', 'w') as resources:
             for item in config['processes']:
                 p = launch(item)
-                if item['name'] == 'broker':
-                    until = time.monotonic()+15
-                    socket = Path(config['env']['MDDS_BROKER_ROOT'])/'d83/b.sock'
-                    while p.poll() is None and not socket.exists() and time.monotonic()<until:
-                        time.sleep(.05)
-                    if p.poll() is not None or not socket.exists():
-                        raise RuntimeError('broker did not create domain socket')
-                else:
-                    ready=Path(item['argv'][-1])
-                    until=time.monotonic()+15
-                    while p.poll() is None and not ready.exists() and time.monotonic()<until:
-                        time.sleep(.02)
-                    if not ready.exists():
-                        raise RuntimeError('benchmark initialization failed: '+item['name'])
+                ready=Path(item['argv'][-1])
+                until=time.monotonic()+15
+                while p.poll() is None and not ready.exists() and time.monotonic()<until:
+                    time.sleep(.02)
+                if not ready.exists():
+                    raise RuntimeError('benchmark initialization failed: '+item['name'])
             peak = 0
             while not stopping and time.monotonic()-started < config['wall_seconds']:
                 info = snapshot()
                 info['processes'] = [s for p, _, _ in children if p.poll() is None and (s := proc(p.pid))]
-                # Include all threads in process CPU ticks; broker is a separate listed process.
+                # Include all threads in process CPU ticks.
                 info['rss_total_kib'] = sum(x['rss_kib'] for x in info['processes'])
                 peak = max(peak, info['rss_total_kib'])
                 resources.write(json.dumps(info)+'\n'); resources.flush()
@@ -136,7 +128,7 @@ def main(root):
                     if targets:
                         status['restart_ns'] = time.monotonic_ns()
                     restarted = True
-                apps = [p for p, item, _ in children if item['name'] != 'broker']
+                apps = [p for p, _, _ in children]
                 if apps and all(p.poll() is not None for p in apps):
                     status['reason'] = 'children_completed'; break
                 if (root/'stop').exists():

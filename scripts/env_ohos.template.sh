@@ -1,18 +1,12 @@
 # Generated deployment environment for KaihongOS/RK3588A.
-# deploy_ohos.sh prepends MDDS_DEPLOY_EXPECTED_MARKER to this template.
+# deploy_ohos.sh prepends ROS2_DEPLOY_EXPECTED_MARKER to this template.
 
 export ROS2_HOME="${ROS2_HOME:-/data/local/tmp/ros2}"
-if [ -z "${MDDS_DEPLOY_EXPECTED_MARKER:-}" ] || \
-   [ ! -f "$ROS2_HOME/.mdds_deploy_complete" ] || \
-   [ -L "$ROS2_HOME/.mdds_deploy_complete" ] || \
-   [ "$(cat "$ROS2_HOME/.mdds_deploy_complete" 2>/dev/null)" != "$MDDS_DEPLOY_EXPECTED_MARKER" ]; then
+if [ -z "${ROS2_DEPLOY_EXPECTED_MARKER:-}" ] || \
+   [ ! -f "$ROS2_HOME/.ros2_deploy_complete" ] || \
+   [ -L "$ROS2_HOME/.ros2_deploy_complete" ] || \
+   [ "$(cat "$ROS2_HOME/.ros2_deploy_complete" 2>/dev/null)" != "$ROS2_DEPLOY_EXPECTED_MARKER" ]; then
   echo "ERROR: incomplete or mixed ROS 2 deployment at $ROS2_HOME" >&2
-  return 70 2>/dev/null || exit 70
-fi
-
-export MDDS_TOKEN_EXEC="$ROS2_HOME/bin/mdds_token_exec"
-if [ ! -x "$MDDS_TOKEN_EXEC" ] || [ -L "$MDDS_TOKEN_EXEC" ]; then
-  echo "ERROR: required per-process MDDS token launcher is missing: $MDDS_TOKEN_EXEC" >&2
   return 70 2>/dev/null || exit 70
 fi
 
@@ -48,12 +42,6 @@ fi
 export QT_PLUGIN_PATH="$ROS2_HOME/plugins"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 
-# Only the launched child receives the native AccessToken.  libmdds itself
-# never mutates the identity of a composable ROS process.
-mdds_exec() {
-  "$MDDS_TOKEN_EXEC" -- "$@"
-}
-
 export ROS2_TALKER_RAW="$ROS2_HOME/Lib/demo_nodes_cpp/talker"
 export ROS2_LISTENER_RAW="$ROS2_HOME/Lib/demo_nodes_cpp/listener"
 export ROS2_TALKER="$ROS2_TALKER_RAW"
@@ -81,13 +69,13 @@ ros2() {
     echo "ERROR: ROS 2 CLI overlay provenance is not this deployment" >&2
     return 70
   fi
-  "$MDDS_TOKEN_EXEC" -- python3.12 -c \
+  python3.12 -c \
     'import sys; from ros2cli.cli import main; sys.exit(main())' "$@"
 }
 
 rqt() {
   LD_PRELOAD="$ROS2_HOME/Lib/site-packages/qt_gui_cpp/libqt_gui_cpp_sip.so${LD_PRELOAD:+:$LD_PRELOAD}" \
-    "$MDDS_TOKEN_EXEC" -- python3.12 -c '
+    python3.12 -c '
 import sys, os
 from rqt_gui.main import main
 try:

@@ -62,7 +62,7 @@ receipt_sha="$(sha256sum "$accepted/build_receipt.json" | cut -d ' ' -f1)"
 expect_rejected "deployment did not pin an accepted generic RMW implementation" \
   "$accepted" "$tmp_root/rmw.out" \
   ROS2_PYTHON_ROOT="$python_root" \
-  RMW_IMPLEMENTATION=rmw_mdds_cpp \
+  RMW_IMPLEMENTATION=unsupported_rmw \
   ROS2_DEPLOY_EXPECTED_MARKER=expected \
   ROS2_BUILD_RECEIPT_SHA256="$receipt_sha" \
   ROS2_RELEASE_PROVENANCE_SHA256="$provenance_sha"

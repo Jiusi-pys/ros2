@@ -14,8 +14,6 @@ Current generic-port verification is deliberately reported by layer:
   tracing events and process cleanup are mandatory generic runtime gates.
 - GUI is experimental; SHM is disabled by default and experimental. DDS
   Security/TLS and Connext are outside this release profile.
-- `rmw_mdds`, `mdds` and `mdds_gateway` are excluded by default and retain
-  their independent workflows. They are not prerequisites for generic ROS 2.
 
 See [the support matrix](docs/kaihongos_support_matrix.md) for evidence limits.
 
@@ -46,13 +44,13 @@ release must retain a separately signed FastDDS evidence manifest and archive
 SHA-256 in an independent record or WORM store; a local hash seal alone is not
 release authorization.
 
-Source locking covers both the 111 top-level repositories and build-time
+Source locking covers both the manifest's top-level repositories and build-time
 vendor downloads. The OHOS `ament_vendor` hook resolves mutable upstream tags
 through `cmake/ohos-vendor-sources.lock.json`, rejects unknown tag/URL pairs,
 and checks archive SHA-256 before extraction. Foonathan's separate download
 is pinned to a full public commit. Non-OHOS vendor behavior is unchanged.
 
-The OHOS work lives on the `jazzy_ohos` branch.
+This standalone OHOS workspace lives on the `stand` branch, based on `jazzy_ohos`.
 
 ## Quick start
 
@@ -60,7 +58,7 @@ Prerequisites: Windows host with Git Bash, [Pixi](https://pixi.sh/), the
 OpenHarmony command-line-tools SDK (NDK), and `hdc` access to the board(s).
 
 ```bash
-git clone -b jazzy_ohos git@github.com:Jiusi-pys/ros2.git
+git clone -b stand git@github.com:Jiusi-pys/ros2.git
 cd ros2
 pixi install --locked
 
@@ -166,17 +164,18 @@ an acceptance entry point. Its historical prefix assertion rejects even the
 current isolated deployment. The replacement rejects the legacy runtime and
 other verification prefixes while allowing only the expected current prefix.
 
-## Legacy MDDS-specific workflow
+## Board environment for the compatibility deployment
 
-The following launcher rules apply to `deploy_ohos.sh` and the separate MDDS
-profile, not to `deploy_ohos_generic.sh` or its direct Fast DDS executables.
+`deploy_ohos.sh` stages the compatibility prefix at `/data/local/tmp/ros2`.
+The generic release workflow above uses `deploy_ohos_generic.sh` and its own
+isolated prefix.
 
 On the board, run commands only when the deployed environment was accepted:
 
 ```sh
 if . /data/local/tmp/ros2/env.sh; then
   ros2 --help                       # deployment-owned wrapper, not /usr/local/bin/ros2
-  mdds_exec "$ROS2_TALKER_RAW"     # token is scoped to this child process
+  "$ROS2_TALKER_RAW"
 fi
 ```
 
@@ -184,12 +183,6 @@ Automated callers must use `. /data/local/tmp/ros2/env.sh || exit 70` (or an
 equivalent checked conditional). A failed source can return to its caller;
 running the next command unconditionally could reuse an inherited stale
 overlay.
-
-The shared `libmdds.so` never grants or changes the caller's process token.
-Every DSoftBus process must enter through `mdds_token_exec`/`mdds_exec`.
-The default board suite runs, in order on one isolated domain, one explicitly
-unprivileged fail-closed probe and then the just-built package launcher; both
-must appear in the exact archived verdict set.
 
 See [AGENTS.md](AGENTS.md) for the full porting details (toolchain, musl
 quirks, Qt/OGRE recipes, board-test infrastructure, debugging tips).
@@ -206,15 +199,14 @@ are represented in `patches/` as:
   index. The real subrepo index/worktree is not changed.
 
 - `./scripts/export_patches.sh` — export all unpublished commits and current
-  worktree snapshots, including Jiusi-owned repos whose HEAD is not yet on
-  their remote.
+  worktree snapshots from the repositories listed in the manifest.
 - `pixi run python scripts/freeze_ros2_repos.py` — regenerate the immutable
   base manifest after exporting patches.
 - `./scripts/apply_patches.sh` — replay `patches/` onto a fresh
   locked-manifest checkout and verify the resulting commit/worktree trees.
 - `./scripts/verify_fresh_lock_replay.sh /path/to/empty-dir` — perform a real
   all-repository locked import, apply every series/snapshot, and compare all
-  111 reconstructed worktree trees with the source workspace. The evidence
+  reconstructed worktree trees with the source workspace. The evidence
   directory is intentionally retained.
 
 Deliberately refreshing against upstream ROS 2 (development, not release

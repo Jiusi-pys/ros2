@@ -5,11 +5,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TMP_BASE="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-TMP_ROOT="$(mktemp -d "$TMP_BASE/mdds-env-source-test.XXXXXX")"
-case "$TMP_ROOT" in "$TMP_BASE"/mdds-env-source-test.*) ;; *) exit 70 ;; esac
+TMP_ROOT="$(mktemp -d "$TMP_BASE/ros2-env-source-test.XXXXXX")"
+case "$TMP_ROOT" in "$TMP_BASE"/ros2-env-source-test.*) ;; *) exit 70 ;; esac
 cleanup() {
   case "$TMP_ROOT" in
-    "$TMP_BASE"/mdds-env-source-test.*) rm -rf -- "$TMP_ROOT" ;;
+    "$TMP_BASE"/ros2-env-source-test.*) rm -rf -- "$TMP_ROOT" ;;
   esac
 }
 trap cleanup EXIT
@@ -19,10 +19,10 @@ sentinel="$TMP_ROOT/stale-overlay-ran"
 template="$PWD/scripts/env_ohos.template.sh"
 output="$TMP_ROOT/rejected.out"
 rc=0
-MDDS_SENTINEL="$sentinel" sh -c '
-  ros2() { printf stale-overlay > "$MDDS_SENTINEL"; }
+ROS2_SENTINEL="$sentinel" sh -c '
+  ros2() { printf stale-overlay > "$ROS2_SENTINEL"; }
   export ROS2_HOME="$1"
-  export MDDS_DEPLOY_EXPECTED_MARKER=expected-marker
+  export ROS2_DEPLOY_EXPECTED_MARKER=expected-marker
   . "$2" || exit 70
   ros2 --help
 ' sh "$TMP_ROOT/mixed-overlay" "$template" >"$output" 2>&1 || rc=$?
@@ -37,10 +37,10 @@ if [ -e "$sentinel" ]; then
 fi
 grep -Fq 'ERROR: incomplete or mixed ROS 2 deployment' "$output"
 
-printf 'export MDDS_VALID_ENV=accepted\n' > "$TMP_ROOT/valid-env.sh"
-MDDS_SENTINEL="$TMP_ROOT/valid-ran" sh -c '
+printf 'export ROS2_VALID_ENV=accepted\n' > "$TMP_ROOT/valid-env.sh"
+ROS2_SENTINEL="$TMP_ROOT/valid-ran" sh -c '
   . "$1" || exit 70
-  printf "%s" "$MDDS_VALID_ENV" > "$MDDS_SENTINEL"
+  printf "%s" "$ROS2_VALID_ENV" > "$ROS2_SENTINEL"
 ' sh "$TMP_ROOT/valid-env.sh"
 if [ "$(cat "$TMP_ROOT/valid-ran")" != accepted ]; then
   echo "ERROR: valid env did not execute the guarded payload" >&2

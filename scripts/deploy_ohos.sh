@@ -2,10 +2,10 @@
 # Hash-sealed, rollback-capable full ROS 2 deployment for KaihongOS/RK3588A.
 # Run from the workspace root in Git Bash:
 #   ./scripts/deploy_ohos.sh [board ...]
-# Optional: RMW=rmw_mdds (or another safe identifier) pins the default RMW.
+# Optional: RMW=rmw_fastrtps_cpp (or another safe identifier) pins the default RMW.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-. scripts/lib/mdds_sha256_manifest.sh
+. scripts/lib/ros2_sha256_manifest.sh
 
 HDC="${HDC:-/c/Users/17715/Downloads/commandline-tools-windows-x64-6.1.1.300/command-line-tools/sdk/default/openharmony/toolchains/hdc.exe}"
 RMW="${RMW:-}"
@@ -47,7 +47,7 @@ done
   echo "ERROR: environment template must be one regular non-symlink file: $ENV_TEMPLATE" >&2
   exit 1
 }
-for reserved in deploy_manifest.sha256 env.sh .mdds_deploy_complete .mdds-activity-lock; do
+for reserved in deploy_manifest.sha256 env.sh .ros2_deploy_complete .ros2-activity-lock; do
   if [[ -e "install_ohos/$reserved" || -L "install_ohos/$reserved" ]]; then
     echo "ERROR: install_ohos contains reserved deployment control path: $reserved" >&2
     exit 1
@@ -55,13 +55,8 @@ for reserved in deploy_manifest.sha256 env.sh .mdds_deploy_complete .mdds-activi
 done
 
 required_paths=(
-  bin/mdds_token_exec
   Lib/demo_nodes_cpp/talker
   Lib/demo_nodes_cpp/listener
-  Lib/libmdds.so
-  Lib/librmw_mdds.so
-  Lib/mdds_gateway/mdds_gateway
-  share/rmw_mdds/config/ohos_dsoftbus.env
 )
 for path in "${required_paths[@]}"; do
   if [[ ! -f "install_ohos/$path" || -L "install_ohos/$path" ]]; then
@@ -92,10 +87,10 @@ fi
   find install_ohos/share/ament_index -type f -exec sed -i 's/\r$//' {} +
 
 TMP_BASE="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-HOST_TMP="$(mktemp -d "$TMP_BASE/mdds-full-deploy.XXXXXX")"
-case "$HOST_TMP" in "$TMP_BASE"/mdds-full-deploy.*) ;; *) exit 70 ;; esac
+HOST_TMP="$(mktemp -d "$TMP_BASE/ros2-full-deploy.XXXXXX")"
+case "$HOST_TMP" in "$TMP_BASE"/ros2-full-deploy.*) ;; *) exit 70 ;; esac
 cleanup_host() {
-  case "$HOST_TMP" in "$TMP_BASE"/mdds-full-deploy.*) rm -rf -- "$HOST_TMP" ;; esac
+  case "$HOST_TMP" in "$TMP_BASE"/ros2-full-deploy.*) rm -rf -- "$HOST_TMP" ;; esac
 }
 trap cleanup_host EXIT
 MANIFEST="$HOST_TMP/install.sha256"
@@ -105,7 +100,7 @@ ARCHIVE_TMP="$HOST_TMP/install.tar.gz"
 
 (cd install_ohos && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$MANIFEST_RAW"
 [ -s "$MANIFEST_RAW" ] || { echo "ERROR: generated raw install manifest is empty" >&2; exit 1; }
-mdds_normalize_sha256_manifest "$MANIFEST_RAW" "$MANIFEST"
+ros2_normalize_sha256_manifest "$MANIFEST_RAW" "$MANIFEST"
 [ -s "$MANIFEST" ] || { echo "ERROR: generated install manifest is empty" >&2; exit 1; }
 # Prove the normalized text is still accepted by the producer-side
 # implementation before it crosses the host/board tool boundary.
@@ -115,14 +110,14 @@ tar -C install_ohos -czf "$ARCHIVE_TMP" .
 ARCHIVE_SHA="$(sha256sum "$ARCHIVE_TMP" | cut -d ' ' -f1)"
 ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_TMP" | tr -d ' ')"
 
-RUN_ID="${MDDS_DEPLOY_RUN_ID:-deploy_$(date +%Y%m%dT%H%M%S)_${RANDOM}_${RANDOM}_$$}"
+RUN_ID="${ROS2_DEPLOY_RUN_ID:-deploy_$(date +%Y%m%dT%H%M%S)_${RANDOM}_${RANDOM}_$$}"
 [[ "$RUN_ID" =~ ^[A-Za-z0-9_.-]+$ ]] || {
-  echo "ERROR: MDDS_DEPLOY_RUN_ID must contain only A-Za-z0-9_.-" >&2
+  echo "ERROR: ROS2_DEPLOY_RUN_ID must contain only A-Za-z0-9_.-" >&2
   exit 2
 }
-MARKER="MDDS_DEPLOY_COMPLETE V=1 RUN_ID=$RUN_ID ARCHIVE_SHA256=$ARCHIVE_SHA MANIFEST_SHA256=$MANIFEST_SHA"
+MARKER="ROS2_DEPLOY_COMPLETE V=1 RUN_ID=$RUN_ID ARCHIVE_SHA256=$ARCHIVE_SHA MANIFEST_SHA256=$MANIFEST_SHA"
 {
-  printf 'MDDS_DEPLOY_EXPECTED_MARKER=%q\n' "$MARKER"
+  printf 'ROS2_DEPLOY_EXPECTED_MARKER=%q\n' "$MARKER"
   cat "$ENV_TEMPLATE"
   [ -z "$RMW" ] || printf 'export RMW_IMPLEMENTATION=%s\n' "$RMW"
 } > "$ENV_FILE"
@@ -169,7 +164,7 @@ send_verified() { # board local remote expected
 
 release_owned_lock() { # board owner
   local board="$1" owner="$2" out
-  out="$(remote "$board" "lock='$DEVICE_DIR/.mdds-activity-lock'; if test -d \"\$lock\" && test ! -L \"\$lock\" && test -f \"\$lock/owner\" && test ! -L \"\$lock/owner\" && grep -Fqx '$owner' \"\$lock/owner\" && test \"\$(find \"\$lock\" -mindepth 1 -maxdepth 1)\" = \"\$lock/owner\"; then if rm -f \"\$lock/owner\" && rmdir \"\$lock\"; then printf DEPLOY_LOCK_RELEASED; else printf DEPLOY_LOCK_RELEASE_FAILED; fi; else printf DEPLOY_LOCK_NOT_OWNED; fi" || true)"
+  out="$(remote "$board" "lock='$DEVICE_DIR/.ros2-activity-lock'; if test -d \"\$lock\" && test ! -L \"\$lock\" && test -f \"\$lock/owner\" && test ! -L \"\$lock/owner\" && grep -Fqx '$owner' \"\$lock/owner\" && test \"\$(find \"\$lock\" -mindepth 1 -maxdepth 1)\" = \"\$lock/owner\"; then if rm -f \"\$lock/owner\" && rmdir \"\$lock\"; then printf DEPLOY_LOCK_RELEASED; else printf DEPLOY_LOCK_RELEASE_FAILED; fi; else printf DEPLOY_LOCK_NOT_OWNED; fi" || true)"
   out="$(strict_line "$out" || true)"
   printf 'DEPLOY_LOCK_RELEASE board=%s owner=%s result=%s\n' \
     "$board" "$owner" "${out:-NO_MARKER}"
@@ -179,7 +174,7 @@ release_owned_lock() { # board owner
 deploy_board() {
   local board="$1" nonce owner stage backup archive_remote manifest_remote env_remote out
   nonce="${RUN_ID}_${board}"
-  owner="MDDS_ACTIVITY_LOCK MODE=DEPLOY RUN_ID=$RUN_ID NONCE=$nonce OWNER=deploy_ohos"
+  owner="ROS2_ACTIVITY_LOCK MODE=DEPLOY RUN_ID=$RUN_ID NONCE=$nonce OWNER=deploy_ohos"
   stage="$DEVICE_PARENT/.ros2-stage-$nonce"
   backup="$DEVICE_PARENT/.ros2-backup-$nonce"
   archive_remote="$DEVICE_PARENT/.ros2-archive-$nonce.tar.gz"
@@ -187,7 +182,7 @@ deploy_board() {
   env_remote="$DEVICE_PARENT/.ros2-env-$nonce.sh"
 
   echo "== deploy to $board =="
-  out="$(remote "$board" "if mkdir -p '$DEVICE_DIR' && test -d '$DEVICE_DIR' && test ! -L '$DEVICE_DIR' && (umask 077; mkdir '$DEVICE_DIR/.mdds-activity-lock') 2>/dev/null; then if (umask 077; set -C; printf '%s\\n' '$owner' > '$DEVICE_DIR/.mdds-activity-lock/owner') 2>/dev/null && test -d '$DEVICE_DIR/.mdds-activity-lock' && test ! -L '$DEVICE_DIR/.mdds-activity-lock' && test -f '$DEVICE_DIR/.mdds-activity-lock/owner' && test ! -L '$DEVICE_DIR/.mdds-activity-lock/owner' && test \"\$(cat '$DEVICE_DIR/.mdds-activity-lock/owner' 2>/dev/null)\" = '$owner' && test \"\$(find '$DEVICE_DIR/.mdds-activity-lock' -mindepth 1 -maxdepth 1)\" = '$DEVICE_DIR/.mdds-activity-lock/owner'; then printf DEPLOY_LOCK_ACQUIRED; else printf DEPLOY_LOCK_OWNER_FAILED; fi; else printf DEPLOY_LOCK_BUSY; fi" || true)"
+  out="$(remote "$board" "if mkdir -p '$DEVICE_DIR' && test -d '$DEVICE_DIR' && test ! -L '$DEVICE_DIR' && (umask 077; mkdir '$DEVICE_DIR/.ros2-activity-lock') 2>/dev/null; then if (umask 077; set -C; printf '%s\\n' '$owner' > '$DEVICE_DIR/.ros2-activity-lock/owner') 2>/dev/null && test -d '$DEVICE_DIR/.ros2-activity-lock' && test ! -L '$DEVICE_DIR/.ros2-activity-lock' && test -f '$DEVICE_DIR/.ros2-activity-lock/owner' && test ! -L '$DEVICE_DIR/.ros2-activity-lock/owner' && test \"\$(cat '$DEVICE_DIR/.ros2-activity-lock/owner' 2>/dev/null)\" = '$owner' && test \"\$(find '$DEVICE_DIR/.ros2-activity-lock' -mindepth 1 -maxdepth 1)\" = '$DEVICE_DIR/.ros2-activity-lock/owner'; then printf DEPLOY_LOCK_ACQUIRED; else printf DEPLOY_LOCK_OWNER_FAILED; fi; else printf DEPLOY_LOCK_BUSY; fi" || true)"
   out="$(strict_line "$out" || true)"
   [ "$out" = DEPLOY_LOCK_ACQUIRED ] || {
     # The remote transaction may have created the lock and written our exact
@@ -217,7 +212,7 @@ deploy_board() {
     return 1
   fi
 
-  out="$(remote "$board" "set -- \$(wc -c < '$archive_remote' 2>/dev/null); remote_bytes=\$1; if test \"\$(sha256sum '$archive_remote' | cut -d ' ' -f1)\" != '$ARCHIVE_SHA' || test \"\$remote_bytes\" != '$ARCHIVE_BYTES'; then printf DEPLOY_ARCHIVE_BAD; elif ! tar -xzf '$archive_remote' -C '$stage'; then printf DEPLOY_EXTRACT_FAILED; elif ! cp '$manifest_remote' '$stage/deploy_manifest.sha256' || ! cp '$env_remote' '$stage/env.sh'; then printf DEPLOY_CONTROL_COPY_FAILED; elif test \"\$(sha256sum '$stage/deploy_manifest.sha256' | cut -d ' ' -f1)\" != '$MANIFEST_SHA' || test \"\$(sha256sum '$stage/env.sh' | cut -d ' ' -f1)\" != '$ENV_SHA'; then printf DEPLOY_CONTROL_HASH_BAD; elif ! (cd '$stage' && sha256sum -c deploy_manifest.sha256 >/dev/null 2>&1); then printf DEPLOY_TREE_HASH_BAD; elif ! test -f '$stage/bin/mdds_token_exec' || test -L '$stage/bin/mdds_token_exec' || ! test -f '$stage/Lib/demo_nodes_cpp/talker' || test -L '$stage/Lib/demo_nodes_cpp/talker' || ! test -f '$stage/Lib/demo_nodes_cpp/listener' || test -L '$stage/Lib/demo_nodes_cpp/listener' || ! test -f '$stage/Lib/libmdds.so' || test -L '$stage/Lib/libmdds.so' || ! test -f '$stage/Lib/librmw_mdds.so' || test -L '$stage/Lib/librmw_mdds.so' || ! test -f '$stage/Lib/mdds_gateway/mdds_gateway' || test -L '$stage/Lib/mdds_gateway/mdds_gateway' || ! test -f '$stage/share/rmw_mdds/config/ohos_dsoftbus.env' || test -L '$stage/share/rmw_mdds/config/ohos_dsoftbus.env'; then printf DEPLOY_REQUIRED_MISSING; elif ! find '$stage/Lib' -type f -exec chmod +x {} + || ! find '$stage/bin' -type f -exec chmod +x {} + || ! chmod +x '$stage/env.sh'; then printf DEPLOY_CHMOD_FAILED; elif { test -e '$stage/lib' || test -L '$stage/lib'; } && ! test -L '$stage/lib'; then printf DEPLOY_LIB_CONFLICT; elif ! test -e '$stage/lib' && ! test -L '$stage/lib' && ! ln -s Lib '$stage/lib'; then printf DEPLOY_LIB_LINK_FAILED; elif ! (umask 077; mkdir '$stage/.mdds-activity-lock') || ! (umask 077; set -C; printf '%s\\n' '$owner' > '$stage/.mdds-activity-lock/owner') 2>/dev/null || test \"\$(cat '$stage/.mdds-activity-lock/owner' 2>/dev/null)\" != '$owner'; then printf DEPLOY_STAGE_LOCK_FAILED; elif ! (umask 077; set -C; printf '%s\\n' '$MARKER' > '$stage/.mdds_deploy_complete') 2>/dev/null; then printf DEPLOY_MARKER_FAILED; else printf DEPLOY_STAGE_VERIFIED; fi" || true)"
+  out="$(remote "$board" "set -- \$(wc -c < '$archive_remote' 2>/dev/null); remote_bytes=\$1; if test \"\$(sha256sum '$archive_remote' | cut -d ' ' -f1)\" != '$ARCHIVE_SHA' || test \"\$remote_bytes\" != '$ARCHIVE_BYTES'; then printf DEPLOY_ARCHIVE_BAD; elif ! tar -xzf '$archive_remote' -C '$stage'; then printf DEPLOY_EXTRACT_FAILED; elif ! cp '$manifest_remote' '$stage/deploy_manifest.sha256' || ! cp '$env_remote' '$stage/env.sh'; then printf DEPLOY_CONTROL_COPY_FAILED; elif test \"\$(sha256sum '$stage/deploy_manifest.sha256' | cut -d ' ' -f1)\" != '$MANIFEST_SHA' || test \"\$(sha256sum '$stage/env.sh' | cut -d ' ' -f1)\" != '$ENV_SHA'; then printf DEPLOY_CONTROL_HASH_BAD; elif ! (cd '$stage' && sha256sum -c deploy_manifest.sha256 >/dev/null 2>&1); then printf DEPLOY_TREE_HASH_BAD; elif ! test -f '$stage/Lib/demo_nodes_cpp/talker' || test -L '$stage/Lib/demo_nodes_cpp/talker' || ! test -f '$stage/Lib/demo_nodes_cpp/listener' || test -L '$stage/Lib/demo_nodes_cpp/listener'; then printf DEPLOY_REQUIRED_MISSING; elif ! find '$stage/Lib' -type f -exec chmod +x {} + || ! find '$stage/bin' -type f -exec chmod +x {} + || ! chmod +x '$stage/env.sh'; then printf DEPLOY_CHMOD_FAILED; elif { test -e '$stage/lib' || test -L '$stage/lib'; } && ! test -L '$stage/lib'; then printf DEPLOY_LIB_CONFLICT; elif ! test -e '$stage/lib' && ! test -L '$stage/lib' && ! ln -s Lib '$stage/lib'; then printf DEPLOY_LIB_LINK_FAILED; elif ! (umask 077; mkdir '$stage/.ros2-activity-lock') || ! (umask 077; set -C; printf '%s\\n' '$owner' > '$stage/.ros2-activity-lock/owner') 2>/dev/null || test \"\$(cat '$stage/.ros2-activity-lock/owner' 2>/dev/null)\" != '$owner'; then printf DEPLOY_STAGE_LOCK_FAILED; elif ! (umask 077; set -C; printf '%s\\n' '$MARKER' > '$stage/.ros2_deploy_complete') 2>/dev/null; then printf DEPLOY_MARKER_FAILED; else printf DEPLOY_STAGE_VERIFIED; fi" || true)"
   out="$(strict_line "$out" || true)"
   if [ "$out" != DEPLOY_STAGE_VERIFIED ]; then
     remote "$board" "rm -rf '$stage'; rm -f '$archive_remote' '$manifest_remote' '$env_remote'" >/dev/null 2>&1 || true
@@ -239,10 +234,10 @@ deploy_board() {
     return 1
   fi
 
-  out="$(remote "$board" "if test \"\$(cat '$DEVICE_DIR/.mdds_deploy_complete' 2>/dev/null)\" = '$MARKER' && test \"\$(sha256sum '$DEVICE_DIR/deploy_manifest.sha256' | cut -d ' ' -f1)\" = '$MANIFEST_SHA' && test \"\$(sha256sum '$DEVICE_DIR/env.sh' | cut -d ' ' -f1)\" = '$ENV_SHA' && (cd '$DEVICE_DIR' && sha256sum -c deploy_manifest.sha256 >/dev/null 2>&1) && test -x '$DEVICE_DIR/bin/mdds_token_exec' && test -x '$DEVICE_DIR/Lib/demo_nodes_cpp/talker' && test -x '$DEVICE_DIR/Lib/demo_nodes_cpp/listener' && test -x '$DEVICE_DIR/Lib/mdds_gateway/mdds_gateway' && . '$DEVICE_DIR/env.sh' >/dev/null 2>&1 && test \"\$ROS2_CLI_WRAPPER\" = '$DEVICE_DIR/env.sh:ros2'; then printf DEPLOY_POSTCHECK_OK; else printf DEPLOY_POSTCHECK_FAILED; fi" || true)"
+  out="$(remote "$board" "if test \"\$(cat '$DEVICE_DIR/.ros2_deploy_complete' 2>/dev/null)\" = '$MARKER' && test \"\$(sha256sum '$DEVICE_DIR/deploy_manifest.sha256' | cut -d ' ' -f1)\" = '$MANIFEST_SHA' && test \"\$(sha256sum '$DEVICE_DIR/env.sh' | cut -d ' ' -f1)\" = '$ENV_SHA' && (cd '$DEVICE_DIR' && sha256sum -c deploy_manifest.sha256 >/dev/null 2>&1) && test -x '$DEVICE_DIR/Lib/demo_nodes_cpp/talker' && test -x '$DEVICE_DIR/Lib/demo_nodes_cpp/listener' && . '$DEVICE_DIR/env.sh' >/dev/null 2>&1 && test \"\$ROS2_CLI_WRAPPER\" = '$DEVICE_DIR/env.sh:ros2'; then printf DEPLOY_POSTCHECK_OK; else printf DEPLOY_POSTCHECK_FAILED; fi" || true)"
   out="$(strict_line "$out" || true)"
   if [ "$out" != DEPLOY_POSTCHECK_OK ]; then
-    out="$(remote "$board" "failed='$DEVICE_PARENT/.ros2-failed-$nonce'; if test -f '$DEVICE_DIR/.mdds-activity-lock/owner' && test ! -L '$DEVICE_DIR/.mdds-activity-lock/owner' && grep -Fqx '$owner' '$DEVICE_DIR/.mdds-activity-lock/owner' && test -d '$backup' && test ! -L '$backup' && test -f '$backup/.mdds-activity-lock/owner' && test ! -L '$backup/.mdds-activity-lock/owner' && grep -Fqx '$owner' '$backup/.mdds-activity-lock/owner' && ! test -e \"\$failed\" && ! test -L \"\$failed\"; then if mv '$DEVICE_DIR' \"\$failed\"; then if mv '$backup' '$DEVICE_DIR'; then if rm -rf \"\$failed\" && rm -f '$archive_remote' '$manifest_remote' '$env_remote'; then printf DEPLOY_POSTCHECK_ROLLED_BACK; else printf DEPLOY_POSTCHECK_ROLLBACK_CLEANUP_FAILED; fi; else mv \"\$failed\" '$DEVICE_DIR' >/dev/null 2>&1 || true; printf DEPLOY_POSTCHECK_ROLLBACK_FAILED; fi; else printf DEPLOY_POSTCHECK_ROLLBACK_FAILED; fi; else printf DEPLOY_POSTCHECK_ROLLBACK_PRECONDITION_FAILED; fi" || true)"
+    out="$(remote "$board" "failed='$DEVICE_PARENT/.ros2-failed-$nonce'; if test -f '$DEVICE_DIR/.ros2-activity-lock/owner' && test ! -L '$DEVICE_DIR/.ros2-activity-lock/owner' && grep -Fqx '$owner' '$DEVICE_DIR/.ros2-activity-lock/owner' && test -d '$backup' && test ! -L '$backup' && test -f '$backup/.ros2-activity-lock/owner' && test ! -L '$backup/.ros2-activity-lock/owner' && grep -Fqx '$owner' '$backup/.ros2-activity-lock/owner' && ! test -e \"\$failed\" && ! test -L \"\$failed\"; then if mv '$DEVICE_DIR' \"\$failed\"; then if mv '$backup' '$DEVICE_DIR'; then if rm -rf \"\$failed\" && rm -f '$archive_remote' '$manifest_remote' '$env_remote'; then printf DEPLOY_POSTCHECK_ROLLED_BACK; else printf DEPLOY_POSTCHECK_ROLLBACK_CLEANUP_FAILED; fi; else mv \"\$failed\" '$DEVICE_DIR' >/dev/null 2>&1 || true; printf DEPLOY_POSTCHECK_ROLLBACK_FAILED; fi; else printf DEPLOY_POSTCHECK_ROLLBACK_FAILED; fi; else printf DEPLOY_POSTCHECK_ROLLBACK_PRECONDITION_FAILED; fi" || true)"
     out="$(strict_line "$out" || true)"
     if [ "$out" = DEPLOY_POSTCHECK_ROLLED_BACK ] || [ "$out" = DEPLOY_POSTCHECK_ROLLBACK_CLEANUP_FAILED ]; then
       release_owned_lock "$board" "$owner" || \
@@ -252,7 +247,7 @@ deploy_board() {
     return 1
   fi
 
-  out="$(remote "$board" "if test -d '$DEVICE_DIR/.mdds-activity-lock' && test ! -L '$DEVICE_DIR/.mdds-activity-lock' && test -f '$DEVICE_DIR/.mdds-activity-lock/owner' && test ! -L '$DEVICE_DIR/.mdds-activity-lock/owner' && grep -Fqx '$owner' '$DEVICE_DIR/.mdds-activity-lock/owner' && test \"\$(find '$DEVICE_DIR/.mdds-activity-lock' -mindepth 1 -maxdepth 1)\" = '$DEVICE_DIR/.mdds-activity-lock/owner'; then if rm -rf '$backup' && rm -f '$archive_remote' '$manifest_remote' '$env_remote' && rm -f '$DEVICE_DIR/.mdds-activity-lock/owner' && rmdir '$DEVICE_DIR/.mdds-activity-lock'; then printf DEPLOY_FINALIZED; else printf DEPLOY_FINALIZE_CLEANUP_FAILED; fi; else printf DEPLOY_FINALIZE_NOT_OWNED; fi" || true)"
+  out="$(remote "$board" "if test -d '$DEVICE_DIR/.ros2-activity-lock' && test ! -L '$DEVICE_DIR/.ros2-activity-lock' && test -f '$DEVICE_DIR/.ros2-activity-lock/owner' && test ! -L '$DEVICE_DIR/.ros2-activity-lock/owner' && grep -Fqx '$owner' '$DEVICE_DIR/.ros2-activity-lock/owner' && test \"\$(find '$DEVICE_DIR/.ros2-activity-lock' -mindepth 1 -maxdepth 1)\" = '$DEVICE_DIR/.ros2-activity-lock/owner'; then if rm -rf '$backup' && rm -f '$archive_remote' '$manifest_remote' '$env_remote' && rm -f '$DEVICE_DIR/.ros2-activity-lock/owner' && rmdir '$DEVICE_DIR/.ros2-activity-lock'; then printf DEPLOY_FINALIZED; else printf DEPLOY_FINALIZE_CLEANUP_FAILED; fi; else printf DEPLOY_FINALIZE_NOT_OWNED; fi" || true)"
   out="$(strict_line "$out" || true)"
   [ "$out" = DEPLOY_FINALIZED ] || {
     echo "ERROR: deployment committed but cleanup/lock release is unproven on $board: ${out:-NO_MARKER}" >&2

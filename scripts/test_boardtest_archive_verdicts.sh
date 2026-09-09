@@ -21,23 +21,21 @@ make_case() { # <directory>
   pkg="$root/demo_pkg"
   mkdir -p "$pkg/.boardtest-verdicts"
   printf '%s\n' \
-    '# BOARDTEST_EXPECTED unprivileged_probe' \
-    '# BOARDTEST_TOKEN_MODE unprivileged_probe BYPASS_EXPECT_UNAUTHORIZED' \
-    '# BOARDTEST_EXPECTED privileged_probe' \
-    '# BOARDTEST_TOKEN_MODE privileged_probe LAUNCHER_UNDER_TEST' \
-    '# BOARDTEST_XML privileged_probe' \
+    '# BOARDTEST_EXPECTED first_case' \
+    '# BOARDTEST_EXPECTED second_case' \
+    '# BOARDTEST_XML second_case' \
     > "$root/driver.sh"
   printf '%s\n' \
-    'BOARDTEST unprivileged_probe PASS rc=0' \
-    'BOARDTEST privileged_probe PASS rc=0' \
+    'BOARDTEST first_case PASS rc=0' \
+    'BOARDTEST second_case PASS rc=0' \
     > "$root/stdout.log"
-  printf '%s\n' 'BOARDTEST privileged_probe PASS rc=0' \
-    > "$pkg/.boardtest-verdicts/privileged_probe"
-  printf '%s\n' 'BOARDTEST unprivileged_probe PASS rc=0' \
-    > "$pkg/.boardtest-verdicts/unprivileged_probe"
-  printf 'raw privileged\n' > "$pkg/privileged_probe.log"
-  printf 'raw unprivileged\n' > "$pkg/unprivileged_probe.log"
-  printf '<testsuites tests="1" failures="0"/>\n' > "$pkg/privileged_probe.xml"
+  printf '%s\n' 'BOARDTEST second_case PASS rc=0' \
+    > "$pkg/.boardtest-verdicts/second_case"
+  printf '%s\n' 'BOARDTEST first_case PASS rc=0' \
+    > "$pkg/.boardtest-verdicts/first_case"
+  printf 'raw privileged\n' > "$pkg/second_case.log"
+  printf 'raw unprivileged\n' > "$pkg/first_case.log"
+  printf '<testsuites tests="1" failures="0"/>\n' > "$pkg/second_case.xml"
 }
 
 archive_case() { # <directory>
@@ -55,8 +53,8 @@ verify_archive_verdicts demo_pkg "$valid/evidence.tar" \
 crlf_transport="$TMP_ROOT/crlf_transport"
 cp -a "$valid" "$crlf_transport"
 printf '%s\r\n' \
-  'BOARDTEST unprivileged_probe PASS rc=0' \
-  'BOARDTEST privileged_probe PASS rc=0' \
+  'BOARDTEST first_case PASS rc=0' \
+  'BOARDTEST second_case PASS rc=0' \
   > "$crlf_transport/stdout.log"
 archive_case "$crlf_transport"
 verify_archive_verdicts demo_pkg "$crlf_transport/evidence.tar" \
@@ -64,8 +62,8 @@ verify_archive_verdicts demo_pkg "$crlf_transport/evidence.tar" \
 
 embedded_cr="$TMP_ROOT/embedded_cr"
 cp -a "$valid" "$embedded_cr"
-printf 'BOARDTEST unprivileged_probe PASS\rrc=0\n%s\n' \
-  'BOARDTEST privileged_probe PASS rc=0' > "$embedded_cr/stdout.log"
+printf 'BOARDTEST first_case PASS\rrc=0\n%s\n' \
+  'BOARDTEST second_case PASS rc=0' > "$embedded_cr/stdout.log"
 archive_case "$embedded_cr"
 if verify_archive_verdicts demo_pkg "$embedded_cr/evidence.tar" \
     "$embedded_cr/stdout.log" "$embedded_cr/driver.sh" >/dev/null 2>&1; then
@@ -76,8 +74,8 @@ fi
 double_cr="$TMP_ROOT/double_cr"
 cp -a "$valid" "$double_cr"
 printf '%s\r\r\n%s\n' \
-  'BOARDTEST unprivileged_probe PASS rc=0' \
-  'BOARDTEST privileged_probe PASS rc=0' > "$double_cr/stdout.log"
+  'BOARDTEST first_case PASS rc=0' \
+  'BOARDTEST second_case PASS rc=0' > "$double_cr/stdout.log"
 archive_case "$double_cr"
 if verify_archive_verdicts demo_pkg "$double_cr/evidence.tar" \
     "$double_cr/stdout.log" "$double_cr/driver.sh" >/dev/null 2>&1; then
@@ -87,7 +85,7 @@ fi
 
 missing_xml="$TMP_ROOT/missing_xml"
 cp -a "$valid" "$missing_xml"
-rm -f "$missing_xml/demo_pkg/privileged_probe.xml"
+rm -f "$missing_xml/demo_pkg/second_case.xml"
 archive_case "$missing_xml"
 if verify_archive_verdicts demo_pkg "$missing_xml/evidence.tar" \
     "$missing_xml/stdout.log" "$missing_xml/driver.sh" >/dev/null 2>&1; then
@@ -107,8 +105,8 @@ fi
 
 different_record="$TMP_ROOT/different_record"
 cp -a "$valid" "$different_record"
-printf '%s\n' 'BOARDTEST privileged_probe FAIL rc=9' \
-  > "$different_record/demo_pkg/.boardtest-verdicts/privileged_probe"
+printf '%s\n' 'BOARDTEST second_case FAIL rc=9' \
+  > "$different_record/demo_pkg/.boardtest-verdicts/second_case"
 archive_case "$different_record"
 if verify_archive_verdicts demo_pkg "$different_record/evidence.tar" \
     "$different_record/stdout.log" "$different_record/driver.sh" >/dev/null 2>&1; then
@@ -119,13 +117,13 @@ fi
 reordered="$TMP_ROOT/reordered"
 cp -a "$valid" "$reordered"
 printf '%s\n' \
-  'BOARDTEST privileged_probe PASS rc=0' \
-  'BOARDTEST unprivileged_probe PASS rc=0' \
+  'BOARDTEST second_case PASS rc=0' \
+  'BOARDTEST first_case PASS rc=0' \
   > "$reordered/stdout.log"
 archive_case "$reordered"
 if verify_archive_verdicts demo_pkg "$reordered/evidence.tar" \
     "$reordered/stdout.log" "$reordered/driver.sh" >/dev/null 2>&1; then
-  echo "ERROR: reordered token-boundary verdicts were accepted" >&2
+  echo "ERROR: reordered test verdicts were accepted" >&2
   exit 1
 fi
 

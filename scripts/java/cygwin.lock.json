@@ -1,0 +1,136 @@
+{
+  "acquired_at_utc": "2026-09-10T14:06:26.245643+00:00",
+  "content_sha256": "B3FA28958A1A82B31B92DFF5C0EC2D418BFF6EF2102F95406D0C2246A80F2997",
+  "installer": {
+    "file": "setup-x86_64.exe",
+    "sha256": "2C9F2FB56E1FB687B5D9680AFA8F8B06E6214F0E483096AF0EAE1946431226C5",
+    "size": 1574328,
+    "url": "https://www.cygwin.com/setup-x86_64.exe"
+  },
+  "packages": {
+    "autoconf": {
+      "status": "OK",
+      "version": "15-3"
+    },
+    "bash": {
+      "status": "OK",
+      "version": "5.2.21-1"
+    },
+    "coreutils": {
+      "status": "OK",
+      "version": "9.0-1"
+    },
+    "diffutils": {
+      "status": "OK",
+      "version": "3.12-1"
+    },
+    "findutils": {
+      "status": "OK",
+      "version": "4.11.0-1"
+    },
+    "gawk": {
+      "status": "OK",
+      "version": "5.4.0-1"
+    },
+    "gcc-core": {
+      "status": "OK",
+      "version": "14.4.0-1"
+    },
+    "gcc-g++": {
+      "status": "OK",
+      "version": "14.4.0-1"
+    },
+    "grep": {
+      "status": "OK",
+      "version": "3.12-1"
+    },
+    "make": {
+      "status": "OK",
+      "version": "4.4.1-2"
+    },
+    "sed": {
+      "status": "OK",
+      "version": "4.10-1"
+    },
+    "tar": {
+      "status": "OK",
+      "version": "1.35-2"
+    },
+    "unzip": {
+      "status": "OK",
+      "version": "6.0-18"
+    },
+    "zip": {
+      "status": "OK",
+      "version": "3.0-13"
+    }
+  },
+  "requested_packages": [
+    "autoconf",
+    "make",
+    "zip",
+    "unzip",
+    "bash",
+    "coreutils",
+    "grep",
+    "sed",
+    "gawk",
+    "tar",
+    "findutils",
+    "diffutils",
+    "gcc-core",
+    "gcc-g++"
+  ],
+  "root": "C:\\Users\\17715\\Documents\\codes\\M-DDS\\ros2\\out\\f106-cygwin\\root",
+  "schema": "mdds.cygwin-lock/v1",
+  "site": "https://mirrors.kernel.org/sourceware/cygwin/",
+  "uname": "CYGWIN_NT-10.0-26200",
+  "verification": {
+    "autoconf": {
+      "command": [
+        "C:\\Users\\17715\\Documents\\codes\\M-DDS\\ros2\\out\\f106-cygwin\\root\\bin\\bash.exe",
+        "-lc",
+        "autoconf --version"
+      ],
+      "output": "autoconf (GNU Autoconf) 2.73",
+      "path": "C:\\Users\\17715\\Documents\\codes\\M-DDS\\ros2\\out\\f106-cygwin\\root\\bin\\autoconf",
+      "result": "PASS",
+      "version": "2.73"
+    },
+    "bash": {
+      "command": [
+        "C:\\Users\\17715\\Documents\\codes\\M-DDS\\ros2\\out\\f106-cygwin\\root\\bin\\bash.exe",
+        "-lc",
+        "uname -s"
+      ],
+      "path": "C:\\Users\\17715\\Documents\\codes\\M-DDS\\ros2\\out\\f106-cygwin\\root\\bin\\bash.exe",
+      "result": "PASS",
+      "uname": "CYGWIN_NT-10.0-26200",
+      "version": "5.2.21(1)-release"
+    },
+    "cygpath": {
+      "command": [
+        "C:\\Users\\17715\\Documents\\codes\\M-DDS\\ros2\\out\\f106-cygwin\\root\\bin\\cygpath.exe",
+        "-w",
+        "<path>"
+      ],
+      "path": "C:\\Users\\17715\\Documents\\codes\\M-DDS\\ros2\\out\\f106-cygwin\\root\\bin\\cygpath.exe",
+      "probe": {
+        "input": "C:/Windows",
+        "output": "/cygdrive/c/Windows"
+      },
+      "result": "PASS"
+    },
+    "make": {
+      "command": [
+        "C:\\Users\\17715\\Documents\\codes\\M-DDS\\ros2\\out\\f106-cygwin\\root\\bin\\bash.exe",
+        "-lc",
+        "make --version"
+      ],
+      "output": "GNU Make 4.4.1",
+      "path": "C:\\Users\\17715\\Documents\\codes\\M-DDS\\ros2\\out\\f106-cygwin\\root\\bin\\make.exe",
+      "result": "PASS",
+      "version": "4.4.1"
+    }
+  }
+}
